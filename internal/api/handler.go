@@ -667,3 +667,91 @@ func mapZabbixToUnified(payload ZabbixPayload, tenantID uuid.UUID) model.Unified
 	}
 }
 
+type SaveSecretRequest struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
+// HandleSaveSecret encrypts and stores credentials inside the secure tenant_vault with RLS enforcement
+func HandleSaveSecret(pgPool *pgxpool.Pool, vaultRepo repository.VaultRepository) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		tenantID, ok := db.TenantIDFromContext(r.Context())
+		if !ok {
+			token := r.URL.Query().Get("token")
+			if token == "" {
+				http.Error(w, "Unauthorized: Missing token", http.StatusUnauthorized)
+				return
+			}
+			parsedUUID, err := uuid.Parse(token)
+			if err != nil {
+				http.Error(w, "Unauthorized: Invalid token format", http.StatusUnauthorized)
+				return
+			}
+			tenantID = parsedUUID
+		}
+
+		var req SaveSecretRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Bad Request: Invalid JSON payload", http.StatusBadRequest)
+			return
+		}
+
+		if req.Key == "" || req.Value == "" {
+			http.Error(w, "Bad Request: key and value are required fields", http.StatusBadRequest)
+			return
+		}
+
+		masterKey, err := security.GetMasterKey()
+		if err != nil {
+			log.Printf("Vault Master Key Error: %v", err)
+			http.Error(w, "Internal Server Error: Vault encryption setup failure", http.StatusInternalServerError)
+			return
+		}
+
+		// Encrypt credentials using AES-GCM-256
+		encrypted, nonce, err := security.Encrypt([]byte(req.Value), masterKey)
+		if err != nil {
+			log.Printf("Encryption Error: %v", err)
+			http.Error(w, "Internal Server Error: Encryption failure", http.StatusInternalServerError)
+			return
+		}
+
+		secret := &model.VaultSecret{
+			ID:             uuid.New(),
+			TenantID:       tenantID,
+			SecretKey:      req.Key,
+			EncryptedValue: encrypted,
+			Nonce:          nonce,
+			CreatedAt:      time.Now(),
+			UpdatedAt:      time.Now(),
+		}
+
+		tenantCtx := db.WithTenantID(r.Context(), tenantID)
+		err = db.ExecuteInTenantTx(tenantCtx, pgPool, func(tx pgx.Tx) error {
+			query := `
+				INSERT INTO tenant_vault (id, tenant_id, secret_key, encrypted_value, nonce, created_at, updated_at)
+				VALUES ($1, $2, $3, $4, $5, $6, $7)
+				ON CONFLICT (tenant_id, secret_key) 
+				DO UPDATE SET encrypted_value = EXCLUDED.encrypted_value, nonce = EXCLUDED.nonce, updated_at = EXCLUDED.updated_at
+			`
+			_, err := tx.Exec(tenantCtx, query, secret.ID, secret.TenantID, secret.SecretKey, secret.EncryptedValue, secret.Nonce, secret.CreatedAt, secret.UpdatedAt)
+			return err
+		})
+
+		if err != nil {
+			log.Printf("Vault DB Write Error: %v", err)
+			http.Error(w, "Internal Server Error: Failed to commit secret to vault", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"success","message":"Credential encrypted and stored in tenant vault securely"}`))
+	}
+}
+

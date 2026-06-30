@@ -120,6 +120,10 @@ func main() {
 	// SLA PDF Report Download Endpoint (Resolves auth token via URL query parameter for browser compatibility)
 	mux.Handle("/api/v1/reports/sla", api.HandleDownloadSLAReport())
 
+	// Secure Vault Credentials Storage Endpoint (Postgres Vault with RLS & GCM Ciphers)
+	vaultRepo := repository.NewPostgresVaultRepository()
+	mux.Handle("/api/v1/vault/secret", api.HandleSaveSecret(pgPool, vaultRepo))
+
 	// Real-Time Operator WebSocket Subscription endpoint (Multiplexed)
 	mux.Handle("/api/v1/ws", ws.ServeWS(hub, pgPool))
 

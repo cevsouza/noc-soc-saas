@@ -18,7 +18,11 @@ import {
   LayoutDashboard,
   Brain,
   FileText,
-  FileText as RawJsonIcon
+  Lock,
+  Link as LinkIcon,
+  HelpCircle,
+  Copy,
+  Check
 } from 'lucide-react';
 
 interface Alert {
@@ -51,6 +55,16 @@ export default function CockpitPage() {
   const [severityFilter, setSeverityFilter] = useState<string>('all');
   const [activeTab, setActiveTab] = useState<'general' | 'logs' | 'grafana' | 'raw'>('general');
   
+  // Integrations Modal States
+  const [showIntegrationsModal, setShowIntegrationsModal] = useState(false);
+  const [selectedIntegrationTool, setSelectedIntegrationTool] = useState('uptimekuma');
+  const [copiedText, setCopiedText] = useState(false);
+  
+  // Vault secret storage states
+  const [vaultKey, setVaultKey] = useState('ssh_private_key');
+  const [vaultValue, setVaultValue] = useState('');
+  const [saveStatus, setSaveStatus] = useState<{ status: 'idle' | 'saving' | 'success' | 'error', message?: string }>({ status: 'idle' });
+
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -77,7 +91,6 @@ export default function CockpitPage() {
     }
 
     setConnStatus('connecting');
-    // Using the direct Tenant ID UUID as the token parameter to allow the visual simulator to work.
     const wsUrl = `ws://localhost:8080/api/v1/ws?token=${selectedTenant.id}`;
     
     const socket = new WebSocket(wsUrl);
@@ -233,6 +246,37 @@ export default function CockpitPage() {
     }
   };
 
+  // Secure Vault credential saver
+  const handleSaveVaultSecret = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!vaultValue) return;
+
+    setSaveStatus({ status: 'saving' });
+    try {
+      const url = `http://localhost:8080/api/v1/vault/secret?token=${selectedTenant.id}`;
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: vaultKey, value: vaultValue })
+      });
+      if (response.ok) {
+        setSaveStatus({ status: 'success', message: 'Credencial salva e encriptada com sucesso!' });
+        setVaultValue('');
+        setTimeout(() => setSaveStatus({ status: 'idle' }), 3000);
+      } else {
+        setSaveStatus({ status: 'error', message: 'Erro ao persistir a credencial no Vault.' });
+      }
+    } catch (err) {
+      setSaveStatus({ status: 'error', message: 'Erro de conectividade com o backend Go.' });
+    }
+  };
+
+  const handleCopyWebhookUrl = (url: string) => {
+    navigator.clipboard.writeText(url);
+    setCopiedText(true);
+    setTimeout(() => setCopiedText(false), 2000);
+  };
+
   return (
     <div className="min-h-screen bg-background text-slate-100 flex flex-col font-sans select-none">
       
@@ -268,6 +312,15 @@ export default function CockpitPage() {
               ))}
             </select>
           </div>
+
+          {/* Connections / Integrations Manager Trigger */}
+          <button
+            onClick={() => setShowIntegrationsModal(true)}
+            className="flex items-center gap-2 px-3 py-1 rounded-lg bg-cyan-600/20 hover:bg-cyan-600/30 border border-cyan-500/35 text-cyan-300 text-xs font-bold transition-all uppercase tracking-wider"
+          >
+            <LinkIcon className="w-3.5 h-3.5" />
+            <span>Integrações</span>
+          </button>
 
           {/* SLA PDF Report Downloader */}
           <button
@@ -485,7 +538,13 @@ export default function CockpitPage() {
                             ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20'
                             : (alert.ai_analysis?.source || 'generic') === 'sentinel'
                               ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
-                              : 'bg-slate-500/10 text-slate-400 border border-slate-500/20'
+                              : (alert.ai_analysis?.source || 'generic') === 'uptimekuma'
+                                ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                                : (alert.ai_analysis?.source || 'generic') === 'grafana'
+                                  ? 'bg-violet-500/10 text-violet-400 border border-violet-500/20'
+                                  : (alert.ai_analysis?.source || 'generic') === 'zabbix'
+                                    ? 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
+                                    : 'bg-slate-500/10 text-slate-400 border border-slate-500/20'
                       }`}>
                         {alert.ai_analysis?.source || 'generic'}
                       </span>
@@ -831,6 +890,265 @@ export default function CockpitPage() {
         )}
 
       </main>
+
+      {/* 3. Didactic Connections / Integrations Modal */}
+      {showIntegrationsModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4 animate-fadeIn">
+          <div className="glass-card w-full max-w-4xl h-[600px] rounded-2xl overflow-hidden flex flex-col border border-white/10 shadow-2xl">
+            
+            {/* Modal Header */}
+            <div className="px-6 py-4 border-b border-white/5 bg-surface/30 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <LinkIcon className="w-5 h-5 text-cyan-400" />
+                <h3 className="text-md font-bold uppercase tracking-wider">Painel de Conexões e Integrações (Connectors)</h3>
+              </div>
+              <button 
+                onClick={() => {
+                  setShowIntegrationsModal(false);
+                  setSaveStatus({ status: 'idle' });
+                }}
+                className="text-xs text-slate-400 hover:text-slate-200 bg-white/5 hover:bg-white/10 px-3 py-1.5 rounded-lg transition-all"
+              >
+                Fechar
+              </button>
+            </div>
+
+            {/* Modal Content */}
+            <div className="flex-1 flex overflow-hidden">
+              
+              {/* Left Column (Tool list) */}
+              <div className="w-[220px] bg-slate-950/20 border-r border-white/5 overflow-y-auto flex flex-col p-3 gap-1">
+                <span className="text-[9px] font-bold text-slate-500 uppercase tracking-widest px-2.5 py-2">Push Webhooks</span>
+                {[
+                  { id: 'uptimekuma', name: 'Uptime Kuma', color: 'text-emerald-400' },
+                  { id: 'zabbix', name: 'Zabbix Monitor', color: 'text-rose-400' },
+                  { id: 'prometheus', name: 'Prometheus / Alert', color: 'text-purple-400' },
+                  { id: 'wazuh', name: 'Wazuh SIEM', color: 'text-blue-400' },
+                  { id: 'grafana', name: 'Grafana Webhook', color: 'text-violet-400' }
+                ].map(tool => (
+                  <button
+                    key={tool.id}
+                    onClick={() => {
+                      setSelectedIntegrationTool(tool.id);
+                      setSaveStatus({ status: 'idle' });
+                    }}
+                    className={`px-3 py-2.5 rounded-lg text-left text-xs font-bold transition-all flex items-center gap-2 ${
+                      selectedIntegrationTool === tool.id ? 'bg-white/5 text-white border-l-2 border-cyan-400' : 'text-slate-400 hover:bg-white/[0.02] hover:text-slate-200'
+                    }`}
+                  >
+                    <span className={`w-2 h-2 rounded-full ${selectedIntegrationTool === tool.id ? 'bg-cyan-400' : 'bg-slate-600'}`}></span>
+                    {tool.name}
+                  </button>
+                ))}
+
+                <span className="text-[9px] font-bold text-slate-500 uppercase tracking-widest px-2.5 py-2 mt-4">Secure Vault (Pull)</span>
+                {[
+                  { id: 'sentinel', name: 'Microsoft Sentinel' },
+                  { id: 'loki', name: 'Grafana Loki' },
+                  { id: 'ssh', name: 'Credenciais SSH Runbook' }
+                ].map(tool => (
+                  <button
+                    key={tool.id}
+                    onClick={() => {
+                      setSelectedIntegrationTool(tool.id);
+                      setSaveStatus({ status: 'idle' });
+                      if (tool.id === 'sentinel') setVaultKey('sentinel_client_secret');
+                      else if (tool.id === 'loki') setVaultKey('loki_password');
+                      else if (tool.id === 'ssh') setVaultKey('ssh_private_key');
+                    }}
+                    className={`px-3 py-2.5 rounded-lg text-left text-xs font-bold transition-all flex items-center gap-2 ${
+                      selectedIntegrationTool === tool.id ? 'bg-white/5 text-white border-l-2 border-cyan-400' : 'text-slate-400 hover:bg-white/[0.02] hover:text-slate-200'
+                    }`}
+                  >
+                    <span className={`w-2 h-2 rounded-full ${selectedIntegrationTool === tool.id ? 'bg-cyan-400' : 'bg-slate-600'}`}></span>
+                    {tool.name}
+                  </button>
+                ))}
+              </div>
+
+              {/* Right Column (Instructions & Credentials Form) */}
+              <div className="flex-1 p-6 overflow-y-auto flex flex-col gap-6 bg-[#090d16]">
+                
+                {/* 1. Header of Tool */}
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-lg bg-cyan-950/20 border border-cyan-500/20 flex items-center justify-center text-cyan-400">
+                    <HelpCircle className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-bold uppercase text-white tracking-wide">
+                      {selectedIntegrationTool === 'uptimekuma' && 'Integração Uptime Kuma'}
+                      {selectedIntegrationTool === 'zabbix' && 'Integração Zabbix Monitor'}
+                      {selectedIntegrationTool === 'prometheus' && 'Integração Prometheus Alertmanager'}
+                      {selectedIntegrationTool === 'wazuh' && 'Integração Wazuh SIEM'}
+                      {selectedIntegrationTool === 'grafana' && 'Integração Grafana Alerts'}
+                      {selectedIntegrationTool === 'sentinel' && 'Conexão Microsoft Sentinel'}
+                      {selectedIntegrationTool === 'loki' && 'Conexão Grafana Loki'}
+                      {selectedIntegrationTool === 'ssh' && 'Cofre de Credenciais SSH'}
+                    </h4>
+                    <p className="text-[10px] text-slate-500 uppercase tracking-widest font-bold">
+                      {['uptimekuma', 'zabbix', 'prometheus', 'wazuh', 'grafana'].includes(selectedIntegrationTool) ? 'Método: Webhook (Push / Envio de Alertas)' : 'Método: API Polling (Pull / Busca Ativa de Chaves)'}
+                    </p>
+                  </div>
+                </div>
+
+                {/* 2. Webhook URLs (Push) */}
+                {['uptimekuma', 'zabbix', 'prometheus', 'wazuh', 'grafana'].includes(selectedIntegrationTool) ? (
+                  <div className="flex flex-col gap-4">
+                    <div className="flex flex-col gap-2">
+                      <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">
+                        Sua URL de Ingestão Exclusiva (Webhook URL)
+                      </label>
+                      <div className="flex bg-[#040811] border border-white/5 rounded-lg overflow-hidden p-2.5 items-center justify-between font-mono text-xs text-cyan-400 select-all select-text">
+                        <span className="truncate mr-3">
+                          {`http://localhost:8080/api/v1/ingest/${selectedIntegrationTool}?token=${selectedTenant.id}`}
+                        </span>
+                        <button
+                          onClick={() => handleCopyWebhookUrl(`http://localhost:8080/api/v1/ingest/${selectedIntegrationTool}?token=${selectedTenant.id}`)}
+                          className="p-1.5 rounded bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white transition-all shrink-0"
+                          title="Copiar URL"
+                        >
+                          {copiedText ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col gap-3 p-4 rounded-xl bg-slate-900/40 border border-white/5 text-xs text-slate-300 leading-relaxed font-sans">
+                      <h5 className="font-bold text-slate-200 uppercase tracking-wider text-[10px]">Como configurar na sua ferramenta:</h5>
+                      
+                      {selectedIntegrationTool === 'uptimekuma' && (
+                        <p>No seu painel do <b>Uptime Kuma</b>, vá em <i>Configurações &gt; Notificações &gt; Adicionar Notificação</i>. Defina o tipo de notificação como <b>Webhook</b>, cole a URL acima no campo <b>Post URL</b> e salve. O Uptime Kuma enviará notificações automáticas de Down/Up.</p>
+                      )}
+                      
+                      {selectedIntegrationTool === 'zabbix' && (
+                        <p>No <b>Zabbix</b>, vá em <i>Administration &gt; Media Types</i> e crie um novo tipo de mídia como <b>Webhook</b>. Defina os parâmetros padrão (como `EventID`, `Host`, `Severity`, `AlertMessage`) e insira a URL acima na requisição HTTP POST.</p>
+                      )}
+
+                      {selectedIntegrationTool === 'prometheus' && (
+                        <div className="flex flex-col gap-2">
+                          <p>No seu arquivo de configuração do <b>Alertmanager</b> (`alertmanager.yml`), defina um receiver de webhook apontando para a nossa URL:</p>
+                          <pre className="bg-[#03060f] p-3 rounded-lg font-mono text-[10px] text-slate-400 overflow-x-auto leading-relaxed border border-white/5">
+{`receivers:
+  - name: 'noc-soc-webhook'
+    webhook_configs:
+      - url: 'http://localhost:8080/api/v1/ingest/prometheus?token=${selectedTenant.id}'`}
+                          </pre>
+                        </div>
+                      )}
+
+                      {selectedIntegrationTool === 'wazuh' && (
+                        <div className="flex flex-col gap-2">
+                          <p>No arquivo `/var/ossec/etc/ossec.conf` do seu <b>Wazuh Manager</b>, registre um bloco de integração HTTP:</p>
+                          <pre className="bg-[#03060f] p-3 rounded-lg font-mono text-[10px] text-slate-400 overflow-x-auto leading-relaxed border border-white/5">
+{`<integration>
+  <name>custom-webhook</name>
+  <hook_url>http://localhost:8080/api/v1/ingest/wazuh?token=${selectedTenant.id}</hook_url>
+  <alert_format>json</alert_format>
+  <level>7</level>
+</integration>`}
+                          </pre>
+                        </div>
+                      )}
+
+                      {selectedIntegrationTool === 'grafana' && (
+                        <p>No <b>Grafana</b>, vá em <i>Alerting &gt; Contact Points &gt; New Contact Point</i>. Escolha o tipo <b>Webhook</b>, insira a URL acima no campo de URL e salve. O Grafana enviará notificações completas de alerta.</p>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  // 3. Vault forms (Pull / Sentinel & Loki credentials saving)
+                  <form onSubmit={handleSaveVaultSecret} className="flex flex-col gap-4">
+                    
+                    <div className="flex flex-col gap-3 p-4 rounded-xl bg-cyan-950/10 border border-cyan-500/20 text-xs text-slate-300 leading-relaxed font-sans mb-2">
+                      <div className="flex items-center gap-1.5 text-cyan-400 font-extrabold uppercase text-[10px]">
+                        <Lock className="w-3.5 h-3.5" /> Cofre Criptográfico RLS Seguro
+                      </div>
+                      <p>Estas credenciais são salvas e encriptadas usando algoritmos robustos de **AES-256-GCM** na tabela `tenant_vault`. Graças à segurança estrita por nível de linha (RLS) no PostgreSQL, estes segredos são 100% invisíveis a qualquer outro tenant.</p>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="flex flex-col gap-2">
+                        <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Identificador da Credencial (Key)</label>
+                        <select
+                          value={vaultKey}
+                          onChange={(e) => setVaultKey(e.target.value)}
+                          className="bg-surface border border-white/5 rounded-lg p-2.5 text-xs text-slate-200 focus:outline-none focus:border-cyan-500/50"
+                        >
+                          {selectedIntegrationTool === 'sentinel' && (
+                            <>
+                              <option value="sentinel_client_secret">Client Secret (Azure API)</option>
+                              <option value="sentinel_client_id">Client ID (App Registration)</option>
+                              <option value="sentinel_tenant_id">Tenant ID (Azure Directory)</option>
+                              <option value="sentinel_subscription_id">Subscription ID</option>
+                            </>
+                          )}
+                          {selectedIntegrationTool === 'loki' && (
+                            <>
+                              <option value="loki_url">Loki Server URL</option>
+                              <option value="loki_username">Loki Username</option>
+                              <option value="loki_password">Loki Password</option>
+                            </>
+                          )}
+                          {selectedIntegrationTool === 'ssh' && (
+                            <>
+                              <option value="ssh_private_key">SSH Private Key (PEM format)</option>
+                              <option value="ssh_username">SSH Username</option>
+                              <option value="ssh_password">SSH Password (Fallback)</option>
+                            </>
+                          )}
+                        </select>
+                      </div>
+
+                      <div className="flex flex-col gap-2">
+                        <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Valor da Credencial (Secret Value)</label>
+                        <input
+                          type="password"
+                          required
+                          value={vaultValue}
+                          placeholder="Digite ou cole o valor confidencial aqui..."
+                          onChange={(e) => setVaultValue(e.target.value)}
+                          className="bg-surface border border-white/5 rounded-lg p-2.5 text-xs text-slate-200 focus:outline-none focus:border-cyan-500/50 placeholder:text-slate-600"
+                        />
+                      </div>
+                    </div>
+
+                    <button
+                      type="submit"
+                      disabled={saveStatus.status === 'saving'}
+                      className="bg-cyan-600 hover:bg-cyan-500 disabled:bg-cyan-800 disabled:opacity-50 text-slate-950 font-bold uppercase tracking-wider text-xs py-2.5 rounded-lg flex items-center justify-center gap-2 transition-all mt-2"
+                    >
+                      {saveStatus.status === 'saving' ? (
+                        <>
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                          <span>Criptografando e Salvando...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Lock className="w-3.5 h-3.5" />
+                          <span>Salvar Segredo no Cofre do Banco</span>
+                        </>
+                      )}
+                    </button>
+
+                    {saveStatus.status === 'success' && (
+                      <div className="p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-semibold text-center">
+                        {saveStatus.message}
+                      </div>
+                    )}
+                    {saveStatus.status === 'error' && (
+                      <div className="p-3 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs font-semibold text-center">
+                        {saveStatus.message}
+                      </div>
+                    )}
+                  </form>
+                )}
+
+              </div>
+            </div>
+
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
