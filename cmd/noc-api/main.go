@@ -76,6 +76,11 @@ func main() {
 	}
 	log.Println("PostgreSQL Connection Pool initialized successfully.")
 
+	// 1.5 Run Schema Migrations (Embedded SQL up scripts)
+	if err := db.RunMigrations(ctx, pgPool); err != nil {
+		log.Fatalf("Fatal: Database migration failed: %v", err)
+	}
+
 	// 2. Load Redis Connection (Support direct REDIS_URL or fallback to parameters)
 	var redisClient *redis.Client
 	redisURL := getEnv("REDIS_URL", "")
