@@ -15,7 +15,6 @@ import (
 	"noc-api/internal/model"
 	"noc-api/internal/repository"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )

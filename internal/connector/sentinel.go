@@ -1,7 +1,6 @@
 package connector
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -12,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"noc-api/internal/api"
 	"noc-api/internal/db"
 	"noc-api/internal/model"
 	"noc-api/internal/repository"
