@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"noc-api/internal/db"
+	"noc-api/internal/middleware"
 	"noc-api/internal/model"
 	"noc-api/internal/repository"
 	"noc-api/internal/security"
@@ -370,23 +371,19 @@ func mapWazuhToUnified(alert WazuhAlertPayload, tenantID uuid.UUID) model.Unifie
 }
 
 // HandleDownloadSLAReport triggers PDF generation via Python worker and serves the file
-func HandleDownloadSLAReport() http.HandlerFunc {
+func HandleDownloadSLAReport(pgPool *pgxpool.Pool, jwtSecret []byte) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var tenantID uuid.UUID
 		if tID, ok := db.TenantIDFromContext(r.Context()); ok {
 			tenantID = tID
 		} else {
 			token := r.URL.Query().Get("token")
-			if token == "" {
-				http.Error(w, "Unauthorized: Missing token", http.StatusUnauthorized)
-				return
-			}
-			parsedUUID, err := uuid.Parse(token)
+			resolvedID, err := middleware.ResolveTenantFromToken(token, jwtSecret, pgPool)
 			if err != nil {
-				http.Error(w, "Unauthorized: Invalid token format", http.StatusUnauthorized)
+				http.Error(w, "Unauthorized: "+err.Error(), http.StatusUnauthorized)
 				return
 			}
-			tenantID = parsedUUID
+			tenantID = resolvedID
 		}
 
 		tenantName := r.URL.Query().Get("tenant_name")

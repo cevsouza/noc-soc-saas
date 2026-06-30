@@ -16,6 +16,7 @@ import (
 	"noc-api/internal/connector"
 	"noc-api/internal/db"
 	"noc-api/internal/middleware"
+	"noc-api/internal/model"
 	redisclient "noc-api/internal/redis"
 	"noc-api/internal/repository"
 	"noc-api/internal/worker"
@@ -314,15 +315,33 @@ func main() {
 	protectedZabbix := middleware.APIKeyAuth(pgPool, redisClient)(zabbixHandler)
 	mux.Handle("/api/v1/ingest/zabbix", protectedZabbix)
 
+	// User authentication endpoints (unauthenticated)
+	mux.Handle("/api/v1/auth/register", api.HandleRegister(pgPool))
+	mux.Handle("/api/v1/auth/verify", api.HandleVerify(pgPool))
+	mux.Handle("/api/v1/auth/login", api.HandleLogin(pgPool, jwtSecret))
+
+	// Administrator endpoints (protected by JWT and Admin Role check)
+	protectedAdminUsers := middleware.JWTAuth(jwtSecret)(
+		middleware.RequireRole(model.RoleAdmin)(
+			api.HandleAdminCreateUser(pgPool),
+		),
+	)
+	mux.Handle("/api/v1/admin/users", protectedAdminUsers)
+
 	// SLA PDF Report Download Endpoint (Resolves auth token via URL query parameter for browser compatibility)
-	mux.Handle("/api/v1/reports/sla", api.HandleDownloadSLAReport())
+	mux.Handle("/api/v1/reports/sla", api.HandleDownloadSLAReport(pgPool, jwtSecret))
 
-	// Secure Vault Credentials Storage Endpoint (Postgres Vault with RLS & GCM Ciphers)
+	// Secure Vault Credentials Storage Endpoint (Postgres Vault with RLS & GCM Ciphers, protected by JWT & Admin Role check)
 	vaultRepo := repository.NewPostgresVaultRepository()
-	mux.Handle("/api/v1/vault/secret", api.HandleSaveSecret(pgPool, vaultRepo))
+	protectedVault := middleware.JWTAuth(jwtSecret)(
+		middleware.RequireRole(model.RoleAdmin)(
+			api.HandleSaveSecret(pgPool, vaultRepo),
+		),
+	)
+	mux.Handle("/api/v1/vault/secret", protectedVault)
 
-	// Real-Time Operator WebSocket Subscription endpoint (Multiplexed)
-	mux.Handle("/api/v1/ws", ws.ServeWS(hub, pgPool))
+	// Real-Time Operator WebSocket Subscription endpoint (Multiplexed, resolved by JWT/APIKey/UUID)
+	mux.Handle("/api/v1/ws", ws.ServeWS(hub, pgPool, jwtSecret))
 
 	// 6. Define & Launch Server with Timeout Controls (SRE Best Practice)
 	srv := &http.Server{

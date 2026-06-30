@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"time"
 
+	"noc-api/internal/middleware"
+
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/jackc/pgx/v5"
@@ -92,7 +94,7 @@ func (c *Client) writePump() {
 }
 
 // ServeWS handles WebSocket upgrading and client connection setup.
-func ServeWS(hub *Hub, pgPool *pgxpool.Pool) http.HandlerFunc {
+func ServeWS(hub *Hub, pgPool *pgxpool.Pool, jwtSecret []byte) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		token := r.URL.Query().Get("token")
 		if token == "" {
@@ -100,34 +102,10 @@ func ServeWS(hub *Hub, pgPool *pgxpool.Pool) http.HandlerFunc {
 			return
 		}
 
-		ctx := r.Context()
-		var tenantID uuid.UUID
-		var err error
-
-		// For the multi-tenancy visual simulator, we allow direct tenant ID UUID connections.
-		// Otherwise, we perform a standard API Key SHA-256 resolution.
-		parsedUUID, err := uuid.Parse(token)
-		if err == nil {
-			tenantID = parsedUUID
-		} else {
-			// Resolve as API Key hash
-			hash := sha256.Sum256([]byte(token))
-			keyHash := hex.EncodeToString(hash[:])
-
-			query := `
-				SELECT tenant_id 
-				FROM tenant_api_keys 
-				WHERE key_hash = $1 AND (expires_at IS NULL OR expires_at > NOW())
-			`
-			err = pgPool.QueryRow(ctx, query, keyHash).Scan(&tenantID)
-			if err != nil {
-				if errors.Is(err, pgx.ErrNoRows) {
-					http.Error(w, "Unauthorized: Invalid token", http.StatusUnauthorized)
-					return
-				}
-				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-				return
-			}
+		tenantID, err := middleware.ResolveTenantFromToken(token, jwtSecret, pgPool)
+		if err != nil {
+			http.Error(w, "Unauthorized: "+err.Error(), http.StatusUnauthorized)
+			return
 		}
 
 		// Upgrade HTTP connection to WebSocket

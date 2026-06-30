@@ -61,6 +61,23 @@ const getWSUrl = (tenantId: string) => {
 };
 
 export default function CockpitPage() {
+  // Authentication States
+  const [token, setToken] = useState<string | null>(null);
+  const [user, setUser] = useState<{ id: string, email: string, name: string, role: string } | null>(null);
+  const [authView, setAuthView] = useState<'login' | 'register'>('login');
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [authName, setAuthName] = useState('');
+  const [authTenant, setAuthTenant] = useState('e1b7c123-1234-4321-abcd-123456789abc');
+  const [authStatus, setAuthStatus] = useState<{ status: 'idle' | 'loading' | 'success' | 'error', message?: string }>({ status: 'idle' });
+
+  // Admin User Creation States
+  const [adminUserEmail, setAdminUserEmail] = useState('');
+  const [adminUserPassword, setAdminUserPassword] = useState('');
+  const [adminUserName, setAdminUserName] = useState('');
+  const [adminUserRole, setAdminUserRole] = useState('operator');
+  const [adminUserStatus, setAdminUserStatus] = useState<{ status: 'idle' | 'saving' | 'success' | 'error', message?: string }>({ status: 'idle' });
+
   const [selectedTenant, setSelectedTenant] = useState(MOCK_TENANTS[0]);
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [selectedAlert, setSelectedAlert] = useState<Alert | null>(null);
@@ -91,6 +108,111 @@ export default function CockpitPage() {
     info: alerts.filter(a => a.severity === 'info' && a.status !== 'resolved' && a.status !== 'suppressed').length,
   };
 
+  // Mount effect to load session cache
+  useEffect(() => {
+    const cachedToken = localStorage.getItem('noc_token');
+    const cachedUser = localStorage.getItem('noc_user');
+    const cachedTenant = localStorage.getItem('noc_tenant');
+    if (cachedToken && cachedUser) {
+      setToken(cachedToken);
+      setUser(JSON.parse(cachedUser));
+      if (cachedTenant) {
+        setSelectedTenant(JSON.parse(cachedTenant));
+      }
+    }
+  }, []);
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthStatus({ status: 'loading' });
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/v1/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: authEmail, password: authPassword })
+      });
+      if (response.ok) {
+        const data = await response.json();
+        localStorage.setItem('noc_token', data.token);
+        localStorage.setItem('noc_user', JSON.stringify(data.user));
+        localStorage.setItem('noc_tenant', JSON.stringify(data.tenant));
+        setToken(data.token);
+        setUser(data.user);
+        setSelectedTenant(data.tenant);
+        setAuthStatus({ status: 'success' });
+      } else {
+        const msg = await response.text();
+        setAuthStatus({ status: 'error', message: msg || 'Credenciais inválidas.' });
+      }
+    } catch (err) {
+      setAuthStatus({ status: 'error', message: 'Falha ao se conectar com o servidor.' });
+    }
+  };
+
+  const handleRegister = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthStatus({ status: 'loading' });
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/v1/auth/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: authEmail, password: authPassword, name: authName, tenant_id: authTenant })
+      });
+      if (response.ok) {
+        setAuthStatus({ status: 'success', message: 'Conta criada! Por favor, verifique seu e-mail para ativar.' });
+        setAuthEmail('');
+        setAuthPassword('');
+        setAuthName('');
+      } else {
+        const msg = await response.text();
+        setAuthStatus({ status: 'error', message: msg || 'Falha ao registrar.' });
+      }
+    } catch (err) {
+      setAuthStatus({ status: 'error', message: 'Falha ao se conectar com o servidor.' });
+    }
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem('noc_token');
+    localStorage.removeItem('noc_user');
+    localStorage.removeItem('noc_tenant');
+    setToken(null);
+    setUser(null);
+    setAlerts([]);
+  };
+
+  const handleAdminCreateUser = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAdminUserStatus({ status: 'saving' });
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/v1/admin/users`, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          email: adminUserEmail,
+          password: adminUserPassword,
+          name: adminUserName,
+          role: adminUserRole,
+          tenant_id: selectedTenant.id
+        })
+      });
+      if (response.ok) {
+        setAdminUserStatus({ status: 'success', message: 'Novo usuário cadastrado e e-mail enviado!' });
+        setAdminUserEmail('');
+        setAdminUserPassword('');
+        setAdminUserName('');
+      } else {
+        const msg = await response.text();
+        setAdminUserStatus({ status: 'error', message: msg || 'Falha ao cadastrar usuário.' });
+      }
+    } catch (err) {
+      setAdminUserStatus({ status: 'error', message: 'Erro ao conectar ao backend.' });
+    }
+  };
+
   // Reset tab to general when selected incident changes
   useEffect(() => {
     if (selectedAlert) {
@@ -100,12 +222,14 @@ export default function CockpitPage() {
 
   // Connect to Go WebSocket Server
   const connectWebSocket = () => {
+    if (!token) return;
+
     if (wsRef.current) {
       wsRef.current.close();
     }
 
     setConnStatus('connecting');
-    const wsUrl = getWSUrl(selectedTenant.id);
+    const wsUrl = getWSUrl(token);
     
     const socket = new WebSocket(wsUrl);
     wsRef.current = socket;
@@ -157,8 +281,9 @@ export default function CockpitPage() {
     };
   };
 
-  // Triggers reconnection when tenant changes
+  // Triggers reconnection when tenant changes or when token is acquired
   useEffect(() => {
+    if (!token) return;
     setAlerts([]); // Clear previous tenant alerts on switch
     setSelectedAlert(null);
     connectWebSocket();
@@ -171,7 +296,7 @@ export default function CockpitPage() {
         clearTimeout(reconnectTimeoutRef.current);
       }
     };
-  }, [selectedTenant]);
+  }, [selectedTenant, token]);
 
   // Handle action triggers (simulate backend state changes locally or via fetch)
   const handleUpdateStatus = (alertId: string, newStatus: Alert['status']) => {
@@ -270,7 +395,10 @@ export default function CockpitPage() {
       const url = `${API_BASE_URL}/api/v1/vault/secret?token=${selectedTenant.id}`;
       const response = await fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
         body: JSON.stringify({ key: vaultKey, value: vaultValue })
       });
       if (response.ok) {
@@ -291,6 +419,122 @@ export default function CockpitPage() {
     setTimeout(() => setCopiedText(false), 2000);
   };
 
+  if (!token) {
+    return (
+      <div className="min-h-screen bg-[#070b13] text-slate-100 flex items-center justify-center font-sans p-4 relative overflow-hidden">
+        <div className="absolute top-1/4 left-1/4 -translate-x-1/2 -translate-y-1/2 w-96 h-96 rounded-full bg-violet-600/10 blur-[100px] pointer-events-none"></div>
+        <div className="absolute bottom-1/4 right-1/4 translate-x-1/2 translate-y-1/2 w-96 h-96 rounded-full bg-cyan-600/10 blur-[100px] pointer-events-none"></div>
+
+        <div className="glass-card w-full max-w-md border border-white/10 rounded-2xl shadow-2xl p-8 relative z-10 bg-slate-900/60 backdrop-blur-md">
+          <div className="flex flex-col items-center gap-2 mb-8 text-center">
+            <div className="w-12 h-12 rounded-xl bg-violet-600/20 border border-violet-500/35 flex items-center justify-center text-violet-400 mb-2">
+              <Activity className="w-7 h-7 animate-pulse" />
+            </div>
+            <h1 className="text-xl font-bold uppercase tracking-wider text-white">NOC/SOC Cockpit</h1>
+            <p className="text-xs text-slate-400">Painel SRE Multi-tenant de Gerenciamento & Auto-cura</p>
+          </div>
+
+          {typeof window !== 'undefined' && window.location.search.includes('verified=true') && (
+            <div className="mb-6 p-3 rounded-lg bg-emerald-950/20 border border-emerald-500/20 text-emerald-400 text-xs flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 shrink-0" />
+              <span>E-mail verificado com sucesso! Você já pode realizar o login.</span>
+            </div>
+          )}
+
+          <div className="flex border-b border-white/5 mb-6">
+            <button
+              onClick={() => { setAuthView('login'); setAuthStatus({ status: 'idle' }); }}
+              className={`flex-1 pb-3 text-sm font-bold transition-all ${authView === 'login' ? 'text-violet-400 border-b-2 border-violet-500' : 'text-slate-400 hover:text-slate-200'}`}
+            >
+              Acessar Cockpit
+            </button>
+            <button
+              onClick={() => { setAuthView('register'); setAuthStatus({ status: 'idle' }); }}
+              className={`flex-1 pb-3 text-sm font-bold transition-all ${authView === 'register' ? 'text-violet-400 border-b-2 border-violet-500' : 'text-slate-400 hover:text-slate-200'}`}
+            >
+              Criar Conta
+            </button>
+          </div>
+
+          <form onSubmit={authView === 'login' ? handleLogin : handleRegister} className="flex flex-col gap-4">
+            {authView === 'register' && (
+              <div className="flex flex-col gap-1.5">
+                <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Nome Completo</label>
+                <input
+                  type="text"
+                  required
+                  value={authName}
+                  onChange={(e) => setAuthName(e.target.value)}
+                  placeholder="Seu nome"
+                  className="bg-black/30 border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-violet-500 transition-all"
+                />
+              </div>
+            )}
+
+            <div className="flex flex-col gap-1.5">
+              <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">E-mail Corporativo</label>
+              <input
+                type="email"
+                required
+                value={authEmail}
+                onChange={(e) => setAuthEmail(e.target.value)}
+                placeholder="seu-nome@empresa.com"
+                className="bg-black/30 border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-violet-500 transition-all"
+              />
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Senha</label>
+              <input
+                type="password"
+                required
+                value={authPassword}
+                onChange={(e) => setAuthPassword(e.target.value)}
+                placeholder="Mínimo de 6 caracteres"
+                className="bg-black/30 border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-violet-500 transition-all"
+              />
+            </div>
+
+            {authView === 'register' && (
+              <div className="flex flex-col gap-1.5">
+                <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Tenant / Empresa Inicial</label>
+                <select
+                  value={authTenant}
+                  onChange={(e) => setAuthTenant(e.target.value)}
+                  className="bg-[#0b0f19] border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-violet-500 transition-all"
+                >
+                  <option value="e1b7c123-1234-4321-abcd-123456789abc">Telco Global Corp (Tenant A)</option>
+                  <option value="fa2b2345-5678-8765-dcba-987654321fed">Quantum Cloud Inc (Tenant B)</option>
+                </select>
+              </div>
+            )}
+
+            <button
+              type="submit"
+              disabled={authStatus.status === 'loading'}
+              className="w-full bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white font-bold text-xs py-3 rounded-lg mt-2 transition-all shadow-md shadow-violet-950/40 flex items-center justify-center gap-2"
+            >
+              {authStatus.status === 'loading' && <RefreshCw className="w-4 h-4 animate-spin" />}
+              {authView === 'login' ? 'Entrar no Painel' : 'Registrar Minha Conta'}
+            </button>
+
+            {authStatus.status === 'success' && authStatus.message && (
+              <div className="p-3 bg-emerald-950/20 border border-emerald-500/20 text-emerald-400 text-xs rounded-lg mt-2 font-sans">
+                {authStatus.message}
+              </div>
+            )}
+
+            {authStatus.status === 'error' && authStatus.message && (
+              <div className="p-3 bg-rose-950/20 border border-rose-500/20 text-rose-400 text-xs rounded-lg mt-2 font-sans">
+                {authStatus.message}
+              </div>
+            )}
+          </form>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-background text-slate-100 flex flex-col font-sans select-none">
       
@@ -310,42 +554,54 @@ export default function CockpitPage() {
 
         {/* Dynamic Tenant Selector (Multi-tenancy Visual Testbench) */}
         <div className="flex items-center gap-4">
-          <div className="flex items-center gap-2 px-3 py-1 rounded-lg bg-white/5 border border-white/5">
-            <User className="w-4 h-4 text-slate-400" />
-            <span className="text-xs text-slate-300 font-medium">Visual Domain:</span>
-            <select 
-              value={selectedTenant.id} 
-              onChange={(e) => {
-                const selected = MOCK_TENANTS.find(t => t.id === e.target.value);
-                if (selected) setSelectedTenant(selected);
-              }}
-              className="bg-transparent text-xs text-violet-400 font-bold focus:outline-none cursor-pointer"
+          {user?.role === 'admin' ? (
+            <div className="flex items-center gap-2 px-3 py-1 rounded-lg bg-white/5 border border-white/5">
+              <User className="w-4 h-4 text-slate-400" />
+              <span className="text-xs text-slate-300 font-medium">Visual Domain:</span>
+              <select 
+                value={selectedTenant.id} 
+                onChange={(e) => {
+                  const selected = MOCK_TENANTS.find(t => t.id === e.target.value);
+                  if (selected) setSelectedTenant(selected);
+                }}
+                className="bg-transparent text-xs text-violet-400 font-bold focus:outline-none cursor-pointer"
+              >
+                {MOCK_TENANTS.map(t => (
+                  <option key={t.id} value={t.id} className="bg-surface text-slate-200">{t.name}</option>
+                ))}
+              </select>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 px-3 py-1 rounded-lg bg-white/5 border border-white/5">
+              <User className="w-4 h-4 text-slate-400" />
+              <span className="text-xs text-slate-300 font-medium">Tenant:</span>
+              <span className="text-xs text-violet-400 font-bold">{selectedTenant.name}</span>
+            </div>
+          )}
+
+          {/* Connections / Integrations Manager Trigger (Hidden for viewers) */}
+          {user?.role !== 'viewer' && (
+            <button
+              onClick={() => setShowIntegrationsModal(true)}
+              className="flex items-center gap-2 px-3 py-1 rounded-lg bg-cyan-600/20 hover:bg-cyan-600/30 border border-cyan-500/35 text-cyan-300 text-xs font-bold transition-all uppercase tracking-wider"
             >
-              {MOCK_TENANTS.map(t => (
-                <option key={t.id} value={t.id} className="bg-surface text-slate-200">{t.name}</option>
-              ))}
-            </select>
-          </div>
+              <LinkIcon className="w-3.5 h-3.5" />
+              <span>Integrações</span>
+            </button>
+          )}
 
-          {/* Connections / Integrations Manager Trigger */}
-          <button
-            onClick={() => setShowIntegrationsModal(true)}
-            className="flex items-center gap-2 px-3 py-1 rounded-lg bg-cyan-600/20 hover:bg-cyan-600/30 border border-cyan-500/35 text-cyan-300 text-xs font-bold transition-all uppercase tracking-wider"
-          >
-            <LinkIcon className="w-3.5 h-3.5" />
-            <span>Integrações</span>
-          </button>
-
-          {/* SLA PDF Report Downloader */}
-          <button
-            onClick={() => {
-              window.open(`${API_BASE_URL}/api/v1/reports/sla?token=${selectedTenant.id}&tenant_name=${encodeURIComponent(selectedTenant.name)}`);
-            }}
-            className="flex items-center gap-2 px-3 py-1 rounded-lg bg-violet-600/20 hover:bg-violet-600/30 border border-violet-500/35 text-violet-300 text-xs font-bold transition-all uppercase tracking-wider"
-          >
-            <FileText className="w-3.5 h-3.5" />
-            <span>SLA Report</span>
-          </button>
+          {/* SLA PDF Report Downloader (Hidden for viewers) */}
+          {user?.role !== 'viewer' && (
+            <button
+              onClick={() => {
+                window.open(`${API_BASE_URL}/api/v1/reports/sla?token=${token || selectedTenant.id}&tenant_name=${encodeURIComponent(selectedTenant.name)}`);
+              }}
+              className="flex items-center gap-2 px-3 py-1 rounded-lg bg-violet-600/20 hover:bg-violet-600/30 border border-violet-500/35 text-violet-300 text-xs font-bold transition-all uppercase tracking-wider"
+            >
+              <FileText className="w-3.5 h-3.5" />
+              <span>SLA Report</span>
+            </button>
+          )}
 
           {/* Connection Status Badge */}
           <div className={`flex items-center gap-2 px-3 py-1 rounded-full text-xs font-semibold border ${
@@ -371,6 +627,20 @@ export default function CockpitPage() {
                 <span>DISCONNECTED</span>
               </>
             )}
+          </div>
+
+          {/* User Profile and Logout */}
+          <div className="flex items-center gap-3 px-3 py-1 rounded-lg bg-white/5 border border-white/5 ml-2">
+            <div className="flex flex-col text-right">
+              <span className="text-[10px] text-white font-bold leading-none">{user?.name}</span>
+              <span className="text-[8px] text-slate-400 uppercase tracking-widest font-semibold">{user?.role}</span>
+            </div>
+            <button
+              onClick={handleLogout}
+              className="text-xs text-rose-400 hover:text-rose-300 bg-rose-500/10 hover:bg-rose-500/20 px-2.5 py-1 rounded transition-all font-bold"
+            >
+              Sair
+            </button>
           </div>
         </div>
       </header>
@@ -444,46 +714,48 @@ export default function CockpitPage() {
             </div>
           </div>
 
-          {/* NOC/SOC Sandbox Simulator (Para Iniciantes) */}
-          <div className="glass-card p-5 rounded-xl border border-white/5 bg-surface/20 flex flex-col gap-3">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Brain className="w-4 h-4 text-violet-400" />
-                <h4 className="text-xs font-bold uppercase tracking-wider text-slate-200">
-                  Simulador de Alertas (Painel de Treinamento NOC/SOC)
-                </h4>
+          {/* NOC/SOC Sandbox Simulator (Para Iniciantes, Oculto para Viewers) */}
+          {user?.role !== 'viewer' && (
+            <div className="glass-card p-5 rounded-xl border border-white/5 bg-surface/20 flex flex-col gap-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Brain className="w-4 h-4 text-violet-400" />
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-slate-200">
+                    Simulador de Alertas (Painel de Treinamento NOC/SOC)
+                  </h4>
+                </div>
+                <span className="text-[9px] font-bold text-slate-500 bg-white/5 px-2 py-0.5 rounded font-mono">
+                  MODO DIDÁTICO
+                </span>
               </div>
-              <span className="text-[9px] font-bold text-slate-500 bg-white/5 px-2 py-0.5 rounded font-mono">
-                MODO DIDÁTICO
-              </span>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                Clique nos botões abaixo para gerar e injetar alertas simulados na API e ver a triagem, de-duplicação e supressão em tempo real. Útil para demonstrações rápidas e treinamento de novos analistas!
+              </p>
+              <div className="flex gap-3 flex-wrap">
+                <button
+                  onClick={() => simulateEvent('cpu')}
+                  className="flex-1 bg-violet-600/10 hover:bg-violet-600/20 border border-violet-500/30 text-violet-300 py-2.5 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition-all"
+                >
+                  <Cpu className="w-3.5 h-3.5" />
+                  <span>Simular Sobrecarga CPU (Prometheus)</span>
+                </button>
+                <button
+                  onClick={() => simulateEvent('memory')}
+                  className="flex-1 bg-cyan-600/10 hover:bg-cyan-600/20 border border-cyan-500/30 text-cyan-300 py-2.5 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition-all"
+                >
+                  <Layers className="w-3.5 h-3.5" />
+                  <span>Simular Falta Memória (Prometheus)</span>
+                </button>
+                <button
+                  onClick={() => simulateEvent('wazuh')}
+                  className="flex-1 bg-blue-600/10 hover:bg-blue-600/20 border border-blue-500/30 text-blue-300 py-2.5 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition-all"
+                >
+                  <Terminal className="w-3.5 h-3.5" />
+                  <span>Simular Ataque SSH (Wazuh SIEM)</span>
+                </button>
+              </div>
             </div>
-            <p className="text-xs text-slate-400 leading-relaxed">
-              Clique nos botões abaixo para gerar e injetar alertas simulados na API e ver a triagem, de-duplicação e supressão em tempo real. Útil para demonstrações rápidas e treinamento de novos analistas!
-            </p>
-            <div className="flex gap-3 flex-wrap">
-              <button
-                onClick={() => simulateEvent('cpu')}
-                className="flex-1 bg-violet-600/10 hover:bg-violet-600/20 border border-violet-500/30 text-violet-300 py-2.5 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition-all"
-              >
-                <Cpu className="w-3.5 h-3.5" />
-                <span>Simular Sobrecarga CPU (Prometheus)</span>
-              </button>
-              <button
-                onClick={() => simulateEvent('memory')}
-                className="flex-1 bg-cyan-600/10 hover:bg-cyan-600/20 border border-cyan-500/30 text-cyan-300 py-2.5 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition-all"
-              >
-                <Layers className="w-3.5 h-3.5" />
-                <span>Simular Falta Memória (Prometheus)</span>
-              </button>
-              <button
-                onClick={() => simulateEvent('wazuh')}
-                className="flex-1 bg-blue-600/10 hover:bg-blue-600/20 border border-blue-500/30 text-blue-300 py-2.5 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition-all"
-              >
-                <Terminal className="w-3.5 h-3.5" />
-                <span>Simular Ataque SSH (Wazuh SIEM)</span>
-              </button>
-            </div>
-          </div>
+          )}
 
           {/* Search and Filters */}
           <div className="flex gap-4">
@@ -718,14 +990,14 @@ export default function CockpitPage() {
                   {/* Action Buttons */}
                   <div className="grid grid-cols-2 gap-3 shrink-0">
                     <button
-                      disabled={selectedAlert.status === 'acknowledged' || selectedAlert.status === 'resolved' || selectedAlert.status === 'suppressed'}
+                      disabled={selectedAlert.status === 'acknowledged' || selectedAlert.status === 'resolved' || selectedAlert.status === 'suppressed' || user?.role === 'viewer'}
                       onClick={() => handleUpdateStatus(selectedAlert.id, 'acknowledged')}
                       className="bg-amber-500/10 hover:bg-amber-500/20 disabled:opacity-40 disabled:hover:bg-amber-500/10 border border-amber-500/30 text-amber-300 py-2 rounded-lg text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 transition-all"
                     >
                       Acknowledge
                     </button>
                     <button
-                      disabled={selectedAlert.status === 'resolved'}
+                      disabled={selectedAlert.status === 'resolved' || user?.role === 'viewer'}
                       onClick={() => handleUpdateStatus(selectedAlert.id, 'resolved')}
                       className="bg-emerald-500/10 hover:bg-emerald-500/20 disabled:opacity-40 disabled:hover:bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 py-2 rounded-lg text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 transition-all"
                     >
@@ -978,6 +1250,24 @@ export default function CockpitPage() {
                     {tool.name}
                   </button>
                 ))}
+
+                {user?.role === 'admin' && (
+                  <>
+                    <span className="text-[9px] font-bold text-slate-500 uppercase tracking-widest px-2.5 py-2 mt-4">Administração</span>
+                    <button
+                      onClick={() => {
+                        setSelectedIntegrationTool('users_admin');
+                        setAdminUserStatus({ status: 'idle' });
+                      }}
+                      className={`px-3 py-2.5 rounded-lg text-left text-xs font-bold transition-all flex items-center gap-2 ${
+                        selectedIntegrationTool === 'users_admin' ? 'bg-white/5 text-white border-l-2 border-violet-500' : 'text-slate-400 hover:bg-white/[0.02] hover:text-slate-200'
+                      }`}
+                    >
+                      <span className={`w-2 h-2 rounded-full ${selectedIntegrationTool === 'users_admin' ? 'bg-violet-500' : 'bg-slate-600'}`}></span>
+                      Usuários (Admin)
+                    </button>
+                  </>
+                )}
               </div>
 
               {/* Right Column (Instructions & Credentials Form) */}
@@ -998,9 +1288,10 @@ export default function CockpitPage() {
                       {selectedIntegrationTool === 'sentinel' && 'Conexão Microsoft Sentinel'}
                       {selectedIntegrationTool === 'loki' && 'Conexão Grafana Loki'}
                       {selectedIntegrationTool === 'ssh' && 'Cofre de Credenciais SSH'}
+                      {selectedIntegrationTool === 'users_admin' && 'Gerenciamento de Equipe e Permissões'}
                     </h4>
                     <p className="text-[10px] text-slate-500 uppercase tracking-widest font-bold">
-                      {['uptimekuma', 'zabbix', 'prometheus', 'wazuh', 'grafana'].includes(selectedIntegrationTool) ? 'Método: Webhook (Push / Envio de Alertas)' : 'Método: API Polling (Pull / Busca Ativa de Chaves)'}
+                      {selectedIntegrationTool === 'users_admin' ? 'Método: Administração Local / Cadastro' : ['uptimekuma', 'zabbix', 'prometheus', 'wazuh', 'grafana'].includes(selectedIntegrationTool) ? 'Método: Webhook (Push / Envio de Alertas)' : 'Método: API Polling (Pull / Busca Ativa de Chaves)'}
                     </p>
                   </div>
                 </div>
@@ -1068,7 +1359,7 @@ export default function CockpitPage() {
                       )}
                     </div>
                   </div>
-                ) : (
+                ) : ['sentinel', 'loki', 'ssh'].includes(selectedIntegrationTool) ? (
                   // 3. Vault forms (Pull / Sentinel & Loki credentials saving)
                   <form onSubmit={handleSaveVaultSecret} className="flex flex-col gap-4">
                     
@@ -1154,7 +1445,88 @@ export default function CockpitPage() {
                       </div>
                     )}
                   </form>
-                )}
+                ) : selectedIntegrationTool === 'users_admin' ? (
+                  // 4. Admin Users Form
+                  <div className="flex flex-col gap-4">
+                    <div className="flex flex-col gap-3 p-4 rounded-xl bg-violet-950/10 border border-violet-500/20 text-xs text-slate-300 leading-relaxed font-sans mb-2">
+                      <div className="flex items-center gap-1.5 text-violet-400 font-extrabold uppercase text-[10px]">
+                        <User className="w-3.5 h-3.5" /> Painel de Controle de Usuários (RBAC)
+                      </div>
+                      <p>Como administrador do NOC, você pode cadastrar e gerenciar perfis de novos colaboradores. Escolha se o nível de privilégio será **Admin** (acesso irrestrito), **Operator** (gerenciamento e SLA) ou **Viewer** (somente visualização).</p>
+                    </div>
+
+                    <form onSubmit={handleAdminCreateUser} className="flex flex-col gap-4 max-w-md">
+                      <div className="flex flex-col gap-1.5">
+                        <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Nome Completo</label>
+                        <input
+                          type="text"
+                          required
+                          value={adminUserName}
+                          onChange={(e) => setAdminUserName(e.target.value)}
+                          placeholder="Ex: Carlos Silva"
+                          className="bg-[#0b0f19] border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-violet-500 transition-all placeholder:text-slate-600"
+                        />
+                      </div>
+
+                      <div className="flex flex-col gap-1.5">
+                        <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Endereço de E-mail</label>
+                        <input
+                          type="email"
+                          required
+                          value={adminUserEmail}
+                          onChange={(e) => setAdminUserEmail(e.target.value)}
+                          placeholder="usuario@empresa.com"
+                          className="bg-[#0b0f19] border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-violet-500 transition-all placeholder:text-slate-600"
+                        />
+                      </div>
+
+                      <div className="flex flex-col gap-1.5">
+                        <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Senha Provisória</label>
+                        <input
+                          type="password"
+                          required
+                          value={adminUserPassword}
+                          onChange={(e) => setAdminUserPassword(e.target.value)}
+                          placeholder="Mínimo de 6 caracteres"
+                          className="bg-[#0b0f19] border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-violet-500 transition-all placeholder:text-slate-600"
+                        />
+                      </div>
+
+                      <div className="flex flex-col gap-1.5">
+                        <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Nível de Permissão (Role)</label>
+                        <select
+                          value={adminUserRole}
+                          onChange={(e) => setAdminUserRole(e.target.value)}
+                          className="bg-[#0b0f19] border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-violet-500 transition-all"
+                        >
+                          <option value="operator">Operator (Operador - Acesso de Leitura/Ação)</option>
+                          <option value="admin">Admin (Administrador - Acesso Completo/Cofre/Usuários)</option>
+                          <option value="viewer">Viewer (Visualizador - Apenas Leitura de Painéis)</option>
+                        </select>
+                      </div>
+
+                      <button
+                        type="submit"
+                        disabled={adminUserStatus.status === 'saving'}
+                        className="bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white font-bold text-xs py-3 px-4 rounded-lg transition-all shadow-md shadow-violet-950/30 flex items-center justify-center gap-2"
+                      >
+                        {adminUserStatus.status === 'saving' && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+                        Cadastrar Novo Usuário
+                      </button>
+
+                      {adminUserStatus.status === 'success' && (
+                        <div className="p-3 bg-emerald-950/20 border border-emerald-500/20 text-emerald-400 text-xs rounded-lg font-sans">
+                          {adminUserStatus.message}
+                        </div>
+                      )}
+                      {adminUserStatus.status === 'error' && (
+                        <div className="p-3 bg-rose-950/20 border border-rose-500/20 text-rose-400 text-xs rounded-lg font-sans">
+                          {adminUserStatus.message}
+                        </div>
+                      )}
+                    </form>
+                  </div>
+                ) : null}
 
               </div>
             </div>

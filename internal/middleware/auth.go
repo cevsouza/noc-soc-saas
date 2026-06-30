@@ -235,3 +235,43 @@ func GenerateJWT(claims *JWTClaims, secret []byte) (string, error) {
 	return headerSegment + "." + payloadSegment + "." + signatureSegment, nil
 }
 
+// ResolveTenantFromToken resolves a token parameter into a tenant ID (supports UUID, JWT or API Key).
+func ResolveTenantFromToken(token string, jwtSecret []byte, pgPool *pgxpool.Pool) (uuid.UUID, error) {
+	if token == "" {
+		return uuid.Nil, errors.New("empty token")
+	}
+
+	// 1. Try parsing as standard UUID (For local dev / mock compatibility)
+	parsedUUID, err := uuid.Parse(token)
+	if err == nil {
+		return parsedUUID, nil
+	}
+
+	// 2. Try verifying as signed JWT token
+	claims, err := VerifyJWT(token, jwtSecret)
+	if err == nil {
+		// Verify token expiry
+		if time.Now().Unix() > claims.Exp {
+			return uuid.Nil, errors.New("token expired")
+		}
+		return claims.TenantID, nil
+	}
+
+	// 3. Try resolving as API Key hash
+	ctx := context.Background()
+	hash := sha256.Sum256([]byte(token))
+	keyHash := hex.EncodeToString(hash[:])
+	var tenantID uuid.UUID
+	query := `
+		SELECT tenant_id 
+		FROM tenant_api_keys 
+		WHERE key_hash = $1 AND (expires_at IS NULL OR expires_at > NOW())
+	`
+	err = pgPool.QueryRow(ctx, query, keyHash).Scan(&tenantID)
+	if err == nil {
+		return tenantID, nil
+	}
+
+	return uuid.Nil, errors.New("invalid token")
+}
+
