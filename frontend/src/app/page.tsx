@@ -427,10 +427,14 @@ export default function CockpitPage() {
 
         <div className="glass-card w-full max-w-md border border-white/10 rounded-2xl shadow-2xl p-8 relative z-10 bg-slate-900/60 backdrop-blur-md">
           <div className="flex flex-col items-center gap-2 mb-8 text-center">
-            <div className="w-12 h-12 rounded-xl bg-violet-600/20 border border-violet-500/35 flex items-center justify-center text-violet-400 mb-2">
-              <Activity className="w-7 h-7 animate-pulse" />
+            <div className="relative flex items-center justify-center h-12 w-36 overflow-hidden rounded-xl bg-white/5 p-1.5 border border-white/10 mb-2">
+              <img 
+                src="https://lirp.cdn-website.com/2cf4cfdc/dms3rep/multi/opt/IT+Facil+-+logo+-+alta-47c0885e-158w.png" 
+                alt="ITFácil Logo" 
+                className="h-full w-auto object-contain"
+              />
             </div>
-            <h1 className="text-xl font-bold uppercase tracking-wider text-white">NOC/SOC Cockpit</h1>
+            <h1 className="text-xl font-bold uppercase tracking-wider text-white">ITFácil NOC</h1>
             <p className="text-xs text-slate-400">Painel SRE Multi-tenant de Gerenciamento & Auto-cura</p>
           </div>
 
@@ -495,19 +499,7 @@ export default function CockpitPage() {
               />
             </div>
 
-            {authView === 'register' && (
-              <div className="flex flex-col gap-1.5">
-                <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Tenant / Empresa Inicial</label>
-                <select
-                  value={authTenant}
-                  onChange={(e) => setAuthTenant(e.target.value)}
-                  className="bg-[#0b0f19] border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-violet-500 transition-all"
-                >
-                  <option value="e1b7c123-1234-4321-abcd-123456789abc">Telco Global Corp (Tenant A)</option>
-                  <option value="fa2b2345-5678-8765-dcba-987654321fed">Quantum Cloud Inc (Tenant B)</option>
-                </select>
-              </div>
-            )}
+
 
             <button
               type="submit"
@@ -541,12 +533,16 @@ export default function CockpitPage() {
       {/* 1. Header (Navbar Glass) */}
       <header className="h-16 shrink-0 flex items-center justify-between px-6 border-b border-white/5 bg-surface/50 backdrop-blur-md sticky top-0 z-50">
         <div className="flex items-center gap-3">
-          <div className="relative flex items-center justify-center w-8 h-8 rounded-lg bg-violet-600/35 border border-violet-500/40 text-violet-400">
-            <Activity className="w-5 h-5 animate-pulse" />
+          <div className="relative flex items-center justify-center h-8 w-24 overflow-hidden rounded-lg bg-white/5 p-1 border border-white/10">
+            <img 
+              src="https://lirp.cdn-website.com/2cf4cfdc/dms3rep/multi/opt/IT+Facil+-+logo+-+alta-47c0885e-158w.png" 
+              alt="ITFácil Logo" 
+              className="h-full w-auto object-contain"
+            />
           </div>
           <div>
             <h1 className="text-sm font-bold tracking-wider text-slate-100 flex items-center gap-2">
-              ANTIGRAVITY NOC <span className="text-xs px-2 py-0.5 rounded-full bg-violet-900/60 border border-violet-500/30 text-violet-300">2.0 ENGINE</span>
+              ITFácil NOC <span className="text-xs px-2 py-0.5 rounded-full bg-violet-900/60 border border-violet-500/30 text-violet-300">2.0 ENGINE</span>
             </h1>
             <p className="text-[10px] text-slate-400 tracking-wide uppercase">Real-Time Cockpit</p>
           </div>

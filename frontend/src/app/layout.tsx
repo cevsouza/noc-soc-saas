@@ -2,7 +2,7 @@ import type { Metadata } from 'next'
 import './globals.css'
 
 export const metadata: Metadata = {
-  title: 'ANTIGRAVITY NOC // Real-Time Cockpit',
+  title: 'ITFácil NOC // Real-Time Cockpit',
   description: 'High-performance real-time network operations center dashboard',
 }
 
