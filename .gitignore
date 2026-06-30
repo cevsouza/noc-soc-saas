@@ -1,0 +1,36 @@
+# Next.js
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/build/
+
+# Go
+bin/
+*.exe
+*.test
+*.prof
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
+.pytest_cache/
+
+# Local Dev Configs & Cryptography
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+*.pem
+*.key
+
+# Databases & Docker Volumes Data
+postgres_data/
+redis_data/
+test_sla_report.pdf
+frontend/public/reports/sla_report_*.pdf
