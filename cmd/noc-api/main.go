@@ -19,6 +19,9 @@ import (
 	"noc-api/internal/repository"
 	"noc-api/internal/worker"
 	"noc-api/internal/ws"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/redis/go-redis/v9"
 )
 
 func main() {
@@ -27,44 +30,94 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// 1. Load Configurations from Environment Variables
-	dbPort, _ := strconv.Atoi(getEnv("DB_PORT", "5432"))
-	dbCfg := db.Config{
-		Host:     getEnv("DB_HOST", "localhost"),
-		Port:     dbPort,
-		User:     getEnv("DB_USER", "postgres"),
-		Password: getEnv("DB_PASSWORD", "postgres"),
-		DBName:   getEnv("DB_NAME", "noc"),
-		SSLMode:  getEnv("DB_SSLMODE", "disable"),
-	}
+	// 1. Load PostgreSQL Connection (Support direct DATABASE_URL or fallback to parameters)
+	var pgPool *pgxpool.Pool
+	var err error
+	databaseURL := getEnv("DATABASE_URL", "")
 
-	redisPort, _ := strconv.Atoi(getEnv("REDIS_PORT", "6379"))
-	redisDB, _ := strconv.Atoi(getEnv("REDIS_DB", "0"))
-	redisCfg := redisclient.Config{
-		Host:     getEnv("REDIS_HOST", "localhost"),
-		Port:     redisPort,
-		Password: getEnv("REDIS_PASSWORD", ""),
-		DB:       redisDB,
+	if databaseURL != "" {
+		log.Println("DATABASE_URL detected. Connecting to PostgreSQL using direct connection string...")
+		poolCfg, err := pgxpool.ParseConfig(databaseURL)
+		if err != nil {
+			log.Fatalf("Fatal: Failed to parse DATABASE_URL: %v", err)
+		}
+		// Optimize pool settings for SRE performance
+		poolCfg.MaxConns = 50
+		poolCfg.MinConns = 10
+		poolCfg.MaxConnIdleTime = 15 * time.Minute
+		poolCfg.MaxConnLifetime = 1 * time.Hour
+		poolCfg.HealthCheckPeriod = 1 * time.Minute
+
+		pgPool, err = pgxpool.NewWithConfig(ctx, poolCfg)
+		if err != nil {
+			log.Fatalf("Fatal: Failed to create connection pool from DATABASE_URL: %v", err)
+		}
+	} else {
+		log.Println("No DATABASE_URL detected. Falling back to individual DB_HOST variables...")
+		dbPort, _ := strconv.Atoi(getEnv("DB_PORT", "5432"))
+		dbCfg := db.Config{
+			Host:     getEnv("DB_HOST", "localhost"),
+			Port:     dbPort,
+			User:     getEnv("DB_USER", "postgres"),
+			Password: getEnv("DB_PASSWORD", "postgres"),
+			DBName:   getEnv("DB_NAME", "noc"),
+			SSLMode:  getEnv("DB_SSLMODE", "disable"),
+		}
+		pgPool, err = db.NewConnectionPool(ctx, dbCfg)
+		if err != nil {
+			log.Fatalf("Fatal: Database initialization failed: %v", err)
+		}
 	}
+	defer pgPool.Close()
+
+	// Verify DB Connection
+	if err := pgPool.Ping(ctx); err != nil {
+		log.Fatalf("Fatal: Failed to ping PostgreSQL database: %v", err)
+	}
+	log.Println("PostgreSQL Connection Pool initialized successfully.")
+
+	// 2. Load Redis Connection (Support direct REDIS_URL or fallback to parameters)
+	var redisClient *redis.Client
+	redisURL := getEnv("REDIS_URL", "")
+
+	if redisURL != "" {
+		log.Println("REDIS_URL detected. Connecting to Redis using direct connection URL...")
+		opt, err := redis.ParseURL(redisURL)
+		if err != nil {
+			log.Fatalf("Fatal: Failed to parse REDIS_URL: %v", err)
+		}
+		opt.DialTimeout = 5 * time.Second
+		opt.ReadTimeout = 3 * time.Second
+		opt.WriteTimeout = 3 * time.Second
+		opt.PoolSize = 50
+		opt.MinIdleConns = 10
+
+		redisClient = redis.NewClient(opt)
+	} else {
+		log.Println("No REDIS_URL detected. Falling back to individual REDIS_HOST variables...")
+		redisPort, _ := strconv.Atoi(getEnv("REDIS_PORT", "6379"))
+		redisDB, _ := strconv.Atoi(getEnv("REDIS_DB", "0"))
+		redisCfg := redisclient.Config{
+			Host:     getEnv("REDIS_HOST", "localhost"),
+			Port:     redisPort,
+			Password: getEnv("REDIS_PASSWORD", ""),
+			DB:       redisDB,
+		}
+		redisClient, err = redisclient.NewRedisClient(ctx, redisCfg)
+		if err != nil {
+			log.Fatalf("Fatal: Redis initialization failed: %v", err)
+		}
+	}
+	defer redisClient.Close()
+
+	// Verify Redis Connection
+	if err := redisClient.Ping(ctx).Err(); err != nil {
+		log.Fatalf("Fatal: Failed to ping Redis server: %v", err)
+	}
+	log.Println("Redis Client initialized successfully.")
 
 	serverPort := getEnv("SERVER_PORT", "8080")
 	numWorkers, _ := strconv.Atoi(getEnv("WORKER_POOL_SIZE", "10"))
-
-	// 2. Initialize PostgreSQL Connection Pool
-	pgPool, err := db.NewConnectionPool(ctx, dbCfg)
-	if err != nil {
-		log.Fatalf("Fatal: Database initialization failed: %v", err)
-	}
-	defer pgPool.Close()
-	log.Println("PostgreSQL Connection Pool initialized successfully.")
-
-	// 3. Initialize Redis Client
-	redisClient, err := redisclient.NewRedisClient(ctx, redisCfg)
-	if err != nil {
-		log.Fatalf("Fatal: Redis initialization failed: %v", err)
-	}
-	defer redisClient.Close()
-	log.Println("Redis Client initialized successfully.")
 
 	// 4. Initialize & Start Concurrent Worker Pool
 	wp := worker.NewWorkerPool(pgPool, redisClient, numWorkers)
