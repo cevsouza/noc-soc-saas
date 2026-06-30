@@ -137,6 +137,143 @@ func main() {
 	// 6. Setup HTTP Router & Middleware
 	mux := http.NewServeMux()
 
+	// Welcome and root endpoint (to avoid scary 404 page not found)
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" {
+			http.NotFound(w, r)
+			return
+		}
+		if strings.Contains(r.Header.Get("Accept"), "text/html") {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NOC SaaS Core API</title>
+    <style>
+        body {
+            background-color: #0b0f19;
+            color: #f3f4f6;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            margin: 0;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+        .card {
+            background: rgba(17, 24, 39, 0.7);
+            border: 1px solid rgba(59, 130, 246, 0.3);
+            border-radius: 16px;
+            padding: 40px;
+            max-width: 500px;
+            width: 100%;
+            text-align: center;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3), 0 0 15px 1px rgba(59, 130, 246, 0.15);
+            backdrop-filter: blur(12px);
+        }
+        .glow {
+            width: 80px;
+            height: 80px;
+            background: radial-gradient(circle, #3b82f6 0%, transparent 70%);
+            margin: 0 auto 20px;
+            position: relative;
+        }
+        .glow::after {
+            content: "⚡";
+            font-size: 40px;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+        }
+        h1 {
+            font-size: 24px;
+            margin: 0 0 10px;
+            background: linear-gradient(to right, #60a5fa, #3b82f6);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            font-weight: 700;
+        }
+        .status {
+            display: inline-flex;
+            align-items: center;
+            background: rgba(16, 185, 129, 0.1);
+            color: #10b981;
+            padding: 4px 12px;
+            border-radius: 9999px;
+            font-size: 14px;
+            font-weight: 500;
+            margin-bottom: 20px;
+            border: 1px solid rgba(16, 185, 129, 0.2);
+        }
+        .status::before {
+            content: "";
+            width: 8px;
+            height: 8px;
+            background-color: #10b981;
+            border-radius: 50%;
+            margin-right: 8px;
+            box-shadow: 0 0 8px #10b981;
+        }
+        p {
+            color: #9ca3af;
+            font-size: 16px;
+            line-height: 1.5;
+            margin: 0 0 30px;
+        }
+        .btn {
+            display: inline-block;
+            background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
+            color: white;
+            padding: 12px 24px;
+            border-radius: 8px;
+            text-decoration: none;
+            font-weight: 600;
+            transition: all 0.2s ease;
+            box-shadow: 0 4px 6px -1px rgba(59, 130, 246, 0.2);
+        }
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 15px -3px rgba(59, 130, 246, 0.3);
+        }
+        .footer {
+            margin-top: 30px;
+            font-size: 12px;
+            color: #4b5563;
+        }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <div class="glow"></div>
+        <h1>NOC SaaS Core API</h1>
+        <div class="status">Online & Operational</div>
+        <p>This is the core REST & WebSocket API gateway. Use the Cockpit frontend to visualize alerts, connect tenants, and manage SSH remediation runbooks.</p>
+        <a href="/health" class="btn">View API Health</a>
+        <div class="footer">Powered by Antigravity Core Engine</div>
+    </div>
+</body>
+</html>`))
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{
+			"name": "NOC SaaS Core API",
+			"status": "online",
+			"version": "1.0.0",
+			"health_check": "/health",
+			"documentation": "https://github.com/cevsouza/noc-soc-saas",
+			"message": "NOC SaaS API Gateway is fully operational. Access the Cockpit UI to interact."
+		}`))
+	})
+
 	// Health Check endpoint (unauthenticated)
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
