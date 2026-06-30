@@ -46,6 +46,15 @@ const MOCK_TENANTS = [
   { id: 'fa2b2345-5678-8765-dcba-987654321fed', name: 'Quantum Cloud Inc (Tenant B)', slug: 'quantum-cloud' }
 ];
 
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
+
+const getWSUrl = (tenantId: string) => {
+  const base = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
+  const wsProtocol = base.startsWith('https') ? 'wss' : 'ws';
+  const host = base.replace(/^https?:\/\//, '');
+  return `${wsProtocol}://${host}/api/v1/ws?token=${tenantId}`;
+};
+
 export default function CockpitPage() {
   const [selectedTenant, setSelectedTenant] = useState(MOCK_TENANTS[0]);
   const [alerts, setAlerts] = useState<Alert[]>([]);
@@ -91,7 +100,7 @@ export default function CockpitPage() {
     }
 
     setConnStatus('connecting');
-    const wsUrl = `ws://localhost:8080/api/v1/ws?token=${selectedTenant.id}`;
+    const wsUrl = getWSUrl(selectedTenant.id);
     
     const socket = new WebSocket(wsUrl);
     wsRef.current = socket;
@@ -197,7 +206,7 @@ export default function CockpitPage() {
       let payload: any = {};
       
       if (type === 'cpu') {
-        url = `http://localhost:8080/api/v1/ingest/prometheus?token=${selectedTenant.id}`;
+        url = `${API_BASE_URL}/api/v1/ingest/prometheus?token=${selectedTenant.id}`;
         payload = {
           receiver: "webhook",
           status: "firing",
@@ -210,7 +219,7 @@ export default function CockpitPage() {
           }]
         };
       } else if (type === 'memory') {
-        url = `http://localhost:8080/api/v1/ingest/prometheus?token=${selectedTenant.id}`;
+        url = `${API_BASE_URL}/api/v1/ingest/prometheus?token=${selectedTenant.id}`;
         payload = {
           receiver: "webhook",
           status: "firing",
@@ -223,7 +232,7 @@ export default function CockpitPage() {
           }]
         };
       } else if (type === 'wazuh') {
-        url = `http://localhost:8080/api/v1/ingest/wazuh?token=${selectedTenant.id}`;
+        url = `${API_BASE_URL}/api/v1/ingest/wazuh?token=${selectedTenant.id}`;
         payload = {
           timestamp: new Date().toISOString(),
           rule: { level: 10, comment: "SSH brute force authentication failed", sid: 5716, id: "5716", groups: ["syslog", "sshd", "security_event"] },
@@ -253,7 +262,7 @@ export default function CockpitPage() {
 
     setSaveStatus({ status: 'saving' });
     try {
-      const url = `http://localhost:8080/api/v1/vault/secret?token=${selectedTenant.id}`;
+      const url = `${API_BASE_URL}/api/v1/vault/secret?token=${selectedTenant.id}`;
       const response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -325,7 +334,7 @@ export default function CockpitPage() {
           {/* SLA PDF Report Downloader */}
           <button
             onClick={() => {
-              window.open(`http://localhost:8080/api/v1/reports/sla?token=${selectedTenant.id}&tenant_name=${encodeURIComponent(selectedTenant.name)}`);
+              window.open(`${API_BASE_URL}/api/v1/reports/sla?token=${selectedTenant.id}&tenant_name=${encodeURIComponent(selectedTenant.name)}`);
             }}
             className="flex items-center gap-2 px-3 py-1 rounded-lg bg-violet-600/20 hover:bg-violet-600/30 border border-violet-500/35 text-violet-300 text-xs font-bold transition-all uppercase tracking-wider"
           >
@@ -1000,10 +1009,10 @@ export default function CockpitPage() {
                       </label>
                       <div className="flex bg-[#040811] border border-white/5 rounded-lg overflow-hidden p-2.5 items-center justify-between font-mono text-xs text-cyan-400 select-all select-text">
                         <span className="truncate mr-3">
-                          {`http://localhost:8080/api/v1/ingest/${selectedIntegrationTool}?token=${selectedTenant.id}`}
+                          {`${API_BASE_URL}/api/v1/ingest/${selectedIntegrationTool}?token=${selectedTenant.id}`}
                         </span>
                         <button
-                          onClick={() => handleCopyWebhookUrl(`http://localhost:8080/api/v1/ingest/${selectedIntegrationTool}?token=${selectedTenant.id}`)}
+                          onClick={() => handleCopyWebhookUrl(`${API_BASE_URL}/api/v1/ingest/${selectedIntegrationTool}?token=${selectedTenant.id}`)}
                           className="p-1.5 rounded bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white transition-all shrink-0"
                           title="Copiar URL"
                         >
@@ -1030,7 +1039,7 @@ export default function CockpitPage() {
 {`receivers:
   - name: 'noc-soc-webhook'
     webhook_configs:
-      - url: 'http://localhost:8080/api/v1/ingest/prometheus?token=${selectedTenant.id}'`}
+      - url: '${API_BASE_URL}/api/v1/ingest/prometheus?token=${selectedTenant.id}'`}
                           </pre>
                         </div>
                       )}
@@ -1041,7 +1050,7 @@ export default function CockpitPage() {
                           <pre className="bg-[#03060f] p-3 rounded-lg font-mono text-[10px] text-slate-400 overflow-x-auto leading-relaxed border border-white/5">
 {`<integration>
   <name>custom-webhook</name>
-  <hook_url>http://localhost:8080/api/v1/ingest/wazuh?token=${selectedTenant.id}</hook_url>
+  <hook_url>${API_BASE_URL}/api/v1/ingest/wazuh?token=${selectedTenant.id}</hook_url>
   <alert_format>json</alert_format>
   <level>7</level>
 </integration>`}
