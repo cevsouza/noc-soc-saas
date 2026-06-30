@@ -121,7 +121,7 @@ func main() {
 	}
 	log.Println("Redis Client initialized successfully.")
 
-	serverPort := getEnv("SERVER_PORT", "8080")
+	serverPort := getEnv("PORT", getEnv("SERVER_PORT", "8080"))
 	numWorkers, _ := strconv.Atoi(getEnv("WORKER_POOL_SIZE", "10"))
 
 	// 4. Initialize & Start Concurrent Worker Pool
