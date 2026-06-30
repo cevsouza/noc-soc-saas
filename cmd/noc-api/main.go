@@ -104,6 +104,19 @@ func main() {
 	protectedWazuh := middleware.APIKeyAuth(pgPool, redisClient)(wazuhHandler)
 	mux.Handle("/api/v1/ingest/wazuh", protectedWazuh)
 
+	// High-Performance Uptime Kuma, Grafana & Zabbix Webhook Ingestions
+	uptimekumaHandler := api.HandleUptimeKumaIngest(redisClient)
+	protectedUptimeKuma := middleware.APIKeyAuth(pgPool, redisClient)(uptimekumaHandler)
+	mux.Handle("/api/v1/ingest/uptimekuma", protectedUptimeKuma)
+
+	grafanaHandler := api.HandleGrafanaIngest(redisClient)
+	protectedGrafana := middleware.APIKeyAuth(pgPool, redisClient)(grafanaHandler)
+	mux.Handle("/api/v1/ingest/grafana", protectedGrafana)
+
+	zabbixHandler := api.HandleZabbixIngest(redisClient)
+	protectedZabbix := middleware.APIKeyAuth(pgPool, redisClient)(zabbixHandler)
+	mux.Handle("/api/v1/ingest/zabbix", protectedZabbix)
+
 	// SLA PDF Report Download Endpoint (Resolves auth token via URL query parameter for browser compatibility)
 	mux.Handle("/api/v1/reports/sla", api.HandleDownloadSLAReport())
 

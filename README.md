@@ -141,6 +141,72 @@ curl -X POST http://localhost:8080/api/v1/ingest/wazuh?token=e1b7c123-1234-4321-
   }'
 ```
 
+### 2.1 Testar Outros Coletores (Uptime Kuma, Grafana, Zabbix)
+
+#### A. Simular Alerta do Uptime Kuma (Monitor Down)
+```bash
+curl -X POST http://localhost:8080/api/v1/ingest/uptimekuma?token=e1b7c123-1234-4321-abcd-123456789abc \
+  -H "Content-Type: application/json" \
+  -d '{
+    "heartbeat": {
+      "monitorID": 1,
+      "status": 0,
+      "time": "2026-06-30 12:00:00.000",
+      "msg": "Connection timeout"
+    },
+    "monitor": {
+      "id": 1,
+      "name": "Database Principal",
+      "hostname": "db-server-01",
+      "url": "10.0.0.5",
+      "type": "ping"
+    },
+    "msg": "[Database Principal] [🔴 Down] Connection timeout"
+  }'
+```
+
+#### B. Simular Alerta do Zabbix (Trigger Problem)
+```bash
+curl -X POST http://localhost:8080/api/v1/ingest/zabbix?token=e1b7c123-1234-4321-abcd-123456789abc \
+  -H "Content-Type: application/json" \
+  -d '{
+    "alert_subject": "PROBLEM: Spikes em Disco no DB-01",
+    "alert_message": "Uso de disco em 94% no db-server-01",
+    "host": "db-server-01",
+    "severity": "High",
+    "trigger_id": "12345",
+    "event_id": "98765",
+    "event_value": "1"
+  }'
+```
+
+#### C. Simular Alerta do Grafana (Firing Rule)
+```bash
+curl -X POST http://localhost:8080/api/v1/ingest/grafana?token=e1b7c123-1234-4321-abcd-123456789abc \
+  -H "Content-Type: application/json" \
+  -d '{
+    "receiver": "grafana-webhook",
+    "status": "firing",
+    "alerts": [
+      {
+        "status": "firing",
+        "labels": {
+          "alertname": "Muitas Conexoes no BD",
+          "instance": "db-server-01",
+          "severity": "critical"
+        },
+        "annotations": {
+          "summary": "Quantidade de conexões ativas alta",
+          "description": "Banco de dados atingiu 150 conexões."
+        },
+        "startsAt": "2026-06-30T12:00:00Z",
+        "fingerprint": "grafana-fingerprint-456"
+      }
+    ],
+    "title": "[FIRING:1] Muitas Conexoes (db-server-01)"
+  }'
+```
+
 ### 3. Testar a Supressão Automática de IA (Deduplicação e Flapping)
 1.  Dispare o mesmo alerta do Prometheus 9 vezes consecutivas em menos de 1 minuto.
 2.  O Go Worker acumulará o número de ocorrências (`occurrences: 9x`) protegendo o banco via Redis.

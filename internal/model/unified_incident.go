@@ -12,6 +12,9 @@ const (
 	SourcePrometheus IncidentSource = "prometheus"
 	SourceWazuh      IncidentSource = "wazuh"
 	SourceSentinel   IncidentSource = "sentinel"
+	SourceUptimeKuma IncidentSource = "uptimekuma"
+	SourceGrafana    IncidentSource = "grafana"
+	SourceZabbix     IncidentSource = "zabbix"
 )
 
 // UnifiedIncident is the normalized internal JSON structure used by the SaaS NOC/SOC engine.

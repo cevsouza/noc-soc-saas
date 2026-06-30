@@ -413,3 +413,257 @@ func HandleDownloadSLAReport() http.HandlerFunc {
 		http.ServeFile(w, r, outputFile)
 	}
 }
+
+// Uptime Kuma Webhook Structures
+type UptimeKumaPayload struct {
+	Heartbeat struct {
+		MonitorID int    `json:"monitorID"`
+		Status    int    `json:"status"` // 0 = Down, 1 = Up
+		Time      string `json:"time"`
+		Msg       string `json:"msg"`
+	} `json:"heartbeat"`
+	Monitor struct {
+		ID       int    `json:"id"`
+		Name     string `json:"name"`
+		Hostname string `json:"hostname"`
+		Url      string `json:"url"`
+		Type     string `json:"type"`
+	} `json:"monitor"`
+	Msg string `json:"msg"`
+}
+
+// Zabbix Webhook Structures
+type ZabbixPayload struct {
+	AlertSubject string `json:"alert_subject"`
+	AlertMessage string `json:"alert_message"`
+	Host         string `json:"host"`
+	Severity     string `json:"severity"`
+	TriggerID    string `json:"trigger_id"`
+	EventID      string `json:"event_id"`
+	EventValue   string `json:"event_value"` // "1" = Problem, "0" = OK
+}
+
+// HandleUptimeKumaIngest ingests and normalizes Uptime Kuma status notifications
+func HandleUptimeKumaIngest(redisClient *redis.Client) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		tenantID, ok := db.TenantIDFromContext(r.Context())
+		if !ok {
+			http.Error(w, "Unauthorized: Tenant context not found", http.StatusUnauthorized)
+			return
+		}
+
+		var payload UptimeKumaPayload
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			http.Error(w, "Bad Request: Invalid Uptime Kuma JSON payload", http.StatusBadRequest)
+			return
+		}
+
+		incident := mapUptimeKumaToUnified(payload, tenantID)
+
+		eventBytes, err := json.Marshal(incident)
+		if err != nil {
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return
+		}
+
+		err = redisClient.LPush(r.Context(), AlertsQueueKey, eventBytes).Err()
+		if err != nil {
+			http.Error(w, "Internal Server Error: Failed to queue incident", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(IngestResponse{
+			Status:    "accepted",
+			ID:        incident.ID,
+			Message:   "Uptime Kuma alert successfully normalized and queued",
+			Timestamp: incident.Timestamp,
+		})
+	}
+}
+
+// HandleGrafanaIngest ingests and normalizes Grafana alerts via webhook
+func HandleGrafanaIngest(redisClient *redis.Client) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		tenantID, ok := db.TenantIDFromContext(r.Context())
+		if !ok {
+			http.Error(w, "Unauthorized: Tenant context not found", http.StatusUnauthorized)
+			return
+		}
+
+		var payload AlertmanagerPayload // Grafana alert format matches Prometheus Alertmanager structure
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			http.Error(w, "Bad Request: Invalid Grafana alert JSON payload", http.StatusBadRequest)
+			return
+		}
+
+		var incidentIDs []uuid.UUID
+		var eventBytesList [][]byte
+
+		for _, alert := range payload.Alerts {
+			incident := mapGrafanaToUnified(alert, tenantID)
+			incidentIDs = append(incidentIDs, incident.ID)
+
+			bytes, err := json.Marshal(incident)
+			if err != nil {
+				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+				return
+			}
+			eventBytesList = append(eventBytesList, bytes)
+		}
+
+		if len(eventBytesList) > 0 {
+			pipe := redisClient.Pipeline()
+			for _, bytes := range eventBytesList {
+				pipe.LPush(r.Context(), AlertsQueueKey, bytes)
+			}
+			_, err := pipe.Exec(r.Context())
+			if err != nil {
+				http.Error(w, "Internal Server Error: Failed to queue Grafana alerts", http.StatusInternalServerError)
+				return
+			}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(IngestBatchResponse{
+			Status:    "accepted",
+			IDs:       incidentIDs,
+			Message:   fmt.Sprintf("Successfully normalized and queued %d Grafana alerts", len(incidentIDs)),
+			Timestamp: time.Now(),
+		})
+	}
+}
+
+// HandleZabbixIngest ingests and normalizes Zabbix problem triggers
+func HandleZabbixIngest(redisClient *redis.Client) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		tenantID, ok := db.TenantIDFromContext(r.Context())
+		if !ok {
+			http.Error(w, "Unauthorized: Tenant context not found", http.StatusUnauthorized)
+			return
+		}
+
+		var payload ZabbixPayload
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			http.Error(w, "Bad Request: Invalid Zabbix JSON payload", http.StatusBadRequest)
+			return
+		}
+
+		incident := mapZabbixToUnified(payload, tenantID)
+
+		eventBytes, err := json.Marshal(incident)
+		if err != nil {
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return
+		}
+
+		err = redisClient.LPush(r.Context(), AlertsQueueKey, eventBytes).Err()
+		if err != nil {
+			http.Error(w, "Internal Server Error: Failed to queue Zabbix alert", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(IngestResponse{
+			Status:    "accepted",
+			ID:        incident.ID,
+			Message:   "Zabbix trigger event successfully normalized and queued",
+			Timestamp: incident.Timestamp,
+		})
+	}
+}
+
+func mapUptimeKumaToUnified(payload UptimeKumaPayload, tenantID uuid.UUID) model.UnifiedIncident {
+	severity := model.SeverityInfo
+	if payload.Heartbeat.Status == 0 {
+		severity = model.SeverityCritical
+	}
+
+	rawPayload := make(map[string]interface{})
+	rawPayload["heartbeat"] = payload.Heartbeat
+	rawPayload["monitor"] = payload.Monitor
+	rawPayload["msg"] = payload.Msg
+
+	// Timestamp layout parsing
+	timestamp, err := time.Parse("2006-01-02 15:04:05.000", payload.Heartbeat.Time)
+	if err != nil {
+		timestamp = time.Now()
+	}
+
+	host := payload.Monitor.Hostname
+	if host == "" {
+		host = payload.Monitor.Url
+	}
+
+	return model.UnifiedIncident{
+		ID:          uuid.New(),
+		TenantID:    tenantID,
+		Source:      model.SourceUptimeKuma,
+		ExternalID:  fmt.Sprintf("%d_%d", payload.Monitor.ID, timestamp.Unix()),
+		EventType:   payload.Monitor.Type,
+		Severity:    severity,
+		Title:       payload.Msg,
+		Description: payload.Heartbeat.Msg,
+		Host:        host,
+		RawPayload:  rawPayload,
+		Timestamp:   timestamp,
+	}
+}
+
+func mapGrafanaToUnified(alert AlertmanagerAlert, tenantID uuid.UUID) model.UnifiedIncident {
+	incident := mapPrometheusToUnified(alert, tenantID)
+	incident.Source = model.SourceGrafana
+	return incident
+}
+
+func mapZabbixToUnified(payload ZabbixPayload, tenantID uuid.UUID) model.UnifiedIncident {
+	severity := model.SeverityInfo
+	switch strings.ToLower(payload.Severity) {
+	case "warning", "average":
+		severity = model.SeverityWarning
+	case "high":
+		severity = model.SeverityCritical
+	case "disaster":
+		severity = model.SeverityFatal
+	}
+
+	rawPayload := make(map[string]interface{})
+	rawPayload["subject"] = payload.AlertSubject
+	rawPayload["message"] = payload.AlertMessage
+	rawPayload["trigger_id"] = payload.TriggerID
+	rawPayload["event_id"] = payload.EventID
+	rawPayload["event_value"] = payload.EventValue
+
+	return model.UnifiedIncident{
+		ID:          uuid.New(),
+		TenantID:    tenantID,
+		Source:      model.SourceZabbix,
+		ExternalID:  payload.EventID,
+		EventType:   "zabbix_trigger",
+		Severity:    severity,
+		Title:       payload.AlertSubject,
+		Description: payload.AlertMessage,
+		Host:        payload.Host,
+		RawPayload:  rawPayload,
+		Timestamp:   time.Now(),
+	}
+}
+

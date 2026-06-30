@@ -96,3 +96,122 @@ func TestHandleWazuhIngest(t *testing.T) {
 		t.Errorf("expected status 202 Accepted or 500 InternalServerError (redis offline), got %d", rec.Code)
 	}
 }
+
+func TestHandleUptimeKumaIngest(t *testing.T) {
+	redisClient := redis.NewClient(&redis.Options{Addr: "localhost:6379"})
+
+	tenantID := uuid.New()
+	ctx := db.WithTenantID(context.Background(), tenantID)
+
+	uptimekumaJSON := `{
+		"heartbeat": {
+			"monitorID": 1,
+			"status": 0,
+			"time": "2026-06-30 12:00:00.000",
+			"msg": "Connection timeout",
+			"important": true,
+			"duration": 0
+		},
+		"monitor": {
+			"id": 1,
+			"name": "Google DNS",
+			"url": "8.8.8.8",
+			"method": "ping",
+			"hostname": "8.8.8.8",
+			"port": null,
+			"maxretries": 1,
+			"weight": 1,
+			"active": 1,
+			"type": "ping",
+			"interval": 60,
+			"retryInterval": 60,
+			"resendInterval": 0,
+			"keyword": null,
+			"expiryNotification": false,
+			"ignoreTls": false,
+			"upsideDown": false,
+			"packetSize": 56
+		},
+		"msg": "[Google DNS] [🔴 Down] Connection timeout"
+	}`
+
+	req := httptest.NewRequest("POST", "/api/v1/ingest/uptimekuma", strings.NewReader(uptimekumaJSON))
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	handler := api.HandleUptimeKumaIngest(redisClient)
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted && rec.Code != http.StatusInternalServerError {
+		t.Errorf("expected status 202 Accepted or 500 InternalServerError (redis offline), got %d", rec.Code)
+	}
+}
+
+func TestHandleZabbixIngest(t *testing.T) {
+	redisClient := redis.NewClient(&redis.Options{Addr: "localhost:6379"})
+
+	tenantID := uuid.New()
+	ctx := db.WithTenantID(context.Background(), tenantID)
+
+	zabbixJSON := `{
+		"alert_subject": "PROBLEM: High CPU load on host-xyz",
+		"alert_message": "CPU load is 92%\nHost: host-xyz\nSeverity: Average\nItem value: 92\nTrigger ID: 12345",
+		"host": "host-xyz",
+		"severity": "Average",
+		"trigger_id": "12345",
+		"event_id": "98765",
+		"event_value": "1"
+	}`
+
+	req := httptest.NewRequest("POST", "/api/v1/ingest/zabbix", strings.NewReader(zabbixJSON))
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	handler := api.HandleZabbixIngest(redisClient)
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted && rec.Code != http.StatusInternalServerError {
+		t.Errorf("expected status 202 Accepted or 500 InternalServerError (redis offline), got %d", rec.Code)
+	}
+}
+
+func TestHandleGrafanaIngest(t *testing.T) {
+	redisClient := redis.NewClient(&redis.Options{Addr: "localhost:6379"})
+
+	tenantID := uuid.New()
+	ctx := db.WithTenantID(context.Background(), tenantID)
+
+	grafanaJSON := `{
+		"receiver": "grafana-webhook",
+		"status": "firing",
+		"alerts": [
+			{
+				"status": "firing",
+				"labels": {
+					"alertname": "High Database Connections",
+					"instance": "db-server-01",
+					"severity": "critical"
+				},
+				"annotations": {
+					"summary": "Database connections count is high",
+					"description": "Active database connections reached 150."
+				},
+				"startsAt": "2026-06-30T12:00:00Z",
+				"fingerprint": "grafana-fingerprint-456"
+			}
+		],
+		"title": "[FIRING:1] High Database Connections (db-server-01)"
+	}`
+
+	req := httptest.NewRequest("POST", "/api/v1/ingest/grafana", strings.NewReader(grafanaJSON))
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	handler := api.HandleGrafanaIngest(redisClient)
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted && rec.Code != http.StatusInternalServerError {
+		t.Errorf("expected status 202 Accepted or 500 InternalServerError (redis offline), got %d", rec.Code)
+	}
+}
+
