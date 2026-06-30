@@ -16,6 +16,7 @@ import (
 	"noc-api/internal/db"
 	"noc-api/internal/middleware"
 	redisclient "noc-api/internal/redis"
+	"noc-api/internal/repository"
 	"noc-api/internal/worker"
 	"noc-api/internal/ws"
 )
