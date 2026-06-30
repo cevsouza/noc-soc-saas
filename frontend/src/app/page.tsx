@@ -506,113 +506,7 @@ export default function CockpitPage() {
     setTimeout(() => setCopiedText(false), 2000);
   };
 
-  if (!token) {
-    return (
-      <div className="min-h-screen bg-[#070b13] text-slate-100 flex items-center justify-center font-sans p-4 relative overflow-hidden">
-        <div className="absolute top-1/4 left-1/4 -translate-x-1/2 -translate-y-1/2 w-96 h-96 rounded-full bg-violet-600/10 blur-[100px] pointer-events-none"></div>
-        <div className="absolute bottom-1/4 right-1/4 translate-x-1/2 translate-y-1/2 w-96 h-96 rounded-full bg-cyan-600/10 blur-[100px] pointer-events-none"></div>
 
-        <div className="glass-card w-full max-w-md border border-white/10 rounded-2xl shadow-2xl p-8 relative z-10 bg-slate-900/60 backdrop-blur-md">
-          <div className="flex flex-col items-center gap-2 mb-8 text-center">
-            <div className="relative flex items-center justify-center h-12 w-36 overflow-hidden rounded-xl bg-white/5 p-1.5 border border-white/10 mb-2">
-              <img 
-                src="https://lirp.cdn-website.com/2cf4cfdc/dms3rep/multi/opt/IT+Facil+-+logo+-+alta-47c0885e-158w.png" 
-                alt="ITFácil Logo" 
-                className="h-full w-auto object-contain"
-              />
-            </div>
-            <h1 className="text-xl font-bold uppercase tracking-wider text-white">ITFácil NOC</h1>
-            <p className="text-xs text-slate-400">Painel SRE Multi-tenant de Gerenciamento & Auto-cura</p>
-          </div>
-
-          {typeof window !== 'undefined' && window.location.search.includes('verified=true') && (
-            <div className="mb-6 p-3 rounded-lg bg-emerald-950/20 border border-emerald-500/20 text-emerald-400 text-xs flex items-center gap-2">
-              <CheckCircle2 className="w-4 h-4 shrink-0" />
-              <span>E-mail verificado com sucesso! Você já pode realizar o login.</span>
-            </div>
-          )}
-
-          <div className="flex border-b border-white/5 mb-6">
-            <button
-              onClick={() => { setAuthView('login'); setAuthStatus({ status: 'idle' }); }}
-              className={`flex-1 pb-3 text-sm font-bold transition-all ${authView === 'login' ? 'text-violet-400 border-b-2 border-violet-500' : 'text-slate-400 hover:text-slate-200'}`}
-            >
-              Acessar Cockpit
-            </button>
-            <button
-              onClick={() => { setAuthView('register'); setAuthStatus({ status: 'idle' }); }}
-              className={`flex-1 pb-3 text-sm font-bold transition-all ${authView === 'register' ? 'text-violet-400 border-b-2 border-violet-500' : 'text-slate-400 hover:text-slate-200'}`}
-            >
-              Criar Conta
-            </button>
-          </div>
-
-          <form onSubmit={authView === 'login' ? handleLogin : handleRegister} className="flex flex-col gap-4">
-            {authView === 'register' && (
-              <div className="flex flex-col gap-1.5">
-                <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Nome Completo</label>
-                <input
-                  type="text"
-                  required
-                  value={authName}
-                  onChange={(e) => setAuthName(e.target.value)}
-                  placeholder="Seu nome"
-                  className="bg-black/30 border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-violet-500 transition-all"
-                />
-              </div>
-            )}
-
-            <div className="flex flex-col gap-1.5">
-              <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">E-mail Corporativo</label>
-              <input
-                type="email"
-                required
-                value={authEmail}
-                onChange={(e) => setAuthEmail(e.target.value)}
-                placeholder="seu-nome@empresa.com"
-                className="bg-black/30 border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-violet-500 transition-all"
-              />
-            </div>
-
-            <div className="flex flex-col gap-1.5">
-              <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Senha</label>
-              <input
-                type="password"
-                required
-                value={authPassword}
-                onChange={(e) => setAuthPassword(e.target.value)}
-                placeholder="Mínimo de 6 caracteres"
-                className="bg-black/30 border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-violet-500 transition-all"
-              />
-            </div>
-
-
-
-            <button
-              type="submit"
-              disabled={authStatus.status === 'loading'}
-              className="w-full bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white font-bold text-xs py-3 rounded-lg mt-2 transition-all shadow-md shadow-violet-950/40 flex items-center justify-center gap-2"
-            >
-              {authStatus.status === 'loading' && <RefreshCw className="w-4 h-4 animate-spin" />}
-              {authView === 'login' ? 'Entrar no Painel' : 'Registrar Minha Conta'}
-            </button>
-
-            {authStatus.status === 'success' && authStatus.message && (
-              <div className="p-3 bg-emerald-950/20 border border-emerald-500/20 text-emerald-400 text-xs rounded-lg mt-2 font-sans">
-                {authStatus.message}
-              </div>
-            )}
-
-            {authStatus.status === 'error' && authStatus.message && (
-              <div className="p-3 bg-rose-950/20 border border-rose-500/20 text-rose-400 text-xs rounded-lg mt-2 font-sans">
-                {authStatus.message}
-              </div>
-            )}
-          </form>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="min-h-screen bg-background text-slate-100 flex flex-col font-sans select-none">
@@ -712,18 +606,12 @@ export default function CockpitPage() {
             )}
           </div>
 
-          {/* User Profile and Logout */}
+          {/* User Profile (Sem Logout) */}
           <div className="flex items-center gap-3 px-3 py-1 rounded-lg bg-white/5 border border-white/5 ml-2">
             <div className="flex flex-col text-right">
               <span className="text-[10px] text-white font-bold leading-none">{user?.name}</span>
               <span className="text-[8px] text-slate-400 uppercase tracking-widest font-semibold">{user?.role}</span>
             </div>
-            <button
-              onClick={handleLogout}
-              className="text-xs text-rose-400 hover:text-rose-300 bg-rose-500/10 hover:bg-rose-500/20 px-2.5 py-1 rounded transition-all font-bold"
-            >
-              Sair
-            </button>
           </div>
         </div>
       </header>
