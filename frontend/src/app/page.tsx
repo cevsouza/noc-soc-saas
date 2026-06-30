@@ -50,8 +50,13 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
 
 const getWSUrl = (tenantId: string) => {
   const base = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
-  const wsProtocol = base.startsWith('https') ? 'wss' : 'ws';
   const host = base.replace(/^https?:\/\//, '');
+  
+  // Force secure WebSocket (wss) if API base is https OR if the frontend page itself is loaded over https
+  let wsProtocol = 'ws';
+  if (base.startsWith('https') || (typeof window !== 'undefined' && window.location.protocol === 'https:')) {
+    wsProtocol = 'wss';
+  }
   return `${wsProtocol}://${host}/api/v1/ws?token=${tenantId}`;
 };
 
