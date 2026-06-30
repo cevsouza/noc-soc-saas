@@ -9,8 +9,6 @@ import (
 	"net/http"
 	"time"
 
-	"noc-api/internal/db"
-
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/jackc/pgx/v5"

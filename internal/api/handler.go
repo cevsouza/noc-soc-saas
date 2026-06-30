@@ -12,8 +12,12 @@ import (
 
 	"noc-api/internal/db"
 	"noc-api/internal/model"
+	"noc-api/internal/repository"
+	"noc-api/internal/security"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 )
 
