@@ -141,7 +141,13 @@ export default function CockpitPage() {
         setSelectedTenant(data.tenant);
         setAuthStatus({ status: 'success' });
       } else {
-        const msg = await response.text();
+        const contentType = response.headers.get('content-type');
+        let msg = '';
+        if (contentType && contentType.includes('text/html')) {
+          msg = 'Erro de conexão: O servidor retornou uma página HTML. Verifique se a variável de ambiente NEXT_PUBLIC_API_URL do frontend está configurada corretamente com a URL da API Go.';
+        } else {
+          msg = await response.text();
+        }
         setAuthStatus({ status: 'error', message: msg || 'Credenciais inválidas.' });
       }
     } catch (err) {
@@ -164,7 +170,13 @@ export default function CockpitPage() {
         setAuthPassword('');
         setAuthName('');
       } else {
-        const msg = await response.text();
+        const contentType = response.headers.get('content-type');
+        let msg = '';
+        if (contentType && contentType.includes('text/html')) {
+          msg = 'Erro de conexão: O servidor retornou uma página HTML. Verifique se a variável de ambiente NEXT_PUBLIC_API_URL do frontend está configurada corretamente com a URL da API Go.';
+        } else {
+          msg = await response.text();
+        }
         setAuthStatus({ status: 'error', message: msg || 'Falha ao registrar.' });
       }
     } catch (err) {
