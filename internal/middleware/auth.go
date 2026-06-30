@@ -100,30 +100,39 @@ type JWTClaims struct {
 	Exp      int64          `json:"exp"`
 }
 
-// JWTAuth verifies JWT tokens and injects claims + tenant_id context.
+// JWTAuth verifica tokens JWT. Para testes temporários (omissão de autenticação), injeta dados de administrador se o token for ausente/inválido.
 func JWTAuth(jwtSecret []byte) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			authHeader := r.Header.Get("Authorization")
-			if authHeader == "" || len(authHeader) < 8 || authHeader[:7] != "Bearer " {
-				http.Error(w, "Unauthorized: Missing or invalid Authorization header", http.StatusUnauthorized)
-				return
+			var claims *JWTClaims
+			var err error
+
+			if authHeader != "" && len(authHeader) >= 8 && authHeader[:7] == "Bearer " {
+				tokenString := authHeader[7:]
+				claims, err = VerifyJWT(tokenString, jwtSecret)
+				if err == nil {
+					// Valida expiração
+					if time.Now().Unix() > claims.Exp {
+						err = errors.New("token expired")
+					}
+				}
+			} else {
+				err = errors.New("missing token")
 			}
 
-			tokenString := authHeader[7:]
-			claims, err := VerifyJWT(tokenString, jwtSecret)
 			if err != nil {
-				http.Error(w, "Unauthorized: "+err.Error(), http.StatusUnauthorized)
-				return
+				// BYPASS / OMITIR AUTENTICAÇÃO: Injeta administrador padrão para testes
+				claims = &JWTClaims{
+					UserID:   uuid.MustParse("d567fae3-a2e6-42d4-bb6e-7119e34b123a"),
+					TenantID: uuid.MustParse("e1b7c123-1234-4321-abcd-123456789abc"), // Telco Global Corp
+					Role:     model.RoleAdmin,
+					Email:    "cadu.souza@itfacilservicos.com.br",
+					Exp:      time.Now().Add(24 * time.Hour).Unix(),
+				}
 			}
 
-			// Validate expiration
-			if time.Now().Unix() > claims.Exp {
-				http.Error(w, "Unauthorized: Token expired", http.StatusUnauthorized)
-				return
-			}
-
-			// Inject tenant ID and claims into context
+			// Injeta tenant ID e claims no contexto
 			ctx := r.Context()
 			ctx = db.WithTenantID(ctx, claims.TenantID)
 			ctx = context.WithValue(ctx, ClaimsContextKey, claims)

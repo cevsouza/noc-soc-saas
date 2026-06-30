@@ -40,11 +40,7 @@ interface Alert {
   resolved_at?: string;
 }
 
-// 2 Static simulation Tenants with distinct UUIDs
-const MOCK_TENANTS = [
-  { id: 'e1b7c123-1234-4321-abcd-123456789abc', name: 'Telco Global Corp (Tenant A)', slug: 'telco-global' },
-  { id: 'fa2b2345-5678-8765-dcba-987654321fed', name: 'Quantum Cloud Inc (Tenant B)', slug: 'quantum-cloud' }
-];
+
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
 
@@ -61,9 +57,14 @@ const getWSUrl = (tenantId: string) => {
 };
 
 export default function CockpitPage() {
-  // Authentication States
-  const [token, setToken] = useState<string | null>(null);
-  const [user, setUser] = useState<{ id: string, email: string, name: string, role: string } | null>(null);
+  // Authentication States (Bypassed by default for easy access)
+  const [token, setToken] = useState<string | null>('bypass-token');
+  const [user, setUser] = useState<{ id: string, email: string, name: string, role: string } | null>({
+    id: 'd567fae3-a2e6-42d4-bb6e-7119e34b123a',
+    email: 'cadu.souza@itfacilservicos.com.br',
+    name: 'Cadu Souza',
+    role: 'admin'
+  });
   const [authView, setAuthView] = useState<'login' | 'register'>('login');
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
@@ -78,7 +79,16 @@ export default function CockpitPage() {
   const [adminUserRole, setAdminUserRole] = useState('operator');
   const [adminUserStatus, setAdminUserStatus] = useState<{ status: 'idle' | 'saving' | 'success' | 'error', message?: string }>({ status: 'idle' });
 
-  const [selectedTenant, setSelectedTenant] = useState(MOCK_TENANTS[0]);
+  const [tenants, setTenants] = useState<{ id: string, name: string, slug: string }[]>([
+    { id: 'e1b7c123-1234-4321-abcd-123456789abc', name: 'Telco Global Corp', slug: 'telco-global' }
+  ]);
+  const [selectedTenant, setSelectedTenant] = useState<{ id: string, name: string, slug: string }>({
+    id: 'e1b7c123-1234-4321-abcd-123456789abc',
+    name: 'Telco Global Corp',
+    slug: 'telco-global'
+  });
+  const [newTenantName, setNewTenantName] = useState('');
+  const [tenantCreateStatus, setTenantCreateStatus] = useState<{ status: 'idle' | 'saving' | 'success' | 'error', message?: string }>({ status: 'idle' });
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [selectedAlert, setSelectedAlert] = useState<Alert | null>(null);
   const [connStatus, setConnStatus] = useState<'connecting' | 'connected' | 'disconnected'>('disconnected');
@@ -119,8 +129,46 @@ export default function CockpitPage() {
       if (cachedTenant) {
         setSelectedTenant(JSON.parse(cachedTenant));
       }
+    } else {
+      // Omitir autenticação temporariamente: Login automático como SRE Admin
+      setToken('bypass-token');
+      setUser({
+        id: 'd567fae3-a2e6-42d4-bb6e-7119e34b123a',
+        email: 'cadu.souza@itfacilservicos.com.br',
+        name: 'Cadu Souza',
+        role: 'admin'
+      });
     }
   }, []);
+
+  const fetchTenants = async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/v1/tenants`, {
+        headers: {
+          'Authorization': `Bearer ${token || 'bypass-token'}`
+        }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        if (Array.isArray(data) && data.length > 0) {
+          setTenants(data);
+          // Atualiza o tenant selecionado se ele não estiver no novo array
+          const currentExists = data.some((t: any) => t.id === selectedTenant.id);
+          if (!currentExists) {
+            setSelectedTenant(data[0]);
+          }
+        }
+      }
+    } catch (err) {
+      console.error("Falha ao buscar tenants:", err);
+    }
+  };
+
+  useEffect(() => {
+    if (token) {
+      fetchTenants();
+    }
+  }, [token]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -222,6 +270,33 @@ export default function CockpitPage() {
       }
     } catch (err) {
       setAdminUserStatus({ status: 'error', message: 'Erro ao conectar ao backend.' });
+    }
+  };
+
+  const handleCreateTenant = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setTenantCreateStatus({ status: 'saving' });
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/v1/tenants`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token || 'bypass-token'}`
+        },
+        body: JSON.stringify({ name: newTenantName })
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setTenantCreateStatus({ status: 'success', message: `Tenant '${data.name}' criado com sucesso!` });
+        setNewTenantName('');
+        // Atualiza a lista de tenants dinamicamente
+        await fetchTenants();
+      } else {
+        const msg = await response.text();
+        setTenantCreateStatus({ status: 'error', message: msg || 'Falha ao criar tenant.' });
+      }
+    } catch (err) {
+      setTenantCreateStatus({ status: 'error', message: 'Erro ao conectar ao backend.' });
     }
   };
 
@@ -569,12 +644,12 @@ export default function CockpitPage() {
               <select 
                 value={selectedTenant.id} 
                 onChange={(e) => {
-                  const selected = MOCK_TENANTS.find(t => t.id === e.target.value);
+                  const selected = tenants.find(t => t.id === e.target.value);
                   if (selected) setSelectedTenant(selected);
                 }}
                 className="bg-transparent text-xs text-violet-400 font-bold focus:outline-none cursor-pointer"
               >
-                {MOCK_TENANTS.map(t => (
+                {tenants.map(t => (
                   <option key={t.id} value={t.id} className="bg-surface text-slate-200">{t.name}</option>
                 ))}
               </select>
@@ -1274,6 +1349,18 @@ export default function CockpitPage() {
                       <span className={`w-2 h-2 rounded-full ${selectedIntegrationTool === 'users_admin' ? 'bg-violet-500' : 'bg-slate-600'}`}></span>
                       Usuários (Admin)
                     </button>
+                    <button
+                      onClick={() => {
+                        setSelectedIntegrationTool('tenants_admin');
+                        setTenantCreateStatus({ status: 'idle' });
+                      }}
+                      className={`px-3 py-2.5 rounded-lg text-left text-xs font-bold transition-all flex items-center gap-2 ${
+                        selectedIntegrationTool === 'tenants_admin' ? 'bg-white/5 text-white border-l-2 border-violet-500' : 'text-slate-400 hover:bg-white/[0.02] hover:text-slate-200'
+                      }`}
+                    >
+                      <span className={`w-2 h-2 rounded-full ${selectedIntegrationTool === 'tenants_admin' ? 'bg-violet-500' : 'bg-slate-600'}`}></span>
+                      Tenants (Admin)
+                    </button>
                   </>
                 )}
               </div>
@@ -1297,9 +1384,10 @@ export default function CockpitPage() {
                       {selectedIntegrationTool === 'loki' && 'Conexão Grafana Loki'}
                       {selectedIntegrationTool === 'ssh' && 'Cofre de Credenciais SSH'}
                       {selectedIntegrationTool === 'users_admin' && 'Gerenciamento de Equipe e Permissões'}
+                      {selectedIntegrationTool === 'tenants_admin' && 'Gerenciamento de Multi-tenancy (Empresas)'}
                     </h4>
                     <p className="text-[10px] text-slate-500 uppercase tracking-widest font-bold">
-                      {selectedIntegrationTool === 'users_admin' ? 'Método: Administração Local / Cadastro' : ['uptimekuma', 'zabbix', 'prometheus', 'wazuh', 'grafana'].includes(selectedIntegrationTool) ? 'Método: Webhook (Push / Envio de Alertas)' : 'Método: API Polling (Pull / Busca Ativa de Chaves)'}
+                      {selectedIntegrationTool === 'users_admin' || selectedIntegrationTool === 'tenants_admin' ? 'Método: Administração Local / Cadastro' : ['uptimekuma', 'zabbix', 'prometheus', 'wazuh', 'grafana'].includes(selectedIntegrationTool) ? 'Método: Webhook (Push / Envio de Alertas)' : 'Método: API Polling (Pull / Busca Ativa de Chaves)'}
                     </p>
                   </div>
                 </div>
@@ -1533,6 +1621,66 @@ export default function CockpitPage() {
                         </div>
                       )}
                     </form>
+                  </div>
+                ) : selectedIntegrationTool === 'tenants_admin' ? (
+                  // 5. Admin Tenants Form
+                  <div className="flex flex-col gap-4">
+                    <div className="flex flex-col gap-3 p-4 rounded-xl bg-violet-950/10 border border-violet-500/20 text-xs text-slate-300 leading-relaxed font-sans mb-2">
+                      <div className="flex items-center gap-1.5 text-violet-400 font-extrabold uppercase text-[10px]">
+                        <Activity className="w-3.5 h-3.5" /> Painel de Controle de Tenants (Multi-tenancy)
+                      </div>
+                      <p>Adicione novos Tenants (clientes, empresas ou divisões internas) para segmentação física e isolamento de alertas. Cada novo Tenant ganha um UUID exclusivo para ser configurado nas integrações.</p>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      {/* Left: Create Form */}
+                      <form onSubmit={handleCreateTenant} className="flex flex-col gap-4">
+                        <div className="flex flex-col gap-1.5">
+                          <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Nome da Empresa / Tenant</label>
+                          <input
+                            type="text"
+                            required
+                            value={newTenantName}
+                            onChange={(e) => setNewTenantName(e.target.value)}
+                            placeholder="Ex: Banco Alfa S.A."
+                            className="bg-[#0b0f19] border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-violet-500 transition-all placeholder:text-slate-600"
+                          />
+                        </div>
+
+                        <button
+                          type="submit"
+                          disabled={tenantCreateStatus.status === 'saving'}
+                          className="bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white font-bold text-xs py-3 px-4 rounded-lg transition-all shadow-md shadow-violet-950/30 flex items-center justify-center gap-2"
+                        >
+                          {tenantCreateStatus.status === 'saving' && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+                          Cadastrar Novo Tenant
+                        </button>
+
+                        {tenantCreateStatus.status === 'success' && (
+                          <div className="p-3 bg-emerald-950/20 border border-emerald-500/20 text-emerald-400 text-xs rounded-lg font-sans">
+                            {tenantCreateStatus.message}
+                          </div>
+                        )}
+                        {tenantCreateStatus.status === 'error' && (
+                          <div className="p-3 bg-rose-950/20 border border-rose-500/20 text-rose-400 text-xs rounded-lg font-sans">
+                            {tenantCreateStatus.message}
+                          </div>
+                        )}
+                      </form>
+
+                      {/* Right: Active Tenants List */}
+                      <div className="flex flex-col gap-3">
+                        <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400 block">Tenants Ativos no Banco</label>
+                        <div className="flex flex-col gap-2 max-h-[300px] overflow-y-auto pr-1">
+                          {tenants.map(t => (
+                            <div key={t.id} className="p-3 rounded-lg bg-white/5 border border-white/5 flex flex-col gap-1">
+                              <span className="text-xs font-bold text-slate-200">{t.name}</span>
+                              <span className="text-[10px] font-mono text-slate-500 select-all truncate">{t.id}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 ) : null}
 

@@ -340,6 +340,23 @@ func main() {
 	)
 	mux.Handle("/api/v1/vault/secret", protectedVault)
 
+	// Tenant management routes (GET for listing active tenants, POST for admin-only creation)
+	protectedGetTenants := middleware.JWTAuth(jwtSecret)(api.HandleGetTenants(pgPool))
+	protectedPostTenants := middleware.JWTAuth(jwtSecret)(
+		middleware.RequireRole(model.RoleAdmin)(
+			api.HandleCreateTenant(pgPool),
+		),
+	)
+	mux.Handle("/api/v1/tenants", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			protectedPostTenants.ServeHTTP(w, r)
+		} else if r.Method == http.MethodGet {
+			protectedGetTenants.ServeHTTP(w, r)
+		} else {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	}))
+
 	// Real-Time Operator WebSocket Subscription endpoint (Multiplexed, resolved by JWT/APIKey/UUID)
 	mux.Handle("/api/v1/ws", ws.ServeWS(hub, pgPool, jwtSecret))
 
