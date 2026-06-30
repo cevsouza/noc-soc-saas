@@ -177,6 +177,62 @@ export default function CockpitPage() {
     return matchesSearch && matchesSeverity;
   });
 
+  // Simulator helper function
+  const simulateEvent = async (type: 'cpu' | 'memory' | 'wazuh') => {
+    try {
+      let url = '';
+      let payload: any = {};
+      
+      if (type === 'cpu') {
+        url = `http://localhost:8080/api/v1/ingest/prometheus?token=${selectedTenant.id}`;
+        payload = {
+          receiver: "webhook",
+          status: "firing",
+          alerts: [{
+            status: "firing",
+            labels: { alertname: "HostHighCpuLoad", instance: "web-server-99", severity: "critical" },
+            annotations: { summary: "High CPU load on web-server-99", description: "CPU utilization has reached 98%." },
+            startsAt: new Date().toISOString(),
+            fingerprint: "cpu-spike-" + Date.now()
+          }]
+        };
+      } else if (type === 'memory') {
+        url = `http://localhost:8080/api/v1/ingest/prometheus?token=${selectedTenant.id}`;
+        payload = {
+          receiver: "webhook",
+          status: "firing",
+          alerts: [{
+            status: "firing",
+            labels: { alertname: "OOMKillerTriggered", instance: "db-node-03", severity: "critical" },
+            annotations: { summary: "Out of Memory Killer activated", description: "System ran out of memory, postgres process killed." },
+            startsAt: new Date().toISOString(),
+            fingerprint: "oom-spike-" + Date.now()
+          }]
+        };
+      } else if (type === 'wazuh') {
+        url = `http://localhost:8080/api/v1/ingest/wazuh?token=${selectedTenant.id}`;
+        payload = {
+          timestamp: new Date().toISOString(),
+          rule: { level: 10, comment: "SSH brute force authentication failed", sid: 5716, id: "5716", groups: ["syslog", "sshd", "security_event"] },
+          agent: { id: "005", name: "auth-gateway", ip: "10.0.0.5" },
+          location: "/var/log/auth.log",
+          full_log: "Failed password for root from 203.0.113.5 port 55667 ssh2"
+        };
+      }
+
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (response.ok) {
+        console.log(`Simulation of type ${type} successfully sent to backend API.`);
+      }
+    } catch (err) {
+      console.error("Simulation dispatch failed:", err);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-background text-slate-100 flex flex-col font-sans select-none">
       
@@ -318,6 +374,47 @@ export default function CockpitPage() {
               <div className="h-1 bg-severity-info/20 rounded mt-2 overflow-hidden">
                 <div className="h-full bg-severity-info rounded" style={{ width: stats.total > 0 ? `${(stats.info / stats.total) * 100}%` : '0%' }}></div>
               </div>
+            </div>
+          </div>
+
+          {/* NOC/SOC Sandbox Simulator (Para Iniciantes) */}
+          <div className="glass-card p-5 rounded-xl border border-white/5 bg-surface/20 flex flex-col gap-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Brain className="w-4 h-4 text-violet-400" />
+                <h4 className="text-xs font-bold uppercase tracking-wider text-slate-200">
+                  Simulador de Alertas (Painel de Treinamento NOC/SOC)
+                </h4>
+              </div>
+              <span className="text-[9px] font-bold text-slate-500 bg-white/5 px-2 py-0.5 rounded font-mono">
+                MODO DIDÁTICO
+              </span>
+            </div>
+            <p className="text-xs text-slate-400 leading-relaxed">
+              Clique nos botões abaixo para gerar e injetar alertas simulados na API e ver a triagem, de-duplicação e supressão em tempo real. Útil para demonstrações rápidas e treinamento de novos analistas!
+            </p>
+            <div className="flex gap-3 flex-wrap">
+              <button
+                onClick={() => simulateEvent('cpu')}
+                className="flex-1 bg-violet-600/10 hover:bg-violet-600/20 border border-violet-500/30 text-violet-300 py-2.5 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition-all"
+              >
+                <Cpu className="w-3.5 h-3.5" />
+                <span>Simular Sobrecarga CPU (Prometheus)</span>
+              </button>
+              <button
+                onClick={() => simulateEvent('memory')}
+                className="flex-1 bg-cyan-600/10 hover:bg-cyan-600/20 border border-cyan-500/30 text-cyan-300 py-2.5 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition-all"
+              >
+                <Layers className="w-3.5 h-3.5" />
+                <span>Simular Falta Memória (Prometheus)</span>
+              </button>
+              <button
+                onClick={() => simulateEvent('wazuh')}
+                className="flex-1 bg-blue-600/10 hover:bg-blue-600/20 border border-blue-500/30 text-blue-300 py-2.5 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition-all"
+              >
+                <Terminal className="w-3.5 h-3.5" />
+                <span>Simular Ataque SSH (Wazuh SIEM)</span>
+              </button>
             </div>
           </div>
 
@@ -585,6 +682,46 @@ export default function CockpitPage() {
                     <div className="flex items-center justify-between text-[10px] text-slate-500 font-semibold mt-1">
                       <span>Noise Filter Applied: Yes</span>
                       <span>Signal Strength: 100%</span>
+                    </div>
+                  </div>
+
+                  {/* Friendly Explanation (For Beginners/Laypeople) */}
+                  <div className="flex flex-col gap-2.5 p-4 rounded-xl bg-violet-950/10 border border-violet-500/10">
+                    <div className="flex items-center gap-2">
+                      <Brain className="w-4 h-4 text-violet-400" />
+                      <h5 className="text-xs font-extrabold uppercase text-violet-300 tracking-wider">🔬 O que significa este alerta?</h5>
+                    </div>
+                    <p className="text-xs text-slate-300 leading-relaxed font-sans">
+                      {selectedAlert.event_type === 'cpu' || selectedAlert.event_type === 'HostHighCpuLoad' ? (
+                        "A CPU é o 'cérebro' do servidor. Este alerta significa que o servidor está sobrecarregado com muitas tarefas simultâneas, o que pode deixar os serviços lentos para os usuários finais."
+                      ) : selectedAlert.event_type === 'memory' || selectedAlert.event_type === 'OOMKillerTriggered' ? (
+                        "A memória RAM guarda dados temporários de aplicativos ativos. A falta de memória pode fazer o servidor travar ou derrubar bancos de dados críticos."
+                      ) : selectedAlert.event_type === 'wazuh_security_event' || selectedAlert.event_type === 'sshd' || selectedAlert.event_type === 'syslog' ? (
+                        "Um sistema ou invasor tentou acessar a conta 'root' (administrador) do servidor errando a senha repetidamente. Isso é um ataque de Força Bruta por SSH."
+                      ) : (
+                        "Um evento de monitoramento reportou um comportamento fora do comum neste dispositivo. Requer atenção do operador de turno."
+                      )}
+                    </p>
+                  </div>
+
+                  {/* Operational Runbook Checklist */}
+                  <div className="flex flex-col gap-3 p-4 rounded-xl bg-slate-900/40 border border-white/5">
+                    <h5 className="text-xs font-extrabold uppercase text-slate-300 tracking-wider flex items-center gap-1.5">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> Guia de Operação (Passo a Passo)
+                    </h5>
+                    <div className="flex flex-col gap-2 text-slate-400 font-sans leading-relaxed">
+                      <div className="flex items-start gap-2">
+                        <span className="w-4 h-4 rounded-full bg-white/5 border border-white/10 flex items-center justify-center text-[10px] font-bold text-slate-300 shrink-0 mt-0.5">1</span>
+                        <p>Analise a gravidade do alerta e verifique a aba de <b>Loki Logs</b> para ver logs do host no momento do incidente.</p>
+                      </div>
+                      <div className="flex items-start gap-2">
+                        <span className="w-4 h-4 rounded-full bg-white/5 border border-white/10 flex items-center justify-center text-[10px] font-bold text-slate-300 shrink-0 mt-0.5">2</span>
+                        <p>Cheque a aba <b>Grafana</b> para validar o uso de recursos do host em tempo real.</p>
+                      </div>
+                      <div className="flex items-start gap-2">
+                        <span className="w-4 h-4 rounded-full bg-white/5 border border-white/10 flex items-center justify-center text-[10px] font-bold text-slate-300 shrink-0 mt-0.5">3</span>
+                        <p>Se o problema persistir após a auto-cura automática, clique em <b>Acknowledge</b> para assumir o chamado.</p>
+                      </div>
                     </div>
                   </div>
 

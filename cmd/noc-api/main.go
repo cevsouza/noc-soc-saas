@@ -113,7 +113,7 @@ func main() {
 	// 6. Define & Launch Server with Timeout Controls (SRE Best Practice)
 	srv := &http.Server{
 		Addr:         ":" + serverPort,
-		Handler:      mux,
+		Handler:      middleware.CORS(mux),
 		ReadTimeout:  5 * time.Second,
 		WriteTimeout: 10 * time.Second,
 		IdleTimeout:  120 * time.Second,
