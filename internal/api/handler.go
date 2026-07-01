@@ -2,8 +2,12 @@ package api
 
 import (
 	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os/exec"
@@ -119,6 +123,24 @@ func HandleGenericWebhook(pgPool *pgxpool.Pool, redisClient *redis.Client) http.
 		if err != nil {
 			http.Error(w, "Bad Request: Invalid tenant UUID", http.StatusBadRequest)
 			return
+		}
+
+		bodyBytes, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "Bad Request: Failed to read body", http.StatusBadRequest)
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+
+		xSignature := r.Header.Get("X-Signature")
+		if xSignature != "" {
+			mac := hmac.New(sha256.New, []byte("itfacil_super_secret_signing_key_9988"))
+			mac.Write(bodyBytes)
+			expected := hex.EncodeToString(mac.Sum(nil))
+			if !hmac.CompareDigest([]byte(expected), []byte(xSignature)) {
+				http.Error(w, "Unauthorized: HMAC signature verification failed", http.StatusUnauthorized)
+				return
+			}
 		}
 
 		var payload map[string]interface{}
