@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"noc-api/internal/db"
-	"noc-api/internal/model"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -50,7 +49,7 @@ func HandleIncidentChat(pgPool *pgxpool.Pool) http.HandlerFunc {
 
 		err := db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
 			// 1. Fetch incident details for context
-			var title, device, payloadBytes, aiAnalysisBytes []byte
+			var title, payloadBytes, aiAnalysisBytes []byte
 			queryIncident := `
 				SELECT summary, payload, ai_analysis 
 				FROM alerts 
