@@ -5,7 +5,7 @@ CREATE TABLE IF NOT EXISTS runbook_execution_logs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
     runbook_id UUID NOT NULL REFERENCES tenant_runbooks(id) ON DELETE CASCADE,
-    incident_id UUID NOT NULL REFERENCES alerts(id) ON DELETE CASCADE,
+    incident_id UUID NOT NULL, -- Logical link to alerts.id
     operator_name VARCHAR(255) NOT NULL,
     script TEXT NOT NULL,
     output TEXT NOT NULL,
@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS runbook_execution_logs (
 -- 2. Create incident comments / timeline table if not exists
 CREATE TABLE IF NOT EXISTS incident_comments (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    incident_id UUID NOT NULL REFERENCES alerts(id) ON DELETE CASCADE,
+    incident_id UUID NOT NULL, -- Logical link to alerts.id
     tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
     author VARCHAR(255) NOT NULL,
     comment TEXT NOT NULL,
