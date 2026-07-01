@@ -22,7 +22,8 @@ import {
   Link as LinkIcon,
   HelpCircle,
   Copy,
-  Check
+  Check,
+  ChevronDown
 } from 'lucide-react';
 
 interface Alert {
@@ -44,7 +45,7 @@ interface Alert {
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
 
-const getWSUrl = (tenantId: string) => {
+const getWSUrl = (tenantIds: string[]) => {
   const base = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
   const host = base.replace(/^https?:\/\//, '');
   
@@ -53,7 +54,7 @@ const getWSUrl = (tenantId: string) => {
   if (base.startsWith('https') || (typeof window !== 'undefined' && window.location.protocol === 'https:')) {
     wsProtocol = 'wss';
   }
-  return `${wsProtocol}://${host}/api/v1/ws?token=${tenantId}`;
+  return `${wsProtocol}://${host}/api/v1/ws?token=${tenantIds.join(',')}`;
 };
 
 export default function CockpitPage() {
@@ -87,6 +88,8 @@ export default function CockpitPage() {
     name: 'Telco Global Corp',
     slug: 'telco-global'
   });
+  const [selectedTenantIds, setSelectedTenantIds] = useState<string[]>(['e1b7c123-1234-4321-abcd-123456789abc']);
+  const [isTenantDropdownOpen, setIsTenantDropdownOpen] = useState(false);
   const [newTenantName, setNewTenantName] = useState('');
   const [tenantCreateStatus, setTenantCreateStatus] = useState<{ status: 'idle' | 'saving' | 'success' | 'error', message?: string }>({ status: 'idle' });
   const [alerts, setAlerts] = useState<Alert[]>([]);
@@ -152,10 +155,24 @@ export default function CockpitPage() {
         const data = await response.json();
         if (Array.isArray(data) && data.length > 0) {
           setTenants(data);
+          
           // Atualiza o tenant selecionado se ele não estiver no novo array
           const currentExists = data.some((t: any) => t.id === selectedTenant.id);
           if (!currentExists) {
             setSelectedTenant(data[0]);
+          }
+
+          // Inicializa selectedTenantIds para conter todos os tenants no primeiro carregamento
+          if (selectedTenantIds.length === 1 && selectedTenantIds[0] === 'e1b7c123-1234-4321-abcd-123456789abc') {
+            setSelectedTenantIds(data.map((t: any) => t.id));
+          } else {
+            // Filtra IDs antigos que possam ter sido removidos do banco
+            const validIds = selectedTenantIds.filter(id => data.some((t: any) => t.id === id));
+            if (validIds.length > 0) {
+              setSelectedTenantIds(validIds);
+            } else {
+              setSelectedTenantIds([data[0].id]);
+            }
           }
         }
       }
@@ -316,14 +333,14 @@ export default function CockpitPage() {
     }
 
     setConnStatus('connecting');
-    const wsUrl = getWSUrl(token);
+    const wsUrl = getWSUrl(selectedTenantIds);
     
     const socket = new WebSocket(wsUrl);
     wsRef.current = socket;
 
     socket.onopen = () => {
       setConnStatus('connected');
-      console.log(`WebSocket connected to tenant: ${selectedTenant.name}`);
+      console.log(`WebSocket connected to tenants: ${selectedTenantIds.join(', ')}`);
     };
 
     socket.onmessage = (event) => {
@@ -383,7 +400,7 @@ export default function CockpitPage() {
         clearTimeout(reconnectTimeoutRef.current);
       }
     };
-  }, [selectedTenant, token]);
+  }, [selectedTenantIds, token]);
 
   // Handle action triggers (simulate backend state changes locally or via fetch)
   const handleUpdateStatus = (alertId: string, newStatus: Alert['status']) => {
@@ -532,24 +549,83 @@ export default function CockpitPage() {
         {/* Dynamic Tenant Selector (Multi-tenancy Visual Testbench) */}
         <div className="flex items-center gap-4">
           {user?.role === 'admin' ? (
-            <div className="flex items-center gap-2 px-3 py-1 rounded-lg bg-white/5 border border-white/5">
-              <User className="w-4 h-4 text-slate-400" />
-              <span className="text-xs text-slate-300 font-medium">Visual Domain:</span>
-              <select 
-                value={selectedTenant.id} 
-                onChange={(e) => {
-                  const selected = tenants.find(t => t.id === e.target.value);
-                  if (selected) setSelectedTenant(selected);
-                }}
-                className="bg-transparent text-xs text-violet-400 font-bold focus:outline-none cursor-pointer"
+            <div className="relative">
+              <button
+                onClick={() => setIsTenantDropdownOpen(!isTenantDropdownOpen)}
+                className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/5 border border-white/5 text-xs text-slate-300 font-bold hover:bg-white/10 transition-all select-none cursor-pointer"
               >
-                {tenants.map(t => (
-                  <option key={t.id} value={t.id} className="bg-surface text-slate-200">{t.name}</option>
-                ))}
-              </select>
+                <User className="w-3.5 h-3.5 text-violet-400" />
+                <span>Visual Domain:</span>
+                <span className="text-violet-400 font-extrabold">
+                  {selectedTenantIds.length === tenants.length
+                    ? "Multi-Tenant (Todos)"
+                    : selectedTenantIds.length === 1
+                    ? tenants.find(t => t.id === selectedTenantIds[0])?.name || "1 Selecionado"
+                    : `${selectedTenantIds.length} Empresas`}
+                </span>
+                <ChevronDown className="w-3 h-3 text-slate-400" />
+              </button>
+
+              {isTenantDropdownOpen && (
+                <>
+                  {/* Backdrop overlay to close when clicking outside */}
+                  <div className="fixed inset-0 z-40" onClick={() => setIsTenantDropdownOpen(false)}></div>
+                  <div className="absolute right-0 mt-2 w-64 rounded-xl border border-white/10 bg-slate-950 p-2 shadow-2xl z-50 flex flex-col gap-1 backdrop-blur-md">
+                    <div className="px-3 py-1 text-[9px] font-bold text-slate-500 uppercase tracking-widest border-b border-white/5 mb-1 flex items-center justify-between">
+                      <span>Selecionar Empresas</span>
+                      <button
+                        onClick={() => {
+                          setSelectedTenantIds(tenants.map(t => t.id));
+                          if (tenants.length > 0) {
+                            setSelectedTenant(tenants[0]);
+                          }
+                        }}
+                        className="text-[9px] text-cyan-400 hover:text-cyan-300 uppercase font-bold"
+                      >
+                        Marcar Todas
+                      </button>
+                    </div>
+                    <div className="flex flex-col max-h-48 overflow-y-auto pr-1">
+                      {tenants.map(t => {
+                        const isChecked = selectedTenantIds.includes(t.id);
+                        return (
+                          <label
+                            key={t.id}
+                            className={`flex items-center gap-2.5 px-2.5 py-2 rounded-lg cursor-pointer transition-all hover:bg-white/[0.03] select-none text-xs font-medium ${
+                              isChecked ? 'text-white' : 'text-slate-400'
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={isChecked}
+                              onChange={() => {
+                                let newIds = [...selectedTenantIds];
+                                if (isChecked) {
+                                  if (newIds.length > 1) {
+                                    newIds = newIds.filter(id => id !== t.id);
+                                  }
+                                } else {
+                                  newIds.push(t.id);
+                                }
+                                setSelectedTenantIds(newIds);
+                                const firstTenant = tenants.find(x => x.id === newIds[0]);
+                                if (firstTenant) {
+                                  setSelectedTenant(firstTenant);
+                                }
+                              }}
+                              className="rounded border-white/10 bg-black/40 text-violet-600 focus:ring-violet-500 w-3.5 h-3.5"
+                            />
+                            <span className="truncate">{t.name}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </>
+              )}
             </div>
           ) : (
-            <div className="flex items-center gap-2 px-3 py-1 rounded-lg bg-white/5 border border-white/5">
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/5 border border-white/5">
               <User className="w-4 h-4 text-slate-400" />
               <span className="text-xs text-slate-300 font-medium">Tenant:</span>
               <span className="text-xs text-violet-400 font-bold">{selectedTenant.name}</span>
@@ -747,10 +823,11 @@ export default function CockpitPage() {
             <div className="grid grid-cols-12 gap-4 px-6 py-3 border-b border-white/5 bg-surface/30 text-[10px] tracking-wider uppercase font-semibold text-slate-400">
               <div className="col-span-1">Severity</div>
               <div className="col-span-1 text-center">Source</div>
+              <div className="col-span-2">Visual Domain</div>
               <div className="col-span-2">Event Type</div>
-              <div className="col-span-3">Summary</div>
+              <div className="col-span-2">Summary</div>
               <div className="col-span-1 text-center">Debounce</div>
-              <div className="col-span-2">Time Received</div>
+              <div className="col-span-1 text-center">Time</div>
               <div className="col-span-2 text-right">Status</div>
             </div>
 
@@ -807,6 +884,13 @@ export default function CockpitPage() {
                       </span>
                     </div>
 
+                    {/* Visual Domain (Tenant Name) */}
+                    <div className="col-span-2 truncate">
+                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-[10px] font-extrabold uppercase tracking-wider bg-violet-500/10 text-violet-400 border border-violet-500/20">
+                        {tenants.find(t => t.id === alert.tenant_id)?.name || 'Default Tenant'}
+                      </span>
+                    </div>
+
                     {/* Event Type */}
                     <div className="col-span-2 font-mono text-xs text-slate-300 font-bold flex items-center gap-1.5 truncate">
                       <Terminal className="w-3.5 h-3.5 text-slate-500" />
@@ -814,7 +898,7 @@ export default function CockpitPage() {
                     </div>
 
                     {/* Summary */}
-                    <div className="col-span-3 text-slate-200 font-medium truncate">
+                    <div className="col-span-2 text-slate-200 font-medium truncate">
                       {alert.summary}
                     </div>
 
@@ -834,7 +918,7 @@ export default function CockpitPage() {
                     </div>
 
                     {/* Timestamp */}
-                    <div className="col-span-2 text-xs text-slate-400 font-mono">
+                    <div className="col-span-1 text-center text-xs text-slate-400 font-mono">
                       {new Date(alert.created_at).toLocaleTimeString()}
                     </div>
 

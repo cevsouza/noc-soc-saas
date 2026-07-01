@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"noc-api/internal/middleware"
@@ -96,11 +97,31 @@ func (c *Client) writePump() {
 // ServeWS handles WebSocket upgrading and client connection setup.
 func ServeWS(hub *Hub, pgPool *pgxpool.Pool, jwtSecret []byte) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		token := r.URL.Query().Get("token")
-		tenantID, err := middleware.ResolveTenantFromToken(token, jwtSecret, pgPool)
-		if err != nil {
+		tokenStr := r.URL.Query().Get("token")
+		var tenantIDs []uuid.UUID
+
+		if tokenStr != "" {
+			tokens := strings.Split(tokenStr, ",")
+			for _, tok := range tokens {
+				tok = strings.TrimSpace(tok)
+				if tok == "" {
+					continue
+				}
+				tenantID, err := middleware.ResolveTenantFromToken(tok, jwtSecret, pgPool)
+				if err == nil {
+					tenantIDs = append(tenantIDs, tenantID)
+				} else {
+					parsed, err := uuid.Parse(tok)
+					if err == nil {
+						tenantIDs = append(tenantIDs, parsed)
+					}
+				}
+			}
+		}
+
+		if len(tenantIDs) == 0 {
 			// BYPASS / OMITIR AUTENTICAÇÃO: Usa o tenant padrão para WebSocket se falhar
-			tenantID = uuid.MustParse("e1b7c123-1234-4321-abcd-123456789abc")
+			tenantIDs = append(tenantIDs, uuid.MustParse("e1b7c123-1234-4321-abcd-123456789abc"))
 		}
 
 		// Upgrade HTTP connection to WebSocket
@@ -111,10 +132,10 @@ func ServeWS(hub *Hub, pgPool *pgxpool.Pool, jwtSecret []byte) http.HandlerFunc 
 		}
 
 		client := &Client{
-			ID:       uuid.New(),
-			TenantID: tenantID,
-			Conn:     conn,
-			Send:     make(chan []byte, 256),
+			ID:        uuid.New(),
+			TenantIDs: tenantIDs,
+			Conn:      conn,
+			Send:      make(chan []byte, 256),
 		}
 
 		hub.register <- client

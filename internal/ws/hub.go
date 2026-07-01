@@ -10,10 +10,10 @@ import (
 
 // Client represents a single active operator WebSocket connection.
 type Client struct {
-	ID       uuid.UUID
-	TenantID uuid.UUID
-	Conn     *websocket.Conn
-	Send     chan []byte // Buffered channel for outbound messages
+	ID        uuid.UUID
+	TenantIDs []uuid.UUID
+	Conn      *websocket.Conn
+	Send      chan []byte // Buffered channel for outbound messages
 }
 
 // Hub orchestrates WebSocket client connections grouped by Tenant ID in a thread-safe manner.
@@ -50,23 +50,25 @@ func (h *Hub) Run(ctx context.Context) {
 
 		case client := <-h.register:
 			h.mu.Lock()
-			if h.tenants[client.TenantID] == nil {
-				h.tenants[client.TenantID] = make(map[*Client]bool)
+			for _, tenantID := range client.TenantIDs {
+				if h.tenants[tenantID] == nil {
+					h.tenants[tenantID] = make(map[*Client]bool)
+				}
+				h.tenants[tenantID][client] = true
 			}
-			h.tenants[client.TenantID][client] = true
 			h.mu.Unlock()
 
 		case client := <-h.unregister:
 			h.mu.Lock()
-			if clients, ok := h.tenants[client.TenantID]; ok {
-				if _, exists := clients[client]; exists {
+			for _, tenantID := range client.TenantIDs {
+				if clients, ok := h.tenants[tenantID]; ok {
 					delete(clients, client)
-					close(client.Send)
 					if len(clients) == 0 {
-						delete(h.tenants, client.TenantID)
+						delete(h.tenants, tenantID)
 					}
 				}
 			}
+			close(client.Send)
 			h.mu.Unlock()
 		}
 	}
