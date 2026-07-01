@@ -530,6 +530,40 @@ func HandleDownloadSLAReport(pgPool *pgxpool.Pool, jwtSecret []byte) http.Handle
 	}
 }
 
+// HandleSLADebug runs diagnostic commands on python/pip environment
+func HandleSLADebug(pgPool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var out bytes.Buffer
+		var stderr bytes.Buffer
+
+		cmd := exec.Command("python", "--version")
+		cmd.Stdout = &out
+		cmd.Stderr = &stderr
+		err := cmd.Run()
+
+		result := map[string]interface{}{
+			"python_version_err":     fmt.Sprintf("%v", err),
+			"python_version_out":     out.String(),
+			"python_version_err_out": stderr.String(),
+		}
+
+		out.Reset()
+		stderr.Reset()
+
+		cmd2 := exec.Command("pip", "list")
+		cmd2.Stdout = &out
+		cmd2.Stderr = &stderr
+		err2 := cmd2.Run()
+
+		result["pip_list_err"] = fmt.Sprintf("%v", err2)
+		result["pip_list_out"] = out.String()
+		result["pip_list_err_out"] = stderr.String()
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(result)
+	}
+}
+
 type IncidentAcknowledgeRequest struct {
 	ID        uuid.UUID `json:"id"`
 	CreatedAt time.Time `json:"created_at"`

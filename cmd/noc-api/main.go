@@ -361,6 +361,7 @@ func main() {
 
 	// SLA PDF Report Download Endpoint (Resolves auth token via URL query parameter for browser compatibility)
 	mux.Handle("/api/v1/reports/sla", api.HandleDownloadSLAReport(pgPool, jwtSecret))
+	mux.Handle("/api/v1/reports/sla/debug", api.HandleSLADebug(pgPool))
 
 	// Secure Vault Credentials Storage Endpoint (Postgres Vault with RLS & GCM Ciphers, protected by JWT & Admin Role check)
 	vaultRepo := repository.NewPostgresVaultRepository()
