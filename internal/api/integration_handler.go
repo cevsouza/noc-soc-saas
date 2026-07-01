@@ -44,7 +44,7 @@ func HandleGetIntegrations(pgPool *pgxpool.Pool) http.HandlerFunc {
 		}
 		defer rows.Close()
 
-		var list []IntegrationResponse
+		list := make([]IntegrationResponse, 0)
 		for rows.Next() {
 			var item IntegrationResponse
 			var settingsJSON []byte

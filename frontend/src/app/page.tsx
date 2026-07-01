@@ -1632,9 +1632,9 @@ export default function CockpitPage() {
                         Integrações Ativas ({selectedTenant.name})
                       </label>
                       
-                      {integrations.filter(i => i.type === selectedIntegrationTool).length > 0 ? (
+                      {(integrations || []).filter(i => i.type === selectedIntegrationTool).length > 0 ? (
                         <div className="flex flex-col gap-2 max-h-[150px] overflow-y-auto pr-1">
-                          {integrations.filter(i => i.type === selectedIntegrationTool).map(item => (
+                          {(integrations || []).filter(i => i.type === selectedIntegrationTool).map(item => (
                             <div key={item.id} className="p-3 rounded-lg bg-[#040811] border border-white/5 flex items-center justify-between font-sans text-xs">
                               <div className="flex flex-col gap-0.5">
                                 <span className="font-bold text-slate-200">{item.name}</span>
