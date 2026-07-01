@@ -761,45 +761,120 @@ export default function CockpitPage() {
             </div>
           </div>
 
-          {/* NOC/SOC Sandbox Simulator (Para Iniciantes, Oculto para Viewers) */}
+          {/* NOC/SOC Sandbox Simulator & Live Metrics Console */}
           {user?.role !== 'viewer' && (
-            <div className="glass-card p-5 rounded-xl border border-white/5 bg-surface/20 flex flex-col gap-3">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <Brain className="w-4 h-4 text-violet-400" />
-                  <h4 className="text-xs font-bold uppercase tracking-wider text-slate-200">
-                    Simulador de Alertas (Painel de Treinamento NOC/SOC)
-                  </h4>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* Left Side: Sandbox Simulator */}
+              <div className="glass-card p-5 rounded-xl border border-white/5 bg-surface/20 flex flex-col gap-3 justify-between">
+                <div>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Brain className="w-4 h-4 text-violet-400" />
+                      <h4 className="text-xs font-bold uppercase tracking-wider text-slate-200">
+                        Simulador de Alertas (Didático)
+                      </h4>
+                    </div>
+                    <span className="text-[9px] font-bold text-slate-500 bg-white/5 px-2 py-0.5 rounded font-mono">
+                      PLAYGROUND
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-400 leading-relaxed mt-2">
+                    Injete alertas e anomalias simuladas na API de homologação do NOC/SOC para testar a triagem e o de-bounce de eventos em tempo real.
+                  </p>
                 </div>
-                <span className="text-[9px] font-bold text-slate-500 bg-white/5 px-2 py-0.5 rounded font-mono">
-                  MODO DIDÁTICO
-                </span>
+                <div className="flex gap-2.5 flex-col mt-2">
+                  <button
+                    onClick={() => simulateEvent('cpu')}
+                    className="w-full bg-violet-600/10 hover:bg-violet-600/20 border border-violet-500/30 text-violet-300 py-2 px-3 rounded-lg text-xs font-bold flex items-center gap-2 transition-all cursor-pointer"
+                  >
+                    <Cpu className="w-3.5 h-3.5" />
+                    <span>Simular Sobrecarga CPU (NOC)</span>
+                  </button>
+                  <button
+                    onClick={() => simulateEvent('memory')}
+                    className="w-full bg-cyan-600/10 hover:bg-cyan-600/20 border border-cyan-500/30 text-cyan-300 py-2 px-3 rounded-lg text-xs font-bold flex items-center gap-2 transition-all cursor-pointer"
+                  >
+                    <Layers className="w-3.5 h-3.5" />
+                    <span>Simular Falta Memória (NOC)</span>
+                  </button>
+                  <button
+                    onClick={() => simulateEvent('wazuh')}
+                    className="w-full bg-blue-600/10 hover:bg-blue-600/20 border border-blue-500/30 text-blue-300 py-2 px-3 rounded-lg text-xs font-bold flex items-center gap-2 transition-all cursor-pointer"
+                  >
+                    <Terminal className="w-3.5 h-3.5" />
+                    <span>Simular Ataque SSH Bruteforce (SOC)</span>
+                  </button>
+                </div>
               </div>
-              <p className="text-xs text-slate-400 leading-relaxed">
-                Clique nos botões abaixo para gerar e injetar alertas simulados na API e ver a triagem, de-duplicação e supressão em tempo real. Útil para demonstrações rápidas e treinamento de novos analistas!
-              </p>
-              <div className="flex gap-3 flex-wrap">
-                <button
-                  onClick={() => simulateEvent('cpu')}
-                  className="flex-1 bg-violet-600/10 hover:bg-violet-600/20 border border-violet-500/30 text-violet-300 py-2.5 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition-all"
-                >
-                  <Cpu className="w-3.5 h-3.5" />
-                  <span>Simular Sobrecarga CPU (Prometheus)</span>
-                </button>
-                <button
-                  onClick={() => simulateEvent('memory')}
-                  className="flex-1 bg-cyan-600/10 hover:bg-cyan-600/20 border border-cyan-500/30 text-cyan-300 py-2.5 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition-all"
-                >
-                  <Layers className="w-3.5 h-3.5" />
-                  <span>Simular Falta Memória (Prometheus)</span>
-                </button>
-                <button
-                  onClick={() => simulateEvent('wazuh')}
-                  className="flex-1 bg-blue-600/10 hover:bg-blue-600/20 border border-blue-500/30 text-blue-300 py-2.5 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition-all"
-                >
-                  <Terminal className="w-3.5 h-3.5" />
-                  <span>Simular Ataque SSH (Wazuh SIEM)</span>
-                </button>
+
+              {/* Right Side: NOC & SOC Real-Time Metrics Console */}
+              <div className="glass-card p-5 rounded-xl border border-white/5 bg-surface/20 flex flex-col gap-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Activity className="w-4 h-4 text-cyan-400" />
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-slate-200">
+                      Painel de Indicadores Core (Tempo Real)
+                    </h4>
+                  </div>
+                  <span className="flex h-2 w-2 relative">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4 text-[11px] font-sans">
+                  {/* NOC Indicators */}
+                  <div className="p-3 rounded-lg bg-white/[0.02] border border-white/5 flex flex-col gap-2">
+                    <div className="font-extrabold text-[9px] text-slate-500 uppercase tracking-widest border-b border-white/5 pb-1">NOC (Performance)</div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-slate-400">Assets Uptime</span>
+                      <span className="text-emerald-400 font-bold font-mono">99.98%</span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-slate-400">Latência / Perda</span>
+                      <span className="text-slate-200 font-mono">12ms / 0%</span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-slate-400">Recurso Crítico</span>
+                      <span className={`font-bold ${alerts.some(a => a.event_type === 'HostHighCpuLoad' && a.status !== 'resolved') ? 'text-rose-400 animate-pulse' : 'text-slate-400'}`}>
+                        {alerts.some(a => a.event_type === 'HostHighCpuLoad' && a.status !== 'resolved') ? 'CPU: web-server (98%)' : 'Normal'}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* SOC Indicators */}
+                  <div className="p-3 rounded-lg bg-white/[0.02] border border-white/5 flex flex-col gap-2">
+                    <div className="font-extrabold text-[9px] text-slate-500 uppercase tracking-widest border-b border-white/5 pb-1">SOC (Segurança)</div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-slate-400">Ameaças Ativas</span>
+                      <span className={`font-bold font-mono ${stats.fatal + stats.critical > 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
+                        {stats.fatal + stats.critical} Ativas
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-slate-400">Anomalia Auth</span>
+                      <span className={`font-bold ${alerts.some(a => a.event_type.includes('SSH') && a.status !== 'resolved') ? 'text-rose-400 animate-pulse' : 'text-slate-400'}`}>
+                        {alerts.some(a => a.event_type.includes('SSH') && a.status !== 'resolved') ? 'Bruteforce Ativo!' : 'Normal'}
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-slate-400">Perímetro IPS</span>
+                      <span className="text-slate-200 font-mono">1.4K block/m</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Operation Indicators */}
+                <div className="p-2.5 rounded-lg bg-white/[0.02] border border-white/5 flex justify-between items-center text-[10px] text-slate-400">
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-violet-500"></span>
+                    <span>MTTA Órfãos: <strong className="text-slate-200 font-mono">{alerts.filter(a => a.status === 'triggered' && (Date.now() - new Date(a.created_at).getTime()) > 180000).length} aguardando</strong></span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-cyan-500"></span>
+                    <span>Plantonistas: <strong className="text-slate-200">Carlos S. (N1) | Cadu S. (N2)</strong></span>
+                  </div>
+                </div>
               </div>
             </div>
           )}
