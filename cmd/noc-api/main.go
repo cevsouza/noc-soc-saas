@@ -334,6 +334,7 @@ func main() {
 	mux.Handle("/api/v1/auth/register", api.HandleRegister(pgPool))
 	mux.Handle("/api/v1/auth/verify", api.HandleVerify(pgPool))
 	mux.Handle("/api/v1/auth/login", api.HandleLogin(pgPool, jwtSecret))
+	mux.Handle("/api/v1/public/tenants", api.HandleGetPublicTenants(pgPool))
 
 	// Administrator endpoints (protected by JWT and Admin Role check)
 	protectedAdminUsers := middleware.JWTAuth(jwtSecret)(

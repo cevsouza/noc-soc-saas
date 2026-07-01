@@ -66,6 +66,7 @@ export default function CockpitPage() {
   const [authPassword, setAuthPassword] = useState('');
   const [authName, setAuthName] = useState('');
   const [authTenant, setAuthTenant] = useState('e1b7c123-1234-4321-abcd-123456789abc');
+  const [publicTenants, setPublicTenants] = useState<any[]>([]);
   const [authStatus, setAuthStatus] = useState<{ status: 'idle' | 'loading' | 'success' | 'error', message?: string }>({ status: 'idle' });
 
   // Admin User Creation States
@@ -73,6 +74,7 @@ export default function CockpitPage() {
   const [adminUserPassword, setAdminUserPassword] = useState('');
   const [adminUserName, setAdminUserName] = useState('');
   const [adminUserRole, setAdminUserRole] = useState('operator');
+  const [adminUserTenantId, setAdminUserTenantId] = useState('e1b7c123-1234-4321-abcd-123456789abc');
   const [adminUserStatus, setAdminUserStatus] = useState<{ status: 'idle' | 'saving' | 'success' | 'error', message?: string }>({ status: 'idle' });
 
   const [tenants, setTenants] = useState<{ id: string, name: string, slug: string }[]>([
@@ -333,6 +335,25 @@ export default function CockpitPage() {
     }
   }, [selectedAdminTenant]);
 
+  const fetchPublicTenants = async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/v1/public/tenants`);
+      if (response.ok) {
+        const data = await response.json();
+        setPublicTenants(data);
+        if (data.length > 0) {
+          setAuthTenant(data[0].id);
+        }
+      }
+    } catch (err) {
+      console.error("Falha ao buscar tenants públicos:", err);
+    }
+  };
+
+  useEffect(() => {
+    fetchPublicTenants();
+  }, [authView]);
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setAuthStatus({ status: 'loading' });
@@ -428,7 +449,7 @@ export default function CockpitPage() {
           password: adminUserPassword,
           name: adminUserName,
           role: adminUserRole,
-          tenant_id: selectedTenant.id
+          tenant_id: adminUserTenantId
         })
       });
       if (response.ok) {
@@ -723,17 +744,32 @@ export default function CockpitPage() {
 
           <form onSubmit={authView === 'login' ? handleLogin : handleRegister} className="flex flex-col gap-4">
             {authView === 'register' && (
-              <div className="flex flex-col gap-1.5">
-                <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Nome Completo</label>
-                <input
-                  type="text"
-                  required
-                  value={authName}
-                  onChange={(e) => setAuthName(e.target.value)}
-                  placeholder="Seu nome"
-                  className="bg-black/30 border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-violet-500 transition-all placeholder:text-slate-600"
-                />
-              </div>
+              <>
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Nome Completo</label>
+                  <input
+                    type="text"
+                    required
+                    value={authName}
+                    onChange={(e) => setAuthName(e.target.value)}
+                    placeholder="Seu nome"
+                    className="bg-black/30 border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-violet-500 transition-all placeholder:text-slate-600"
+                  />
+                </div>
+
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Sua Empresa / Tenant</label>
+                  <select
+                    value={authTenant}
+                    onChange={(e) => setAuthTenant(e.target.value)}
+                    className="bg-[#0b0f19] border border-white/10 rounded-lg p-2.5 text-xs text-slate-200 focus:outline-none focus:border-violet-500 transition-all cursor-pointer"
+                  >
+                    {publicTenants.map(t => (
+                      <option key={t.id} value={t.id} className="bg-slate-900 text-white">{t.name}</option>
+                    ))}
+                  </select>
+                </div>
+              </>
             )}
 
             <div className="flex flex-col gap-1.5">
@@ -1969,6 +2005,19 @@ export default function CockpitPage() {
                           <option value="operator">Operator (Operador - Acesso de Leitura/Ação)</option>
                           <option value="admin">Admin (Administrador - Acesso Completo/Cofre/Usuários)</option>
                           <option value="viewer">Viewer (Visualizador - Apenas Leitura de Painéis)</option>
+                        </select>
+                      </div>
+
+                      <div className="flex flex-col gap-1.5">
+                        <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Empresa / Tenant Associado</label>
+                        <select
+                          value={adminUserTenantId}
+                          onChange={(e) => setAdminUserTenantId(e.target.value)}
+                          className="bg-[#0b0f19] border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-violet-500 transition-all cursor-pointer"
+                        >
+                          {tenants.map(t => (
+                            <option key={t.id} value={t.id}>{t.name}</option>
+                          ))}
                         </select>
                       </div>
 

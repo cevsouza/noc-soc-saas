@@ -117,3 +117,35 @@ func HandleCreateTenant(pgPool *pgxpool.Pool) http.HandlerFunc {
 		})
 	}
 }
+
+// HandleGetPublicTenants returns all active tenants names and IDs for public selectors
+func HandleGetPublicTenants(pgPool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+
+		rows, err := pgPool.Query(ctx, "SELECT id, name FROM tenants WHERE status = 'active' ORDER BY name")
+		if err != nil {
+			http.Error(w, "Failed to query tenants", http.StatusInternalServerError)
+			return
+		}
+		defer rows.Close()
+
+		type PublicTenant struct {
+			ID   uuid.UUID `json:"id"`
+			Name string    `json:"name"`
+		}
+
+		var list []PublicTenant
+		for rows.Next() {
+			var t PublicTenant
+			if err := rows.Scan(&t.ID, &t.Name); err != nil {
+				http.Error(w, "Failed to scan tenants", http.StatusInternalServerError)
+				return
+			}
+			list = append(list, t)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(list)
+	}
+}
