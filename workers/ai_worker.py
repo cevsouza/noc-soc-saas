@@ -27,6 +27,9 @@ AI_EVAL_QUEUE = "noc:queue:ai_evaluation"
 PUBSUB_CHANNEL_PREFIX = "noc:pubsub:tenant:"
 
 def get_db_connection():
+    db_url = os.environ.get("DATABASE_URL")
+    if db_url:
+        return psycopg2.connect(db_url, cursor_factory=RealDictCursor)
     return psycopg2.connect(
         host=DB_HOST,
         port=DB_PORT,
@@ -152,12 +155,16 @@ def main():
     
     # Establish Redis connection
     try:
-        redis_client = redis.Redis(
-            host=REDIS_HOST,
-            port=REDIS_PORT,
-            password=REDIS_PASSWORD,
-            db=REDIS_DB
-        )
+        redis_url = os.environ.get("REDIS_URL")
+        if redis_url:
+            redis_client = redis.Redis.from_url(redis_url)
+        else:
+            redis_client = redis.Redis(
+                host=REDIS_HOST,
+                port=REDIS_PORT,
+                password=REDIS_PASSWORD,
+                db=REDIS_DB
+            )
         redis_client.ping()
         logger.info("Connected to Redis successfully.")
     except Exception as e:
