@@ -293,7 +293,16 @@ export default function CockpitPage() {
         body: JSON.stringify({ email: authEmail, password: authPassword, name: authName, tenant_id: authTenant })
       });
       if (response.ok) {
-        setAuthStatus({ status: 'success', message: 'Conta criada! Por favor, verifique seu e-mail para ativar.' });
+        const data = await response.json();
+        if (data.auto_verified) {
+          setAuthStatus({ status: 'success', message: 'Conta criada e ativada automaticamente com sucesso! Redirecionando para login...' });
+          setTimeout(() => {
+            setAuthView('login');
+            setAuthStatus({ status: 'idle' });
+          }, 3000);
+        } else {
+          setAuthStatus({ status: 'success', message: data.message || 'Conta criada! Por favor, verifique seu e-mail para ativar.' });
+        }
         setAuthEmail('');
         setAuthPassword('');
         setAuthName('');

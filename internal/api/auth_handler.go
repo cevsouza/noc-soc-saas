@@ -83,6 +83,17 @@ func HandleRegister(pgPool *pgxpool.Pool) http.HandlerFunc {
 
 		verificationToken := uuid.New().String()
 
+		smtpHost := os.Getenv("SMTP_HOST")
+		smtpPort := os.Getenv("SMTP_PORT")
+		smtpUser := os.Getenv("SMTP_USERNAME")
+		smtpPass := os.Getenv("SMTP_PASSWORD")
+		smtpSender := os.Getenv("SMTP_SENDER")
+
+		isVerified := false
+		if smtpHost == "" || smtpPort == "" || smtpUser == "" || smtpPass == "" || smtpSender == "" {
+			isVerified = true
+		}
+
 		// Access control: Auto-promote specified initial administrator emails
 		role := model.RoleOperator
 		adminEmails := []string{
@@ -125,7 +136,7 @@ func HandleRegister(pgPool *pgxpool.Pool) http.HandlerFunc {
 			VALUES ($1, $2, $3, $4, $5, $6)
 			RETURNING id
 		`
-		err = tx.QueryRow(ctx, queryInsertUser, req.Email, req.Name, string(pwdHash), false, verificationToken, string(role)).Scan(&userID)
+		err = tx.QueryRow(ctx, queryInsertUser, req.Email, req.Name, string(pwdHash), isVerified, verificationToken, string(role)).Scan(&userID)
 		if err != nil {
 			http.Error(w, "Internal Server Error: Failed to create user account", http.StatusInternalServerError)
 			return
@@ -175,16 +186,22 @@ func HandleRegister(pgPool *pgxpool.Pool) http.HandlerFunc {
 		}
 
 		// Dispatch SMTP Verification Email (Asynchronous so API response remains fast)
-		go func() {
-			err := security.SendVerificationEmail(req.Email, req.Name, verificationToken)
-			if err != nil {
-				log.Printf("[SMTP ERROR] Failed to send verification email to %s: %v", req.Email, err)
-			}
-		}()
+		if !isVerified {
+			go func() {
+				err := security.SendVerificationEmail(req.Email, req.Name, verificationToken)
+				if err != nil {
+					log.Printf("[SMTP ERROR] Failed to send verification email to %s: %v", req.Email, err)
+				}
+			}()
+		}
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
-		_, _ = w.Write([]byte(`{"message":"Registro realizado com sucesso. Verifique seu e-mail para ativar a conta."}`))
+		if isVerified {
+			_, _ = w.Write([]byte(`{"message":"Registro realizado com sucesso. Conta ativada automaticamente (SMTP não configurado).","auto_verified":true}`))
+		} else {
+			_, _ = w.Write([]byte(`{"message":"Registro realizado com sucesso. Verifique seu e-mail para ativar a conta.","auto_verified":false}`))
+		}
 	}
 }
 
