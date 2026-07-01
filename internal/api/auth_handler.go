@@ -142,7 +142,6 @@ func HandleRegister(pgPool *pgxpool.Pool) http.HandlerFunc {
 			return
 		}
 
-		// Resolve tenant association (default to Telco Global Corp if not provided or empty)
 		var tenantID uuid.UUID
 		if req.TenantID != "" {
 			parsedID, err := uuid.Parse(req.TenantID)
@@ -151,7 +150,17 @@ func HandleRegister(pgPool *pgxpool.Pool) http.HandlerFunc {
 			}
 		}
 		if tenantID == uuid.Nil {
-			tenantID = uuid.MustParse("e1b7c123-1234-4321-abcd-123456789abc") // Telco Global Corp default ID
+			// Find first active tenant in database
+			err = tx.QueryRow(ctx, "SELECT id FROM tenants WHERE status = 'active' LIMIT 1").Scan(&tenantID)
+			if err != nil {
+				// If database is completely empty, insert a bootstrap default tenant
+				tenantID = uuid.New()
+				_, err = tx.Exec(ctx, "INSERT INTO tenants (id, name, slug, status) VALUES ($1, 'ITFácil NOC', 'itfacil-noc', 'active')", tenantID)
+				if err != nil {
+					http.Error(w, "Internal Server Error: Failed to bootstrap default tenant", http.StatusInternalServerError)
+					return
+				}
+			}
 		}
 
 		queryInsertTenantUser := `
@@ -322,9 +331,14 @@ func HandleLogin(pgPool *pgxpool.Pool, jwtSecret []byte) http.HandlerFunc {
 		`
 		err = pgPool.QueryRow(ctx, queryTenant, userID).Scan(&tenantID, &tenantName, &tenantRoleStr)
 		if err != nil {
-			// Fallback if relation is missing (default to Telco Global Corp)
-			tenantID = uuid.MustParse("e1b7c123-1234-4321-abcd-123456789abc")
-			tenantName = "Telco Global Corp (Tenant A)"
+			// Find first active tenant in database
+			err = pgPool.QueryRow(ctx, "SELECT id, name FROM tenants WHERE status = 'active' LIMIT 1").Scan(&tenantID, &tenantName)
+			if err != nil {
+				// Bootstrap default tenant
+				tenantID = uuid.New()
+				tenantName = "ITFácil NOC"
+				_, _ = pgPool.Exec(ctx, "INSERT INTO tenants (id, name, slug, status) VALUES ($1, $2, 'itfacil-noc', 'active')", tenantID, tenantName)
+			}
 			tenantRoleStr = globalRole
 		}
 
@@ -433,7 +447,6 @@ func HandleAdminCreateUser(pgPool *pgxpool.Pool) http.HandlerFunc {
 			return
 		}
 
-		// Resolve tenant (if not provided, default to Telco)
 		var tenantID uuid.UUID
 		if req.TenantID != "" {
 			parsedID, err := uuid.Parse(req.TenantID)
@@ -442,7 +455,17 @@ func HandleAdminCreateUser(pgPool *pgxpool.Pool) http.HandlerFunc {
 			}
 		}
 		if tenantID == uuid.Nil {
-			tenantID = uuid.MustParse("e1b7c123-1234-4321-abcd-123456789abc")
+			// Find first active tenant in database
+			err = tx.QueryRow(ctx, "SELECT id FROM tenants WHERE status = 'active' LIMIT 1").Scan(&tenantID)
+			if err != nil {
+				// Bootstrap default tenant
+				tenantID = uuid.New()
+				_, err = tx.Exec(ctx, "INSERT INTO tenants (id, name, slug, status) VALUES ($1, 'ITFácil NOC', 'itfacil-noc', 'active')", tenantID)
+				if err != nil {
+					http.Error(w, "Internal Server Error: Failed to bootstrap default tenant", http.StatusInternalServerError)
+					return
+				}
+			}
 		}
 
 		queryInsertTenantUser := `
