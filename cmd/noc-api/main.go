@@ -404,6 +404,36 @@ func main() {
 		}
 	}))
 
+	// Incident action endpoints (Acknowledge and Resolve)
+	protectedAcknowledgeIncident := middleware.JWTAuth(jwtSecret)(api.HandleAcknowledgeIncident(pgPool))
+	protectedResolveIncident := middleware.JWTAuth(jwtSecret)(api.HandleResolveIncident(pgPool))
+	mux.Handle("/api/v1/incidents/acknowledge", protectedAcknowledgeIncident)
+	mux.Handle("/api/v1/incidents/resolve", protectedResolveIncident)
+
+	// SLA dynamic report endpoint
+	protectedGetSLAReport := middleware.JWTAuth(jwtSecret)(api.HandleGetSLAReport(pgPool))
+	mux.Handle("/api/v1/reports/sla/stats", protectedGetSLAReport)
+
+	// Runbook management and execution routes
+	protectedGetRunbooks := middleware.JWTAuth(jwtSecret)(api.HandleGetRunbooks(pgPool))
+	protectedPostRunbooks := middleware.JWTAuth(jwtSecret)(
+		middleware.RequireRole(model.RoleAdmin)(
+			api.HandleCreateRunbook(pgPool),
+		),
+	)
+	protectedExecuteRunbook := middleware.JWTAuth(jwtSecret)(api.HandleExecuteRunbook(pgPool))
+
+	mux.Handle("/api/v1/runbooks", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			protectedGetRunbooks.ServeHTTP(w, r)
+		} else if r.Method == http.MethodPost {
+			protectedPostRunbooks.ServeHTTP(w, r)
+		} else {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	}))
+	mux.Handle("/api/v1/runbooks/execute", protectedExecuteRunbook)
+
 	// Real-Time Operator WebSocket Subscription endpoint (Multiplexed, resolved by JWT/APIKey/UUID)
 	mux.Handle("/api/v1/ws", ws.ServeWS(hub, pgPool, jwtSecret))
 

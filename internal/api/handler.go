@@ -439,6 +439,191 @@ func HandleDownloadSLAReport(pgPool *pgxpool.Pool, jwtSecret []byte) http.Handle
 	}
 }
 
+type IncidentAcknowledgeRequest struct {
+	ID        uuid.UUID `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+type IncidentResolveRequest struct {
+	ID        uuid.UUID `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// Helper to resolve tenant ID (supports query override for global operators)
+func resolveTenantID(r *http.Request) (uuid.UUID, bool) {
+	if tenantParam := r.URL.Query().Get("tenant_id"); tenantParam != "" {
+		if id, err := uuid.Parse(tenantParam); err == nil {
+			return id, true
+		}
+	}
+	return db.TenantIDFromContext(r.Context())
+}
+
+// HandleAcknowledgeIncident marks an alert/incident as acknowledged and logs the operator action
+func HandleAcknowledgeIncident(pgPool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tenantID, ok := resolveTenantID(r)
+		if !ok {
+			http.Error(w, "Unauthorized: Tenant context not found", http.StatusUnauthorized)
+			return
+		}
+		ctx := db.WithTenantID(r.Context(), tenantID)
+
+		var req IncidentAcknowledgeRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid payload", http.StatusBadRequest)
+			return
+		}
+
+		var rowsAffected int64
+		err := db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
+			query := `
+				UPDATE alerts
+				SET status = 'acknowledged', acknowledged_at = NOW(), updated_at = NOW()
+				WHERE id = $1 AND created_at = $2 AND tenant_id = $3
+			`
+			res, err := tx.Exec(ctx, query, req.ID, req.CreatedAt, tenantID)
+			if err != nil {
+				return err
+			}
+			rowsAffected = res.RowsAffected()
+			return nil
+		})
+
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Failed to acknowledge incident: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		if rowsAffected == 0 {
+			http.Error(w, "Incident not found or doesn't belong to tenant", http.StatusNotFound)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "success", "message": "Incidente reconhecido com sucesso"})
+	}
+}
+
+// HandleResolveIncident marks an alert/incident as resolved and logs resolution time
+func HandleResolveIncident(pgPool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tenantID, ok := resolveTenantID(r)
+		if !ok {
+			http.Error(w, "Unauthorized: Tenant context not found", http.StatusUnauthorized)
+			return
+		}
+		ctx := db.WithTenantID(r.Context(), tenantID)
+
+		var req IncidentResolveRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid payload", http.StatusBadRequest)
+			return
+		}
+
+		var rowsAffected int64
+		err := db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
+			query := `
+				UPDATE alerts
+				SET status = 'resolved', resolved_at = NOW(), updated_at = NOW()
+				WHERE id = $1 AND created_at = $2 AND tenant_id = $3
+			`
+			res, err := tx.Exec(ctx, query, req.ID, req.CreatedAt, tenantID)
+			if err != nil {
+				return err
+			}
+			rowsAffected = res.RowsAffected()
+			return nil
+		})
+
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Failed to resolve incident: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		if rowsAffected == 0 {
+			http.Error(w, "Incident not found or doesn't belong to tenant", http.StatusNotFound)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "success", "message": "Incidente resolvido com sucesso"})
+	}
+}
+
+type SLAReportResponse struct {
+	TotalIncidents  int     `json:"total_incidents"`
+	ResolvedCount   int     `json:"resolved_count"`
+	UnresolvedCount int     `json:"unresolved_count"`
+	AverageTTA      float64 `json:"average_tta"` // in minutes
+	AverageTTR      float64 `json:"average_ttr"` // in minutes
+	SLACompliance   float64 `json:"sla_compliance"` // percentage
+}
+
+// HandleGetSLAReport calculates averages of response time and resolution time for a tenant.
+func HandleGetSLAReport(pgPool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tenantID, ok := resolveTenantID(r)
+		if !ok {
+			http.Error(w, "Unauthorized: Tenant context not found", http.StatusUnauthorized)
+			return
+		}
+		ctx := db.WithTenantID(r.Context(), tenantID)
+
+		var total, resolved, unresolved int
+		var avgTTA, avgTTR float64
+		var totalDevices, onlineDevices int
+
+		err := db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
+			// 1. Fetch SLA statistics from database
+			queryStats := `
+				SELECT 
+					COUNT(*) as total,
+					COUNT(CASE WHEN status = 'resolved' THEN 1 END) as resolved,
+					COUNT(CASE WHEN status != 'resolved' THEN 1 END) as unresolved,
+					COALESCE(AVG(EXTRACT(EPOCH FROM (acknowledged_at - created_at)) / 60), 0) as avg_tta,
+					COALESCE(AVG(EXTRACT(EPOCH FROM (resolved_at - created_at)) / 60), 0) as avg_ttr
+				FROM alerts
+				WHERE tenant_id = $1 AND created_at >= NOW() - INTERVAL '30 days'
+			`
+			err := tx.QueryRow(ctx, queryStats, tenantID).Scan(&total, &resolved, &unresolved, &avgTTA, &avgTTR)
+			if err != nil {
+				return err
+			}
+
+			// 2. Fetch device availability SLA compliance
+			queryDevices := `
+				SELECT COUNT(*) as total_devices,
+				       COUNT(CASE WHEN status = 'online' THEN 1 END) as online_devices
+				FROM devices
+				WHERE tenant_id = $1
+			`
+			_ = tx.QueryRow(ctx, queryDevices, tenantID).Scan(&totalDevices, &onlineDevices)
+			return nil
+		})
+
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Failed to calculate SLA report: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		slaCompliance := 100.0
+		if totalDevices > 0 {
+			slaCompliance = (float64(onlineDevices) / float64(totalDevices)) * 100.0
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(SLAReportResponse{
+			TotalIncidents:  total,
+			ResolvedCount:   resolved,
+			UnresolvedCount: unresolved,
+			AverageTTA:      avgTTA,
+			AverageTTR:      avgTTR,
+			SLACompliance:   slaCompliance,
+		})
+	}
+}
+
 // Uptime Kuma Webhook Structures
 type UptimeKumaPayload struct {
 	Heartbeat struct {

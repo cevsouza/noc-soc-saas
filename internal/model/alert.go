@@ -25,16 +25,18 @@ const (
 )
 
 type Alert struct {
-	ID         uuid.UUID              `json:"id"`
-	TenantID   uuid.UUID              `json:"tenant_id"`
-	DeviceID   *uuid.UUID             `json:"device_id,omitempty"`
-	EventType  string                 `json:"event_type"`
-	Severity   AlertSeverity          `json:"severity"`
-	Status     AlertStatus            `json:"status"`
-	Summary    string                 `json:"summary"`
-	Payload    map[string]interface{} `json:"payload"`
-	AIAnalysis map[string]interface{} `json:"ai_analysis,omitempty"`
-	CreatedAt  time.Time              `json:"created_at"`
-	UpdatedAt  time.Time              `json:"updated_at"`
-	ResolvedAt *time.Time             `json:"resolved_at,omitempty"`
+	ID             uuid.UUID              `json:"id"`
+	TenantID       uuid.UUID              `json:"tenant_id"`
+	DeviceID       *uuid.UUID             `json:"device_id,omitempty"`
+	EventType      string                 `json:"event_type"`
+	Severity       AlertSeverity          `json:"severity"`
+	Status         AlertStatus            `json:"status"`
+	Summary        string                 `json:"summary"`
+	Payload        map[string]interface{} `json:"payload"`
+	AIAnalysis     map[string]interface{} `json:"ai_analysis,omitempty"`
+	CreatedAt      time.Time              `json:"created_at"`
+	UpdatedAt      time.Time              `json:"updated_at"`
+	ResolvedAt     *time.Time             `json:"resolved_at,omitempty"`
+	AcknowledgedAt *time.Time             `json:"acknowledged_at,omitempty"`
+	AIDiagnostic   *string                `json:"ai_diagnostic,omitempty"`
 }

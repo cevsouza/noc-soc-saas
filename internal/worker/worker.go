@@ -237,6 +237,50 @@ func (wp *WorkerPool) createNewAlert(ctx context.Context, tx pgx.Tx, event model
 	// Publish the new alert to Redis Pub/Sub for WebSockets
 	wp.publishToPubSub(ctx, event.TenantID, newAlert)
 
+	// Trigger SRE AI Diagnosis (Gemini) asynchronously
+	go func(alertID, tenantID uuid.UUID, summary, host string, payload map[string]interface{}) {
+		ctxBg := context.Background()
+		payloadBytes, _ := json.Marshal(payload)
+		diag, err := api.DiagnoseIncident(ctxBg, summary, host, string(payloadBytes))
+		if err == nil && diag != "" {
+			// Save the diagnosis to the database column
+			_, dbErr := wp.pgPool.Exec(ctxBg, "UPDATE alerts SET ai_diagnostic = $1 WHERE id = $2", diag, alertID)
+			if dbErr != nil {
+				log.Printf("[AI Co-Pilot Error] Failed to save diagnosis: %v", dbErr)
+			} else {
+				// Fetch the updated alert and republish it via WebSocket
+				var a model.Alert
+				var pBytes []byte
+				var aiBytes []byte
+				query := "SELECT id, tenant_id, device_id, event_type, severity, status, summary, payload, ai_analysis, created_at, updated_at, resolved_at, acknowledged_at, ai_diagnostic FROM alerts WHERE id = $1"
+				err = wp.pgPool.QueryRow(ctxBg, query, alertID).Scan(
+					&a.ID,
+					&a.TenantID,
+					&a.DeviceID,
+					&a.EventType,
+					&a.Severity,
+					&a.Status,
+					&a.Summary,
+					&pBytes,
+					&aiBytes,
+					&a.CreatedAt,
+					&a.UpdatedAt,
+					&a.ResolvedAt,
+					&a.AcknowledgedAt,
+					&a.AIDiagnostic,
+				)
+				if err == nil {
+					_ = json.Unmarshal(pBytes, &a.Payload)
+					if len(aiBytes) > 0 {
+						_ = json.Unmarshal(aiBytes, &a.AIAnalysis)
+					}
+					// Publish the updated alert to Redis Pub/Sub so UI updates dynamically
+					wp.publishToPubSub(ctxBg, tenantID, &a)
+				}
+			}
+		}
+	}(newAlert.ID, newAlert.TenantID, newAlert.Summary, event.Host, newAlert.Payload)
+
 	// Trigger self healing remote script if CRITICAL/FATAL
 	if newAlert.Severity == model.SeverityCritical || newAlert.Severity == model.SeverityFatal {
 		wp.triggerSelfHealingStub(ctx, newAlert)

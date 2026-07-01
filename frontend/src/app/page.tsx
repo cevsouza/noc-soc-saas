@@ -23,7 +23,12 @@ import {
   HelpCircle,
   Copy,
   Check,
-  ChevronDown
+  ChevronDown,
+  Target,
+  Zap,
+  Clock,
+  Shield,
+  TrendingUp
 } from 'lucide-react';
 
 interface Alert {
@@ -39,6 +44,8 @@ interface Alert {
   created_at: string;
   updated_at: string;
   resolved_at?: string;
+  acknowledged_at?: string;
+  ai_diagnostic?: string;
 }
 
 
@@ -89,6 +96,11 @@ export default function CockpitPage() {
   const [tenantCreateStatus, setTenantCreateStatus] = useState<{ status: 'idle' | 'saving' | 'success' | 'error', message?: string }>({ status: 'idle' });
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [selectedAlert, setSelectedAlert] = useState<Alert | null>(null);
+  const [runbooks, setRunbooks] = useState<any[]>([]);
+  const [runbookLogs, setRunbookLogs] = useState<string>('');
+  const [isExecutingRunbook, setIsExecutingRunbook] = useState<boolean>(false);
+  const [slaData, setSlaData] = useState<any | null>(null);
+  const [isLoadingSla, setIsLoadingSla] = useState<boolean>(false);
   const [connStatus, setConnStatus] = useState<'connecting' | 'connected' | 'disconnected'>('disconnected');
   const [searchTerm, setSearchTerm] = useState('');
   const [severityFilter, setSeverityFilter] = useState<string>('all');
@@ -579,8 +591,86 @@ export default function CockpitPage() {
     };
   }, [selectedTenantIds, token]);
 
-  // Handle action triggers (simulate backend state changes locally or via fetch)
-  const handleUpdateStatus = (alertId: string, newStatus: Alert['status']) => {
+  // Fetch SLA stats when selected tenant or integration view changes to SLA
+  useEffect(() => {
+    if (!token || !selectedTenant || selectedIntegrationTool !== 'sla_report') return;
+    const fetchSlaData = async () => {
+      setIsLoadingSla(true);
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/v1/reports/sla/stats?tenant_id=${selectedTenant.id}`, {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setSlaData(data);
+        }
+      } catch (err) {
+        console.error("Failed to fetch SLA data:", err);
+      } finally {
+        setIsLoadingSla(false);
+      }
+    };
+    fetchSlaData();
+  }, [selectedTenant, selectedIntegrationTool, token]);
+
+  // Fetch runbooks when selected alert changes
+  useEffect(() => {
+    if (!selectedAlert || !token) return;
+    const fetchRunbooks = async () => {
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/v1/runbooks?tenant_id=${selectedAlert.tenant_id}`, {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setRunbooks(data || []);
+        }
+      } catch (err) {
+        console.error("Failed to fetch runbooks:", err);
+      }
+    };
+    fetchRunbooks();
+    setRunbookLogs(''); // Reset logs when changing selected alert
+  }, [selectedAlert, token]);
+
+  const handleExecuteRunbook = async (runbookId: string) => {
+    if (!selectedAlert || !token) return;
+    setIsExecutingRunbook(true);
+    setRunbookLogs('Iniciando conexão remota via túnel seguro SSH...\nExecutando playbook de auto-cura...\n');
+
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/v1/runbooks/execute?tenant_id=${selectedAlert.tenant_id}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          runbook_id: runbookId,
+          incident_id: selectedAlert.id
+        })
+      });
+
+      const data = await res.json();
+      if (res.ok) {
+        setRunbookLogs(prev => prev + `[Sucesso] Executado com sucesso.\n\nRetorno SSH:\n${data.output}`);
+      } else {
+        setRunbookLogs(prev => prev + `[Falha] Erro na execução:\n${data.message || data.output}`);
+      }
+    } catch (err) {
+      setRunbookLogs(prev => prev + `[Erro de Rede] Não foi possível conectar ao backend.`);
+    } finally {
+      setIsExecutingRunbook(false);
+    }
+  };
+
+  // Handle action triggers (sync status with backend REST API)
+  const handleUpdateStatus = async (alertId: string, newStatus: Alert['status']) => {
+    // 1. Update local state immediately for a responsive UI
     setAlerts(prevAlerts => {
       const updated = prevAlerts.map(a => {
         if (a.id === alertId) {
@@ -588,6 +678,7 @@ export default function CockpitPage() {
             ...a,
             status: newStatus,
             resolved_at: newStatus === 'resolved' ? new Date().toISOString() : undefined,
+            acknowledged_at: newStatus === 'acknowledged' ? new Date().toISOString() : a.acknowledged_at,
             updated_at: new Date().toISOString()
           };
           if (selectedAlert && selectedAlert.id === alertId) {
@@ -598,6 +689,55 @@ export default function CockpitPage() {
         return a;
       });
       return updated;
+    });
+
+    // 2. Fetch API to sync DB
+    const endpoint = newStatus === 'acknowledged' ? '/api/v1/incidents/acknowledge' : '/api/v1/incidents/resolve';
+    const alertItem = alerts.find(a => a.id === alertId);
+    if (!alertItem) return;
+
+    try {
+      const res = await fetch(`${API_BASE_URL}${endpoint}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          id: alertId,
+          created_at: alertItem.created_at
+        })
+      });
+      if (!res.ok) {
+        console.error("Failed to update status on server:", await res.text());
+      }
+    } catch (err) {
+      console.error("Network error updating incident status:", err);
+    }
+  };
+
+  // Custom markdown formatter for AI reports
+  const formatMarkdown = (text: string) => {
+    if (!text) return null;
+    return text.split('\n').map((line, idx) => {
+      const cleanLine = line.trim();
+      if (cleanLine.startsWith('### ')) {
+        return <h4 key={idx} className="text-xs font-bold text-slate-200 mt-3 mb-1">{cleanLine.replace('### ', '')}</h4>;
+      }
+      if (cleanLine.startsWith('## ')) {
+        return <h3 key={idx} className="text-xs font-extrabold text-violet-300 mt-4 mb-1.5">{cleanLine.replace('## ', '')}</h3>;
+      }
+      if (cleanLine.startsWith('# ')) {
+        return <h2 key={idx} className="text-sm font-black text-white mt-5 mb-2">{cleanLine.replace('# ', '')}</h2>;
+      }
+      if (cleanLine.startsWith('- ') || cleanLine.startsWith('* ')) {
+        return <li key={idx} className="text-xs text-slate-300 ml-4 list-disc space-y-1">{cleanLine.substring(2)}</li>;
+      }
+      if (cleanLine.startsWith('1. ') || cleanLine.startsWith('2. ') || cleanLine.startsWith('3. ')) {
+        return <li key={idx} className="text-xs text-slate-300 ml-4 list-decimal space-y-1">{cleanLine.substring(cleanLine.indexOf('.') + 1).trim()}</li>;
+      }
+      if (!cleanLine) return <div key={idx} className="h-1.5" />;
+      return <p key={idx} className="text-xs text-slate-300 mb-1 leading-relaxed">{cleanLine}</p>;
     });
   };
 
@@ -1186,6 +1326,26 @@ export default function CockpitPage() {
             </div>
           </div>
 
+          {/* Focus Mode Banner */}
+          {selectedTenantIds.length === 1 && (
+            <div className="p-3 rounded-xl bg-violet-950/20 border border-violet-500/35 flex items-center justify-between text-xs text-violet-300">
+              <div className="flex items-center gap-2">
+                <Target className="w-4 h-4 text-violet-400 animate-pulse animate-duration-1000" />
+                <span>
+                  Modo de Foco Ativo: Monitorando apenas o tenant <strong>{tenants.find(t => t.id === selectedTenantIds[0])?.name || 'Cliente Selecionado'}</strong>
+                </span>
+              </div>
+              <button
+                onClick={() => {
+                  setSelectedTenantIds(tenants.map(t => t.id));
+                }}
+                className="px-3 py-1 rounded bg-violet-500/20 hover:bg-violet-500/35 text-violet-300 hover:text-white transition-all font-bold uppercase text-[9px] cursor-pointer"
+              >
+                Ver Todos os Clientes
+              </button>
+            </div>
+          )}
+
           {/* Alerts Table/Feed */}
           <div className="glass-card rounded-xl overflow-hidden flex flex-col border border-white/5">
             <div className="grid grid-cols-12 gap-4 px-6 py-3 border-b border-white/5 bg-surface/30 text-[10px] tracking-wider uppercase font-semibold text-slate-400">
@@ -1194,7 +1354,7 @@ export default function CockpitPage() {
               <div className="col-span-2">Visual Domain</div>
               <div className="col-span-2">Event Type</div>
               <div className="col-span-2">Summary</div>
-              <div className="col-span-1 text-center">Debounce</div>
+              <div className="col-span-1 text-center">Focar</div>
               <div className="col-span-1 text-center">Time</div>
               <div className="col-span-2 text-right">Status</div>
             </div>
@@ -1270,19 +1430,22 @@ export default function CockpitPage() {
                       {alert.summary}
                     </div>
 
-                    {/* Occurrences count (Redis Debounce Metrics) */}
-                    <div className="col-span-1 text-center font-mono text-xs">
-                      {alert.payload?.occurrences ? (
-                        <span className={`inline-block px-2 py-0.5 rounded font-bold ${
-                          alert.payload.occurrences > 1
-                            ? 'bg-violet-500/10 text-violet-400 border border-violet-500/20'
-                            : 'bg-white/5 text-slate-500'
-                        }`}>
-                          x{alert.payload.occurrences}
-                        </span>
-                      ) : (
-                        <span className="text-slate-600">-</span>
-                      )}
+                    {/* Action (Fly-to-Context) */}
+                    <div className="col-span-1 text-center">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedTenantIds([alert.tenant_id]);
+                          const t = tenants.find(x => x.id === alert.tenant_id);
+                          if (t) {
+                            setSelectedTenant(t);
+                          }
+                        }}
+                        title="Isolar foco neste cliente"
+                        className="p-1 rounded bg-violet-600/15 hover:bg-violet-600/40 text-violet-400 border border-violet-500/20 hover:text-white transition-all cursor-pointer inline-flex items-center justify-center"
+                      >
+                        <Target className="w-3.5 h-3.5" />
+                      </button>
                     </div>
 
                     {/* Timestamp */}
@@ -1428,29 +1591,64 @@ export default function CockpitPage() {
                     </button>
                   </div>
 
-                  {/* AI & Noise Heuristics */}
-                  <div className="flex flex-col gap-3 p-5 rounded-xl bg-cyan-950/10 border border-cyan-500/20">
+                  {/* Co-Pilot AI Diagnostics */}
+                  <div className="flex flex-col gap-3 p-5 rounded-xl bg-violet-950/20 border border-violet-500/25">
                     <div className="flex items-center gap-2">
-                      <Brain className="w-4 h-4 text-cyan-400" />
-                      <h5 className="text-xs font-extrabold uppercase text-cyan-400 tracking-wider">AI & Suppression Insight</h5>
+                      <Brain className="w-4 h-4 text-violet-400 animate-pulse" />
+                      <h5 className="text-xs font-extrabold uppercase text-violet-300 tracking-wider">💡 IA Co-Pilot Diagnostics</h5>
                     </div>
-                    <p className="text-xs text-slate-300 leading-relaxed">
-                      {selectedAlert.status === 'suppressed' || selectedAlert.ai_analysis?.suppressed ? (
-                        <>
-                          <strong className="text-rose-400">ALERT SUPPRESSED:</strong> {selectedAlert.ai_analysis?.suppression_reason || 'Alert flagged as flapping noise.'}
-                        </>
-                      ) : selectedAlert.ai_analysis?.downgraded ? (
-                        <>
-                          <strong className="text-amber-400">SEVERITY DOWNGRADED:</strong> {selectedAlert.ai_analysis?.downgrade_reason}
-                        </>
-                      ) : (
-                        <>No suppression or downgrades triggered. Event frequency is within stable bounds.</>
-                      )}
+                    {selectedAlert.ai_diagnostic ? (
+                      <div className="text-slate-300 select-text flex flex-col gap-1.5 max-h-64 overflow-y-auto pr-1">
+                        {formatMarkdown(selectedAlert.ai_diagnostic)}
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-2 text-xs text-slate-400">
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin text-violet-400" />
+                        <span>Gerando diagnóstico e sugestões causa raiz via Gemini...</span>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Playbooks & Auto-Cura (Runbooks SSH) */}
+                  <div className="flex flex-col gap-3.5 p-5 rounded-xl bg-slate-900/40 border border-white/5">
+                    <div className="flex items-center gap-2">
+                      <Zap className="w-4 h-4 text-amber-400" />
+                      <h5 className="text-xs font-extrabold uppercase text-slate-300 tracking-wider">⚡ Playbooks de Auto-Cura</h5>
+                    </div>
+                    <p className="text-[11px] text-slate-400 leading-normal">
+                      Execute scripts remotos de mitigação no host afetado utilizando credenciais seguras do Vault.
                     </p>
-                    <div className="flex items-center justify-between text-[10px] text-slate-500 font-semibold mt-1">
-                      <span>Noise Filter Applied: Yes</span>
-                      <span>Signal Strength: 100%</span>
-                    </div>
+
+                    {runbooks.length === 0 ? (
+                      <div className="text-xs text-slate-500 italic bg-white/[0.01] p-3 rounded-lg border border-white/5">
+                        Nenhum playbook SSH configurado para este cliente. Adicione na aba Admin.
+                      </div>
+                    ) : (
+                      <div className="flex flex-col gap-2">
+                        {runbooks.map(rb => (
+                          <div key={rb.id} className="flex items-center justify-between p-2 rounded-lg bg-white/[0.02] border border-white/5">
+                            <span className="text-xs font-medium text-slate-300">{rb.name}</span>
+                            <button
+                              disabled={isExecutingRunbook || user?.role === 'viewer'}
+                              onClick={() => handleExecuteRunbook(rb.id)}
+                              className="px-2.5 py-1 rounded bg-amber-500/10 hover:bg-amber-500/20 disabled:opacity-50 text-amber-300 text-[10px] font-bold uppercase tracking-wider border border-amber-500/20 transition-all flex items-center gap-1 cursor-pointer"
+                            >
+                              <Zap className="w-2.5 h-2.5" />
+                              Executar
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {runbookLogs && (
+                      <div className="flex flex-col gap-2 mt-2">
+                        <label className="text-[10px] uppercase font-bold text-slate-500">Terminal SSH Output:</label>
+                        <pre className="bg-black border border-white/5 rounded-lg p-3 text-[10px] font-mono text-emerald-400 overflow-x-auto max-h-48 whitespace-pre-wrap select-text leading-relaxed">
+                          {runbookLogs}
+                        </pre>
+                      </div>
+                    )}
                   </div>
 
                   {/* Friendly Explanation (For Beginners/Laypeople) */}
@@ -1673,6 +1871,19 @@ export default function CockpitPage() {
                     {tool.name}
                   </button>
                 ))}
+
+                <span className="text-[9px] font-bold text-slate-500 uppercase tracking-widest px-2.5 py-2 mt-4">Desempenho</span>
+                <button
+                  onClick={() => {
+                    setSelectedIntegrationTool('sla_report');
+                  }}
+                  className={`px-3 py-2.5 rounded-lg text-left text-xs font-bold transition-all flex items-center gap-2 ${
+                    selectedIntegrationTool === 'sla_report' ? 'bg-white/5 text-white border-l-2 border-emerald-400' : 'text-slate-400 hover:bg-white/[0.02] hover:text-slate-200'
+                  }`}
+                >
+                  <span className={`w-2 h-2 rounded-full ${selectedIntegrationTool === 'sla_report' ? 'bg-emerald-400' : 'bg-slate-600'}`}></span>
+                  Relatório & SLA
+                </button>
 
                 {user?.role === 'admin' && (
                   <>
@@ -2212,6 +2423,94 @@ export default function CockpitPage() {
                         )}
                       </div>
                     </div>
+                  </div>
+                ) : selectedIntegrationTool === 'sla_report' ? (
+                  // SLA Dynamic Report & PDF download
+                  <div className="flex flex-col gap-4">
+                    <div className="flex flex-col gap-3 p-4 rounded-xl bg-emerald-950/10 border border-emerald-500/20 text-xs text-slate-300 leading-relaxed font-sans mb-2">
+                      <div className="flex items-center gap-1.5 text-emerald-400 font-extrabold uppercase text-[10px]">
+                        <TrendingUp className="w-3.5 h-3.5" /> SLA & Desempenho Operacional (Cockpit)
+                      </div>
+                      <p>Visualize as métricas em tempo real de conformidade de SLA e tempos médios de resposta do operador para o tenant ativo. Você também pode exportar e baixar o relatório executivo completo em PDF.</p>
+                    </div>
+
+                    {isLoadingSla ? (
+                      <div className="flex items-center justify-center py-16 gap-3 text-slate-400 text-xs">
+                        <RefreshCw className="w-5 h-5 animate-spin text-emerald-400" />
+                        <span>Carregando estatísticas de SLA do banco...</span>
+                      </div>
+                    ) : slaData ? (
+                      <div className="flex flex-col gap-6">
+                        
+                        {/* Summary Metrics Grid */}
+                        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                          
+                          <div className="p-4 rounded-xl bg-white/5 border border-white/5 flex flex-col gap-1">
+                            <span className="text-[9px] uppercase font-bold text-slate-500 tracking-wider">Conformidade SLA</span>
+                            <span className="text-xl font-extrabold text-emerald-400">{slaData.sla_compliance.toFixed(2)}%</span>
+                            <span className="text-[8px] text-slate-400">Uptime de Ativos</span>
+                          </div>
+
+                          <div className="p-4 rounded-xl bg-white/5 border border-white/5 flex flex-col gap-1">
+                            <span className="text-[9px] uppercase font-bold text-slate-500 tracking-wider">Total de Alertas</span>
+                            <span className="text-xl font-extrabold text-white">{slaData.total_incidents}</span>
+                            <span className="text-[8px] text-slate-400">Últimos 30 dias</span>
+                          </div>
+
+                          <div className="p-4 rounded-xl bg-white/5 border border-white/5 flex flex-col gap-1">
+                            <span className="text-[9px] uppercase font-bold text-slate-500 tracking-wider">Média TTA (Triagem)</span>
+                            <span className="text-xl font-extrabold text-amber-400">{slaData.average_tta.toFixed(1)}m</span>
+                            <span className="text-[8px] text-slate-400">Time to Acknowledge</span>
+                          </div>
+
+                          <div className="p-4 rounded-xl bg-white/5 border border-white/5 flex flex-col gap-1">
+                            <span className="text-[9px] uppercase font-bold text-slate-500 tracking-wider">Média TTR (Resolução)</span>
+                            <span className="text-xl font-extrabold text-violet-400">{slaData.average_ttr.toFixed(1)}m</span>
+                            <span className="text-[8px] text-slate-400">Time to Resolve</span>
+                          </div>
+
+                        </div>
+
+                        {/* Visual compliance status bar */}
+                        <div className="p-5 rounded-xl bg-white/5 border border-white/5 flex flex-col gap-2">
+                          <div className="flex justify-between items-center text-xs">
+                            <span className="text-slate-400">Status Geral do Acordo de Nível de Serviço (SLA)</span>
+                            <span className="font-bold text-emerald-400">Meta: 99.90%</span>
+                          </div>
+                          <div className="w-full bg-white/5 h-2.5 rounded-full overflow-hidden border border-white/5">
+                            <div 
+                              className={`h-full transition-all ${slaData.sla_compliance >= 99.9 ? 'bg-emerald-500' : slaData.sla_compliance >= 99.0 ? 'bg-amber-500' : 'bg-rose-500'}`} 
+                              style={{ width: `${Math.min(100, Math.max(0, slaData.sla_compliance))}%` }}
+                            />
+                          </div>
+                          <span className="text-[10px] text-slate-500">
+                            * O cálculo do SLA é efetuado dinamicamente com base na disponibilidade operacional em tempo real dos dispositivos cadastrados.
+                          </span>
+                        </div>
+
+                        {/* Export/Download SLA PDF */}
+                        <div className="p-5 rounded-xl bg-[#0e1626] border border-cyan-500/10 flex items-center justify-between mt-2">
+                          <div className="flex flex-col gap-0.5">
+                            <h5 className="text-xs font-bold text-white">Relatório Executivo Mensal</h5>
+                            <p className="text-[10px] text-slate-400">Gere e baixe a via em PDF oficial com assinaturas e log de incidentes.</p>
+                          </div>
+                          <button
+                            onClick={() => {
+                              window.open(`${API_BASE_URL}/api/v1/reports/sla?token=${token || selectedTenant.id}&tenant_name=${encodeURIComponent(selectedTenant.name)}`);
+                            }}
+                            className="bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold uppercase tracking-wider text-[10px] px-4 py-2.5 rounded-lg flex items-center gap-1.5 transition-all shadow-lg cursor-pointer"
+                          >
+                            <FileText className="w-3.5 h-3.5" />
+                            Baixar Relatório PDF
+                          </button>
+                        </div>
+
+                      </div>
+                    ) : (
+                      <div className="text-xs text-slate-500 italic text-center py-10">
+                        Nenhum dado operacional registrado para calcular métricas de SLA.
+                      </div>
+                    )}
                   </div>
                 ) : null}
 
