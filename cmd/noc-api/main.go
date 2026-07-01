@@ -434,6 +434,24 @@ func main() {
 	}))
 	mux.Handle("/api/v1/runbooks/execute", protectedExecuteRunbook)
 
+	// Incident chat & timeline endpoints
+	protectedIncidentChat := middleware.JWTAuth(jwtSecret)(api.HandleIncidentChat(pgPool))
+	protectedIncidentComments := middleware.JWTAuth(jwtSecret)(api.HandleGetIncidentComments(pgPool))
+	mux.Handle("/api/v1/incidents/chat", protectedIncidentChat)
+	mux.Handle("/api/v1/incidents/comments", protectedIncidentComments)
+
+	// Runbooks execution audit logs endpoint
+	protectedRunbookAudit := middleware.JWTAuth(jwtSecret)(api.HandleGetRunbookAuditLogs(pgPool))
+	mux.Handle("/api/v1/runbooks/audit", protectedRunbookAudit)
+
+	// Secure Vault metadata list endpoint
+	protectedVaultList := middleware.JWTAuth(jwtSecret)(
+		middleware.RequireRole(model.RoleAdmin)(
+			api.HandleGetVaultSecrets(pgPool),
+		),
+	)
+	mux.Handle("/api/v1/vault/list", protectedVaultList)
+
 	// Real-Time Operator WebSocket Subscription endpoint (Multiplexed, resolved by JWT/APIKey/UUID)
 	mux.Handle("/api/v1/ws", ws.ServeWS(hub, pgPool, jwtSecret))
 

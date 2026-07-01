@@ -192,6 +192,16 @@ func HandleExecuteRunbook(pgPool *pgxpool.Pool) http.HandlerFunc {
 			`
 			commentText := fmt.Sprintf("🤖 **Execução de Runbook [%s]**: Status: %s\n\n```bash\n%s\n```", name, execStatus, output)
 			_, err = tx.Exec(ctx, logQuery, req.IncidentID, tenantID, commentText)
+			if err != nil {
+				return err
+			}
+
+			// 5. Record log in the execution audit logs table for security compliance
+			auditQuery := `
+				INSERT INTO runbook_execution_logs (tenant_id, runbook_id, incident_id, operator_name, script, output, status)
+				VALUES ($1, $2, $3, $4, $5, $6, $7)
+			`
+			_, err = tx.Exec(ctx, auditQuery, tenantID, req.RunbookID, req.IncidentID, "SRE Operador Co-Pilot", script, output, execStatus)
 			return err
 		})
 
@@ -265,4 +275,61 @@ func ExecuteSSH(host, username, password, privateKey, command string) (string, e
 	}
 
 	return output, nil
+}
+
+type RunbookAuditResponse struct {
+	ID           uuid.UUID `json:"id"`
+	RunbookName  string    `json:"runbook_name"`
+	OperatorName string    `json:"operator_name"`
+	Script       string    `json:"script"`
+	Output       string    `json:"output"`
+	Status       string    `json:"status"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
+// HandleGetRunbookAuditLogs returns the list of runbook executions for security audit trail.
+func HandleGetRunbookAuditLogs(pgPool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tenantID, ok := resolveTenantID(r)
+		if !ok {
+			http.Error(w, "Unauthorized: Tenant context not found", http.StatusUnauthorized)
+			return
+		}
+		ctx := db.WithTenantID(r.Context(), tenantID)
+
+		list := make([]RunbookAuditResponse, 0)
+		err := db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
+			query := `
+				SELECT l.id, r.name, l.operator_name, l.script, l.output, l.status, l.created_at
+				FROM runbook_execution_logs l
+				JOIN tenant_runbooks r ON l.runbook_id = r.id
+				WHERE l.tenant_id = $1
+				ORDER BY l.created_at DESC
+				LIMIT 50
+			`
+			rows, err := tx.Query(ctx, query, tenantID)
+			if err != nil {
+				return err
+			}
+			defer rows.Close()
+
+			for rows.Next() {
+				var item RunbookAuditResponse
+				err := rows.Scan(&item.ID, &item.RunbookName, &item.OperatorName, &item.Script, &item.Output, &item.Status, &item.CreatedAt)
+				if err != nil {
+					return err
+				}
+				list = append(list, item)
+			}
+			return rows.Err()
+		})
+
+		if err != nil {
+			http.Error(w, "Failed to query runbook audits", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(list)
+	}
 }

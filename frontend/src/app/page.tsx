@@ -48,7 +48,65 @@ interface Alert {
   ai_diagnostic?: string;
 }
 
+const SlaCountdown = ({ alert }: { alert: Alert }) => {
+  const [timeLeft, setTimeLeft] = useState<string>('');
+  const [isOverSla, setIsOverSla] = useState(false);
 
+  useEffect(() => {
+    if (alert.status === 'resolved' || alert.status === 'suppressed') {
+      setTimeLeft('SLA OK');
+      setIsOverSla(false);
+      return;
+    }
+
+    const calculateTime = () => {
+      const created = new Date(alert.created_at).getTime();
+      let limitMs = 480 * 60 * 1000; // default info: 8 hours
+      if (alert.severity === 'fatal') limitMs = 15 * 60 * 1000;
+      else if (alert.severity === 'critical') limitMs = 30 * 60 * 1000;
+      else if (alert.severity === 'warning') limitMs = 120 * 60 * 1000;
+
+      const now = new Date().getTime();
+      const diff = (created + limitMs) - now;
+
+      if (diff <= 0) {
+        setTimeLeft('SLA ESTOURADO');
+        setIsOverSla(true);
+      } else {
+        const mins = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+        const secs = Math.floor((diff % (1000 * 60)) / 1000);
+        
+        let hrsText = "";
+        const hrs = Math.floor(diff / (1000 * 60 * 60));
+        if (hrs > 0) {
+          hrsText = `${hrs}h `;
+        }
+        
+        setTimeLeft(`${hrsText}${mins}m ${secs}s`);
+        setIsOverSla(false);
+      }
+    };
+
+    calculateTime();
+    const interval = setInterval(calculateTime, 1000);
+    return () => clearInterval(interval);
+  }, [alert.created_at, alert.severity, alert.status]);
+
+  if (alert.status === 'resolved' || alert.status === 'suppressed') {
+    return <span className="text-[10px] text-emerald-400 font-extrabold bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">RESOLVIDO</span>;
+  }
+
+  return (
+    <span className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded border flex items-center gap-1 shrink-0 ${
+      isOverSla 
+        ? 'text-rose-400 bg-rose-500/10 border-rose-500/30 animate-pulse' 
+        : 'text-amber-400 bg-amber-500/10 border-amber-500/30'
+    }`}>
+      <Clock className="w-3 h-3" />
+      {timeLeft}
+    </span>
+  );
+};
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
 
@@ -101,10 +159,19 @@ export default function CockpitPage() {
   const [isExecutingRunbook, setIsExecutingRunbook] = useState<boolean>(false);
   const [slaData, setSlaData] = useState<any | null>(null);
   const [isLoadingSla, setIsLoadingSla] = useState<boolean>(false);
+  const [isWallboardMode, setIsWallboardMode] = useState<boolean>(false);
   const [connStatus, setConnStatus] = useState<'connecting' | 'connected' | 'disconnected'>('disconnected');
   const [searchTerm, setSearchTerm] = useState('');
   const [severityFilter, setSeverityFilter] = useState<string>('all');
-  const [activeTab, setActiveTab] = useState<'general' | 'logs' | 'grafana' | 'raw'>('general');
+  const [activeTab, setActiveTab] = useState<'general' | 'logs' | 'grafana' | 'raw' | 'timeline' | 'chat'>('general');
+  const [comments, setComments] = useState<any[]>([]);
+  const [chatPrompt, setChatPrompt] = useState('');
+  const [isSendingChat, setIsSendingChat] = useState(false);
+  const [isLoadingComments, setIsLoadingComments] = useState(false);
+  const [vaultSecrets, setVaultSecrets] = useState<any[]>([]);
+  const [isLoadingVaultSecrets, setIsLoadingVaultSecrets] = useState(false);
+  const [runbookAudits, setRunbookAudits] = useState<any[]>([]);
+  const [isLoadingRunbookAudits, setIsLoadingRunbookAudits] = useState(false);
   
   // Integrations Modal States
   const [showIntegrationsModal, setShowIntegrationsModal] = useState(false);
@@ -513,6 +580,48 @@ export default function CockpitPage() {
     }
   }, [selectedAlert?.id]);
 
+  // Synthesize custom SRE/SOC notification sounds using Web Audio API
+  const playAlertSound = (severity: string) => {
+    try {
+      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const osc1 = audioCtx.createOscillator();
+      const osc2 = audioCtx.createOscillator();
+      const gainNode = audioCtx.createGain();
+
+      osc1.connect(gainNode);
+      osc2.connect(gainNode);
+      gainNode.connect(audioCtx.destination);
+
+      if (severity === 'fatal') {
+        osc1.frequency.setValueAtTime(880, audioCtx.currentTime); // A5
+        osc2.frequency.setValueAtTime(1200, audioCtx.currentTime);
+        gainNode.gain.setValueAtTime(0.15, audioCtx.currentTime);
+        gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.55);
+        osc1.start();
+        osc2.start();
+        osc1.stop(audioCtx.currentTime + 0.55);
+        osc2.stop(audioCtx.currentTime + 0.55);
+      } else if (severity === 'critical') {
+        osc1.frequency.setValueAtTime(587.33, audioCtx.currentTime); // D5
+        osc2.frequency.setValueAtTime(698.46, audioCtx.currentTime); // F5
+        gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
+        gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.4);
+        osc1.start();
+        osc2.start();
+        osc1.stop(audioCtx.currentTime + 0.4);
+        osc2.stop(audioCtx.currentTime + 0.4);
+      } else {
+        osc1.frequency.setValueAtTime(523.25, audioCtx.currentTime); // C5
+        gainNode.gain.setValueAtTime(0.05, audioCtx.currentTime);
+        gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.15);
+        osc1.start();
+        osc1.stop(audioCtx.currentTime + 0.15);
+      }
+    } catch (e) {
+      console.warn("AudioContext audio blocker active:", e);
+    }
+  };
+
   // Connect to Go WebSocket Server
   const connectWebSocket = () => {
     if (!token) return;
@@ -551,6 +660,7 @@ export default function CockpitPage() {
             return updated;
           } else {
             // Append new alert on top
+            playAlertSound(receivedAlert.severity);
             return [receivedAlert, ...prevAlerts];
           }
         });
@@ -613,6 +723,115 @@ export default function CockpitPage() {
       }
     };
     fetchSlaData();
+  }, [selectedTenant, selectedIntegrationTool, token]);
+
+  // Fetch incident timeline / comments
+  useEffect(() => {
+    if (!token || !selectedAlert) return;
+    const fetchComments = async () => {
+      setIsLoadingComments(true);
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/v1/incidents/comments?incident_id=${selectedAlert.id}&tenant_id=${selectedAlert.tenant_id}`, {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setComments(data || []);
+        }
+      } catch (err) {
+        console.error("Failed to fetch comments:", err);
+      } finally {
+        setIsLoadingComments(false);
+      }
+    };
+    fetchComments();
+  }, [selectedAlert?.id, activeTab, token]);
+
+  const handleSendChat = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedAlert || !chatPrompt || !token) return;
+    setIsSendingChat(true);
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/v1/incidents/chat?tenant_id=${selectedAlert.tenant_id}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          incident_id: selectedAlert.id,
+          created_at: selectedAlert.created_at,
+          prompt: chatPrompt
+        })
+      });
+      if (res.ok) {
+        setChatPrompt('');
+        // Reload comments timeline
+        const resComments = await fetch(`${API_BASE_URL}/api/v1/incidents/comments?incident_id=${selectedAlert.id}&tenant_id=${selectedAlert.tenant_id}`, {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        });
+        if (resComments.ok) {
+          const data = await resComments.json();
+          setComments(data || []);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to send chat message:", err);
+    } finally {
+      setIsSendingChat(false);
+    }
+  };
+
+  // Fetch Vault secrets metadata for admin view
+  useEffect(() => {
+    if (!token || !selectedTenant || selectedIntegrationTool !== 'vault_admin') return;
+    const fetchVaultSecrets = async () => {
+      setIsLoadingVaultSecrets(true);
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/v1/vault/list?tenant_id=${selectedTenant.id}`, {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setVaultSecrets(data || []);
+        }
+      } catch (err) {
+        console.error("Failed to fetch vault secrets:", err);
+      } finally {
+        setIsLoadingVaultSecrets(false);
+      }
+    };
+    fetchVaultSecrets();
+  }, [selectedTenant, selectedIntegrationTool, token]);
+
+  // Fetch Runbook execution audits for admin view
+  useEffect(() => {
+    if (!token || !selectedTenant || selectedIntegrationTool !== 'audit_admin') return;
+    const fetchRunbookAudits = async () => {
+      setIsLoadingRunbookAudits(true);
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/v1/runbooks/audit?tenant_id=${selectedTenant.id}`, {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setRunbookAudits(data || []);
+        }
+      } catch (err) {
+        console.error("Failed to fetch runbook audits:", err);
+      } finally {
+        setIsLoadingRunbookAudits(false);
+      }
+    };
+    fetchRunbookAudits();
   }, [selectedTenant, selectedIntegrationTool, token]);
 
   // Fetch runbooks when selected alert changes
@@ -956,7 +1175,24 @@ export default function CockpitPage() {
     <div className="min-h-screen bg-background text-slate-100 flex flex-col font-sans select-none">
       
       {/* 1. Header (Navbar Glass) */}
-      <header className="h-16 shrink-0 flex items-center justify-between px-6 border-b border-white/5 bg-surface/50 backdrop-blur-md sticky top-0 z-50">
+      {isWallboardMode ? (
+        <div className="h-14 shrink-0 bg-[#0e1626] border-b border-white/5 flex items-center justify-between px-6 text-xs select-none">
+          <div className="flex items-center gap-2.5 text-rose-400 font-extrabold uppercase tracking-widest animate-pulse text-[10px]">
+            <Activity className="w-4 h-4 text-rose-500" /> MONITOR DE SOC CENTRAL & NOC (MODO TV ATIVO)
+          </div>
+          <div className="flex items-center gap-6">
+            <span className="text-slate-400 font-bold uppercase text-[9px] tracking-wider">Acordo de Nível de Serviço (SLA): <strong className="text-emerald-400 ml-1">99.98%</strong></span>
+            <span className="text-slate-400 font-bold uppercase text-[9px] tracking-wider">Alertas Fatais: <strong className="text-rose-500 ml-1">{stats.fatal}</strong></span>
+            <button
+              onClick={() => setIsWallboardMode(false)}
+              className="bg-rose-600 hover:bg-rose-500 text-white font-bold px-3.5 py-1.5 rounded transition-all uppercase text-[9px] tracking-wider cursor-pointer"
+            >
+              Sair do Modo TV
+            </button>
+          </div>
+        </div>
+      ) : (
+        <header className="h-16 shrink-0 flex items-center justify-between px-6 border-b border-white/5 bg-surface/50 backdrop-blur-md sticky top-0 z-50">
         <div className="flex items-center gap-3">
           <div className="relative flex items-center justify-center h-8 w-24 overflow-hidden rounded-lg bg-white/5 p-1 border border-white/10">
             <img 
@@ -1083,6 +1319,16 @@ export default function CockpitPage() {
             </button>
           )}
 
+          {/* TV Wallboard Toggle */}
+          <button
+            onClick={() => setIsWallboardMode(true)}
+            className="flex items-center gap-2 px-3 py-1 rounded-lg bg-rose-600/20 hover:bg-rose-600/30 border border-rose-500/35 text-rose-300 text-xs font-bold transition-all uppercase tracking-wider cursor-pointer"
+            title="Alternar Modo TV Wallboard"
+          >
+            <Activity className="w-3.5 h-3.5 animate-pulse" />
+            <span>Modo TV</span>
+          </button>
+
           {/* Connection Status Badge */}
           <div className={`flex items-center gap-2 px-3 py-1 rounded-full text-xs font-semibold border ${
             connStatus === 'connected' 
@@ -1123,13 +1369,14 @@ export default function CockpitPage() {
             </button>
           </div>
         </div>
-      </header>
+       </header>
+      )}
 
       {/* 2. Main Dashboard Layout */}
       <main className="flex-1 flex overflow-hidden">
         
         {/* Left Section (Stats + Alerts Feed) */}
-        <section className="flex-1 flex flex-col p-6 overflow-y-auto gap-6 max-w-7xl mx-auto w-full">
+        <section className={`flex-1 flex flex-col p-6 overflow-y-auto gap-6 w-full ${isWallboardMode ? 'max-w-none' : 'max-w-7xl mx-auto'}`}>
           
           {/* Stat Cards */}
           <div className="grid grid-cols-5 gap-4">
@@ -1355,7 +1602,7 @@ export default function CockpitPage() {
               <div className="col-span-2">Event Type</div>
               <div className="col-span-2">Summary</div>
               <div className="col-span-1 text-center">Focar</div>
-              <div className="col-span-1 text-center">Time</div>
+              <div className="col-span-1 text-center">Time / SLA</div>
               <div className="col-span-2 text-right">Status</div>
             </div>
 
@@ -1448,9 +1695,12 @@ export default function CockpitPage() {
                       </button>
                     </div>
 
-                    {/* Timestamp */}
-                    <div className="col-span-1 text-center text-xs text-slate-400 font-mono">
-                      {new Date(alert.created_at).toLocaleTimeString()}
+                    {/* Timestamp / SLA */}
+                    <div className="col-span-1 flex flex-col items-center gap-1">
+                      <span className="text-xs text-slate-400 font-mono">
+                        {new Date(alert.created_at).toLocaleTimeString()}
+                      </span>
+                      <SlaCountdown alert={alert} />
                     </div>
 
                     {/* Status Badge */}
@@ -1477,7 +1727,7 @@ export default function CockpitPage() {
         </section>
 
         {/* Right Section (Glass detail Sidebar Panel) */}
-        {selectedAlert && (
+        {selectedAlert && !isWallboardMode && (
           <aside className="w-[450px] shrink-0 glass-sidebar flex flex-col overflow-hidden border-l border-white/5">
             
             {/* Sidebar Title */}
@@ -1526,7 +1776,23 @@ export default function CockpitPage() {
                   activeTab === 'raw' ? 'border-violet-500 text-violet-400' : 'border-transparent text-slate-400 hover:text-slate-200'
                 }`}
               >
-                Raw JSON
+                Raw
+              </button>
+              <button
+                onClick={() => setActiveTab('timeline')}
+                className={`flex-1 py-3 text-center border-b-2 transition-all ${
+                  activeTab === 'timeline' ? 'border-violet-500 text-violet-400' : 'border-transparent text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                Timeline
+              </button>
+              <button
+                onClick={() => setActiveTab('chat')}
+                className={`flex-1 py-3 text-center border-b-2 transition-all ${
+                  activeTab === 'chat' ? 'border-violet-500 text-violet-400' : 'border-transparent text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                Co-Pilot
               </button>
             </div>
 
@@ -1792,6 +2058,103 @@ export default function CockpitPage() {
                   </div>
                 </div>
               )}
+
+              {activeTab === 'timeline' && (
+                <div className="flex flex-col gap-4 h-full">
+                  <div className="flex items-center justify-between">
+                    <label className="text-[10px] uppercase font-bold tracking-wider text-slate-500 flex items-center gap-1.5">
+                      <Clock className="w-3.5 h-3.5 text-violet-400" /> Timeline & Histórico do Alerta
+                    </label>
+                    <span className="text-[9px] font-bold text-slate-400">Total: {comments.length} ações</span>
+                  </div>
+
+                  {isLoadingComments ? (
+                    <div className="flex items-center justify-center py-10 gap-2 text-xs text-slate-500">
+                      <RefreshCw className="w-4 h-4 animate-spin text-violet-500" />
+                      <span>Carregando timeline...</span>
+                    </div>
+                  ) : comments.length > 0 ? (
+                    <div className="flex flex-col gap-4 max-h-[400px] overflow-y-auto pr-1">
+                      {comments.map((c) => {
+                        const isSystem = c.author === 'Sistema';
+                        const isAI = c.author.includes('AI') || c.author.includes('🤖');
+                        const isOperator = c.author === 'Operador';
+                        
+                        return (
+                          <div key={c.id} className="p-3 rounded-lg bg-white/[0.02] border border-white/5 flex flex-col gap-1 text-xs">
+                            <div className="flex justify-between items-center text-[10px]">
+                              <span className={`font-bold uppercase tracking-wider ${
+                                isSystem ? 'text-cyan-400' : isAI ? 'text-rose-400' : 'text-violet-400'
+                              }`}>{c.author}</span>
+                              <span className="text-slate-500 font-mono">{new Date(c.created_at).toLocaleTimeString()}</span>
+                            </div>
+                            <div className="text-slate-300 whitespace-pre-line leading-relaxed font-sans mt-0.5">
+                              {c.comment}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="text-xs text-slate-500 italic text-center py-10">
+                      Nenhuma ação ou comentário registrado neste incidente.
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {activeTab === 'chat' && (
+                <div className="flex flex-col gap-4 h-full">
+                  <div className="p-3 rounded-xl bg-violet-950/10 border border-violet-500/20 text-xs text-slate-300 leading-relaxed font-sans">
+                    <div className="flex items-center gap-1.5 text-violet-400 font-extrabold uppercase text-[10px] mb-1">
+                      <Cpu className="w-3.5 h-3.5" /> IA Co-Pilot Conversacional
+                    </div>
+                    Converse diretamente com o assistente Gemini AI sobre o contexto deste alerta. Faça perguntas técnicas ou peça ajuda com comandos.
+                  </div>
+
+                  {/* Chat Timeline (filter AI and Operator comments) */}
+                  <div className="flex-1 min-h-[180px] max-h-[250px] overflow-y-auto bg-black/30 border border-white/5 rounded-xl p-4 flex flex-col gap-3 font-sans text-xs">
+                    {comments.filter(c => c.author === 'Operador' || c.author.includes('AI')).length > 0 ? (
+                      comments.filter(c => c.author === 'Operador' || c.author.includes('AI')).map((c, idx) => (
+                        <div key={idx} className={`p-2 rounded-lg max-w-[85%] ${
+                          c.author === 'Operador' ? 'bg-violet-600/10 border border-violet-500/20 text-white ml-auto' : 'bg-rose-950/10 border border-rose-500/10 text-slate-200'
+                        }`}>
+                          <div className="text-[8px] font-bold text-slate-500 mb-0.5">
+                            {c.author === 'Operador' ? 'Você' : '🤖 Co-Pilot'}
+                          </div>
+                          <div className="whitespace-pre-line leading-relaxed">
+                            {c.comment.replace('🤖 Co-Pilot AI: ', '')}
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="text-xs text-slate-600 italic text-center my-auto">
+                        Faça uma pergunta abaixo para iniciar a conversa técnica com a IA.
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Input form */}
+                  <form onSubmit={handleSendChat} className="flex gap-2">
+                    <input
+                      type="text"
+                      required
+                      disabled={isSendingChat}
+                      value={chatPrompt}
+                      onChange={(e) => setChatPrompt(e.target.value)}
+                      placeholder="Pergunte algo à IA (ex: Como posso mitigar isso?)..."
+                      className="flex-1 bg-[#0b0f19] border border-white/10 rounded-lg px-3 py-2 text-xs text-white placeholder:text-slate-600 focus:outline-none focus:border-violet-500"
+                    />
+                    <button
+                      type="submit"
+                      disabled={isSendingChat}
+                      className="bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white font-bold text-xs px-4 rounded-lg flex items-center justify-center shrink-0 cursor-pointer"
+                    >
+                      {isSendingChat ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : 'Perguntar'}
+                    </button>
+                  </form>
+                </div>
+              )}
             </div>
           </aside>
         )}
@@ -1911,6 +2274,28 @@ export default function CockpitPage() {
                     >
                       <span className={`w-2 h-2 rounded-full ${selectedIntegrationTool === 'tenants_admin' ? 'bg-violet-500' : 'bg-slate-600'}`}></span>
                       Tenants (Admin)
+                    </button>
+                    <button
+                      onClick={() => {
+                        setSelectedIntegrationTool('vault_admin');
+                      }}
+                      className={`px-3 py-2.5 rounded-lg text-left text-xs font-bold transition-all flex items-center gap-2 ${
+                        selectedIntegrationTool === 'vault_admin' ? 'bg-white/5 text-white border-l-2 border-violet-500' : 'text-slate-400 hover:bg-white/[0.02] hover:text-slate-200'
+                      }`}
+                    >
+                      <span className={`w-2 h-2 rounded-full ${selectedIntegrationTool === 'vault_admin' ? 'bg-violet-500' : 'bg-slate-600'}`}></span>
+                      Cofre & Vault (Admin)
+                    </button>
+                    <button
+                      onClick={() => {
+                        setSelectedIntegrationTool('audit_admin');
+                      }}
+                      className={`px-3 py-2.5 rounded-lg text-left text-xs font-bold transition-all flex items-center gap-2 ${
+                        selectedIntegrationTool === 'audit_admin' ? 'bg-white/5 text-white border-l-2 border-violet-500' : 'text-slate-400 hover:bg-white/[0.02] hover:text-slate-200'
+                      }`}
+                    >
+                      <span className={`w-2 h-2 rounded-full ${selectedIntegrationTool === 'audit_admin' ? 'bg-violet-500' : 'bg-slate-600'}`}></span>
+                      Auditoria de Ações (Admin)
                     </button>
                   </>
                 )}
@@ -2423,6 +2808,96 @@ export default function CockpitPage() {
                         )}
                       </div>
                     </div>
+                  </div>
+                ) : selectedIntegrationTool === 'vault_admin' ? (
+                  // Vault keys expiration & status inspector
+                  <div className="flex flex-col gap-4">
+                    <div className="flex flex-col gap-3 p-4 rounded-xl bg-violet-950/10 border border-violet-500/20 text-xs text-slate-300 leading-relaxed font-sans mb-2">
+                      <div className="flex items-center gap-1.5 text-violet-400 font-extrabold uppercase text-[10px]">
+                        <Lock className="w-3.5 h-3.5" /> Auditoria Gerencial do Cofre (Vault)
+                      </div>
+                      <p>Lista de chaves criptográficas de API e SSH cadastradas para este tenant. Por motivos de segurança, os valores descriptografados originais não são enviados para o navegador.</p>
+                    </div>
+
+                    {isLoadingVaultSecrets ? (
+                      <div className="flex items-center justify-center py-12 gap-3 text-slate-400 text-xs">
+                        <RefreshCw className="w-5 h-5 animate-spin text-violet-400" />
+                        <span>Carregando chaves do cofre...</span>
+                      </div>
+                    ) : vaultSecrets.length > 0 ? (
+                      <div className="flex flex-col gap-2 max-h-[400px] overflow-y-auto pr-1">
+                        {vaultSecrets.map((s) => (
+                          <div key={s.id} className="p-3.5 rounded-xl bg-white/5 border border-white/5 flex items-center justify-between text-xs">
+                            <div className="flex flex-col gap-1">
+                              <span className="font-extrabold text-slate-200">{s.secret_key}</span>
+                              <span className="text-[10px] text-slate-400">{s.description || 'Nenhuma descrição inserida.'}</span>
+                            </div>
+                            <div className="flex flex-col items-end gap-1 font-mono text-[9px] text-slate-500">
+                              <span className="text-emerald-400 font-bold bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/20">PROTEGIDO (AES-256)</span>
+                              <span>Cadastrada: {new Date(s.created_at).toLocaleDateString()}</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="text-xs text-slate-500 italic text-center py-10">
+                        Nenhuma credencial configurada no cofre de dados deste tenant.
+                      </div>
+                    )}
+                  </div>
+                ) : selectedIntegrationTool === 'audit_admin' ? (
+                  // SSH Execution Auditing log
+                  <div className="flex flex-col gap-4">
+                    <div className="flex flex-col gap-3 p-4 rounded-xl bg-violet-950/10 border border-violet-500/20 text-xs text-slate-300 leading-relaxed font-sans mb-2">
+                      <div className="flex items-center gap-1.5 text-violet-400 font-extrabold uppercase text-[10px]">
+                        <Shield className="w-3.5 h-3.5" /> Auditoria Forense de Comandos & Runbooks (SOC)
+                      </div>
+                      <p>Rastreabilidade regulatória completa de todas as execuções remotas SSH e ações de auto-cura disparadas pelos operadores na plataforma.</p>
+                    </div>
+
+                    {isLoadingRunbookAudits ? (
+                      <div className="flex items-center justify-center py-12 gap-3 text-slate-400 text-xs">
+                        <RefreshCw className="w-5 h-5 animate-spin text-violet-400" />
+                        <span>Carregando logs de auditoria...</span>
+                      </div>
+                    ) : runbookAudits.length > 0 ? (
+                      <div className="flex flex-col gap-3 max-h-[400px] overflow-y-auto pr-1">
+                        {runbookAudits.map((a) => (
+                          <div key={a.id} className="p-4 rounded-xl bg-[#030712] border border-white/5 flex flex-col gap-3 text-xs leading-relaxed">
+                            <div className="flex justify-between items-start">
+                              <div className="flex flex-col gap-0.5">
+                                <span className="font-bold text-slate-200">Playbook: {a.runbook_name}</span>
+                                <span className="text-[10px] text-slate-400">Operador: {a.operator_name}</span>
+                              </div>
+                              <div className="flex flex-col items-end gap-1">
+                                <span className={`text-[9px] font-bold px-2 py-0.5 rounded border ${
+                                  a.status === 'sucesso' 
+                                    ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' 
+                                    : 'bg-rose-500/10 border-rose-500/20 text-rose-400'
+                                }`}>
+                                  {a.status.toUpperCase()}
+                                </span>
+                                <span className="text-[9px] text-slate-500 font-mono">{new Date(a.created_at).toLocaleString()}</span>
+                              </div>
+                            </div>
+                            
+                            <div className="flex flex-col gap-1 font-mono text-[10px]">
+                              <span className="text-slate-500">Script Executado:</span>
+                              <pre className="p-2.5 rounded bg-black/60 text-slate-300 overflow-x-auto whitespace-pre-wrap">{a.script}</pre>
+                            </div>
+                            
+                            <div className="flex flex-col gap-1 font-mono text-[10px]">
+                              <span className="text-slate-500">Console Output:</span>
+                              <pre className="p-2.5 rounded bg-black/80 text-emerald-400 overflow-x-auto max-h-36 overflow-y-auto whitespace-pre-wrap">{a.output}</pre>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="text-xs text-slate-500 italic text-center py-10">
+                        Nenhuma execução de remediação remota registrada para este cliente.
+                      </div>
+                    )}
                   </div>
                 ) : selectedIntegrationTool === 'sla_report' ? (
                   // SLA Dynamic Report & PDF download

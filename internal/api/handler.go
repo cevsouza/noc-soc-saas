@@ -487,6 +487,14 @@ func HandleAcknowledgeIncident(pgPool *pgxpool.Pool) http.HandlerFunc {
 				return err
 			}
 			rowsAffected = res.RowsAffected()
+			if rowsAffected > 0 {
+				logQuery := `
+					INSERT INTO incident_comments (incident_id, tenant_id, author, comment)
+					VALUES ($1, $2, 'Sistema', 'Incidente RECONHECIDO pelo operador no Cockpit.')
+				`
+				_, err = tx.Exec(ctx, logQuery, req.ID, tenantID)
+				return err
+			}
 			return nil
 		})
 
@@ -533,6 +541,14 @@ func HandleResolveIncident(pgPool *pgxpool.Pool) http.HandlerFunc {
 				return err
 			}
 			rowsAffected = res.RowsAffected()
+			if rowsAffected > 0 {
+				logQuery := `
+					INSERT INTO incident_comments (incident_id, tenant_id, author, comment)
+					VALUES ($1, $2, 'Sistema', 'Incidente RESOLVIDO e finalizado pelo operador.')
+				`
+				_, err = tx.Exec(ctx, logQuery, req.ID, tenantID)
+				return err
+			}
 			return nil
 		})
 
