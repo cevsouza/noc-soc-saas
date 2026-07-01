@@ -29,6 +29,11 @@ import (
 func main() {
 	log.Println("Initializing NOC SaaS Core Engine...")
 
+	jwtSecret := []byte(os.Getenv("JWT_SECRET"))
+	if len(jwtSecret) == 0 {
+		jwtSecret = []byte("noc-secret-key-1234567890-super-safe")
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
