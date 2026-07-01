@@ -2,7 +2,6 @@ package api
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -30,16 +29,6 @@ type CreateRunbookRequest struct {
 type ExecuteRunbookRequest struct {
 	RunbookID  uuid.UUID `json:"runbook_id"`
 	IncidentID uuid.UUID `json:"incident_id"`
-}
-
-// Helper function to resolve tenant ID (supports query override for global operators)
-func resolveTenantID(r *http.Request) (uuid.UUID, bool) {
-	if tenantParam := r.URL.Query().Get("tenant_id"); tenantParam != "" {
-		if id, err := uuid.Parse(tenantParam); err == nil {
-			return id, true
-		}
-	}
-	return db.TenantIDFromContext(r.Context())
 }
 
 // HandleGetRunbooks returns the list of runbooks for the current tenant.
