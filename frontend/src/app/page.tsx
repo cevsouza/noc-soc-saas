@@ -77,15 +77,13 @@ export default function CockpitPage() {
   const [adminUserTenantId, setAdminUserTenantId] = useState('e1b7c123-1234-4321-abcd-123456789abc');
   const [adminUserStatus, setAdminUserStatus] = useState<{ status: 'idle' | 'saving' | 'success' | 'error', message?: string }>({ status: 'idle' });
 
-  const [tenants, setTenants] = useState<{ id: string, name: string, slug: string }[]>([
-    { id: 'e1b7c123-1234-4321-abcd-123456789abc', name: 'Telco Global Corp', slug: 'telco-global' }
-  ]);
-  const [selectedTenant, setSelectedTenant] = useState<{ id: string, name: string, slug: string }>({
-    id: 'e1b7c123-1234-4321-abcd-123456789abc',
-    name: 'Telco Global Corp',
-    slug: 'telco-global'
+  const [tenants, setTenants] = useState<{ id: string, name: string, slug: string }[]>([]);
+  const [selectedTenant, setSelectedTenant] = useState<any>({
+    id: '',
+    name: '',
+    slug: ''
   });
-  const [selectedTenantIds, setSelectedTenantIds] = useState<string[]>(['e1b7c123-1234-4321-abcd-123456789abc']);
+  const [selectedTenantIds, setSelectedTenantIds] = useState<string[]>([]);
   const [isTenantDropdownOpen, setIsTenantDropdownOpen] = useState(false);
   const [newTenantName, setNewTenantName] = useState('');
   const [tenantCreateStatus, setTenantCreateStatus] = useState<{ status: 'idle' | 'saving' | 'success' | 'error', message?: string }>({ status: 'idle' });
@@ -165,8 +163,11 @@ export default function CockpitPage() {
             setSelectedTenant(data[0]);
           }
 
+          // Define adminUserTenantId dinamicamente
+          setAdminUserTenantId(data[0].id);
+
           // Inicializa selectedTenantIds para conter todos os tenants no primeiro carregamento
-          if (selectedTenantIds.length === 1 && selectedTenantIds[0] === 'e1b7c123-1234-4321-abcd-123456789abc') {
+          if (selectedTenantIds.length === 0) {
             setSelectedTenantIds(data.map((t: any) => t.id));
           } else {
             // Filtra IDs antigos que possam ter sido removidos do banco

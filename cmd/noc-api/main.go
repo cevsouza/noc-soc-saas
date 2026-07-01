@@ -88,13 +88,20 @@ func main() {
 		log.Fatalf("Fatal: Database migration failed: %v", err)
 	}
 
-	// Temporary user deletion script
+	// Temporary database cleanup script
 	{
 		res, err := pgPool.Exec(ctx, "DELETE FROM users WHERE email IN ('cevsuza@hotmail.com', 'cevsouza@hotmail.com', 'cadu.souza@itfacilservicos.com.br')")
 		if err != nil {
 			log.Printf("[DB TEMP] Failed to delete temporary users: %v", err)
 		} else {
 			log.Printf("[DB TEMP] Successfully deleted users: %d rows affected", res.RowsAffected())
+		}
+
+		resTenants, err := pgPool.Exec(ctx, "DELETE FROM tenants WHERE id IN ('e1b7c123-1234-4321-abcd-123456789abc', 'fa2b2345-5678-8765-dcba-987654321fed')")
+		if err != nil {
+			log.Printf("[DB TEMP] Failed to delete mock tenants: %v", err)
+		} else {
+			log.Printf("[DB TEMP] Successfully deleted mock tenants: %d rows affected", resTenants.RowsAffected())
 		}
 	}
 
