@@ -29,7 +29,8 @@ import {
   Clock,
   Shield,
   TrendingUp,
-  Network
+  Network,
+  Settings
 } from 'lucide-react';
 
 interface Alert {
@@ -159,7 +160,7 @@ export default function CockpitPage() {
   const [runbookLogs, setRunbookLogs] = useState<string>('');
   const [isExecutingRunbook, setIsExecutingRunbook] = useState<boolean>(false);
   const [slaData, setSlaData] = useState<any | null>(null);
-  const [cockpitTab, setCockpitTab] = useState<'alerts' | 'topology'>('alerts');
+  const [cockpitTab, setCockpitTab] = useState<'alerts' | 'topology' | 'settings'>('alerts');
   const [isLoadingSla, setIsLoadingSla] = useState<boolean>(false);
   const [isWallboardMode, setIsWallboardMode] = useState<boolean>(false);
   const [connStatus, setConnStatus] = useState<'connecting' | 'connected' | 'disconnected'>('disconnected');
@@ -175,6 +176,13 @@ export default function CockpitPage() {
   const [isLoadingVaultSecrets, setIsLoadingVaultSecrets] = useState(false);
   const [runbookAudits, setRunbookAudits] = useState<any[]>([]);
   const [isLoadingRunbookAudits, setIsLoadingRunbookAudits] = useState(false);
+  
+  // Shift Handover States
+  const [activeHandover, setActiveHandover] = useState<any | null>(null);
+  const [showHandoverModal, setShowHandoverModal] = useState(false);
+  const [handoverSummary, setHandoverSummary] = useState('');
+  const [handoverPendingAlerts, setHandoverPendingAlerts] = useState(0);
+  const [isSubmittingHandover, setIsSubmittingHandover] = useState(false);
   
   // Integrations Modal States
   const [showIntegrationsModal, setShowIntegrationsModal] = useState(false);
@@ -802,6 +810,90 @@ export default function CockpitPage() {
     document.documentElement.style.setProperty('--primary-color', '#8b5cf6');
   }, [selectedTenant, selectedTenantIds, tenants]);
 
+  // Shift Handover Handlers & Effect
+  useEffect(() => {
+    if (!token || !selectedTenant) return;
+    const checkActiveHandover = async () => {
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/v1/shift/handover/current?tenant_id=${selectedTenant.id}`, {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.status === 'pending') {
+            setActiveHandover(data);
+          } else {
+            setActiveHandover(null);
+          }
+        }
+      } catch (err) {
+        console.error("Failed to check shift handover:", err);
+      }
+    };
+    checkActiveHandover();
+    // Poll every 60 seconds
+    const interval = setInterval(checkActiveHandover, 60000);
+    return () => clearInterval(interval);
+  }, [token, selectedTenant]);
+
+  const handleSubmitHandover = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!token || !selectedTenant || !handoverSummary) return;
+    setIsSubmittingHandover(true);
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/v1/shift/handover?tenant_id=${selectedTenant.id}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          shift_summary: handoverSummary,
+          pending_alerts_count: Number(handoverPendingAlerts)
+        })
+      });
+      if (res.ok) {
+        setHandoverSummary('');
+        setHandoverPendingAlerts(0);
+        setShowHandoverModal(false);
+        alert("Passagem de bastão registrada com sucesso! O próximo operador verá o modal ao logar.");
+      } else {
+        const errText = await res.text();
+        alert(`Erro ao salvar handover: ${errText}`);
+      }
+    } catch (err) {
+      console.error("Failed to submit handover:", err);
+    } finally {
+      setIsSubmittingHandover(false);
+    }
+  };
+
+  const handleAckHandover = async () => {
+    if (!token || !selectedTenant || !activeHandover) return;
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/v1/shift/handover/ack?tenant_id=${selectedTenant.id}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          handover_id: activeHandover.id
+        })
+      });
+      if (res.ok) {
+        setActiveHandover(null);
+      } else {
+        const errText = await res.text();
+        alert(`Erro ao aceitar handover: ${errText}`);
+      }
+    } catch (err) {
+      console.error("Failed to ack handover:", err);
+    }
+  };
+
   // Fetch Vault secrets metadata for admin view
   useEffect(() => {
     if (!token || !selectedTenant || selectedIntegrationTool !== 'vault_admin') return;
@@ -1326,6 +1418,17 @@ export default function CockpitPage() {
             </button>
           )}
 
+          {/* Shift Handover Pass button */}
+          {user?.role !== 'viewer' && (
+            <button
+              onClick={() => setShowHandoverModal(true)}
+              className="flex items-center gap-2 px-3 py-1 rounded-lg bg-rose-600/20 hover:bg-rose-600/30 border border-rose-500/35 text-rose-300 text-xs font-bold transition-all uppercase tracking-wider"
+            >
+              <Clock className="w-3.5 h-3.5" />
+              <span>Passar Turno</span>
+            </button>
+          )}
+
           {/* SLA PDF Report Downloader (Hidden for viewers) */}
           {user?.role !== 'viewer' && (
             <button
@@ -1651,6 +1754,19 @@ export default function CockpitPage() {
               <Network className="w-3.5 h-3.5" />
               Topologia CMDB & Ativos
             </button>
+            {user?.role === 'admin' && (
+              <button
+                onClick={() => setCockpitTab('settings')}
+                className={`pb-2 px-3 text-xs uppercase tracking-wider font-bold border-b-2 transition-all flex items-center gap-1.5 cursor-pointer ${
+                  cockpitTab === 'settings'
+                    ? 'border-violet-500 text-white'
+                    : 'border-transparent text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <Settings className="w-3.5 h-3.5" />
+                Configuração MSP
+              </button>
+            )}
           </div>
 
           {/* Search and Filters */}
@@ -1819,7 +1935,7 @@ export default function CockpitPage() {
               )}
             </div>
           </div>
-          ) : (
+          ) : cockpitTab === 'topology' ? (
             // Interactive Topology CMDB view
             <div className="glass-card rounded-xl overflow-hidden flex flex-col border border-white/5 p-6 bg-[#040812]">
               <div className="flex justify-between items-center mb-6">
@@ -1921,6 +2037,112 @@ export default function CockpitPage() {
 
                 <div className="absolute bottom-4 left-6 text-[10px] text-slate-500 bg-black/60 border border-white/5 px-2.5 py-1 rounded-md">
                   💡 <em>Dica: Clique nos nós da topologia para filtrar os incidentes daquele ativo!</em>
+                </div>
+              </div>
+            </div>
+          ) : (
+            // White-label Configuration Panel
+            <div className="glass-card rounded-xl overflow-hidden flex flex-col border border-white/5 p-6 bg-surface/30">
+              <div className="flex flex-col gap-1 border-b border-white/5 pb-4 mb-6">
+                <h4 className="text-sm font-extrabold text-slate-200 uppercase tracking-wider">Painel de Configuração de White-Label & Temas</h4>
+                <p className="text-[10px] text-slate-500 uppercase tracking-wider font-semibold">Customize a identidade visual do cockpit para seu inquilino (Parceria IT Fácil MSP)</p>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-8 text-xs text-slate-300">
+                <div className="flex flex-col gap-4">
+                  <div className="flex flex-col gap-2">
+                    <label className="font-bold text-slate-400 uppercase tracking-wider text-[9px]">URL do Logotipo customizado (SVG/PNG)</label>
+                    <input
+                      type="text"
+                      className="bg-slate-950 border border-white/10 rounded-lg p-3 text-xs text-white focus:outline-none focus:border-violet-500 font-mono"
+                      value={selectedTenant?.logo_url || ''}
+                      onChange={(e) => {
+                        if (selectedTenant) {
+                          const updated = [...tenants];
+                          const t = updated.find(x => x.id === selectedTenant.id);
+                          if (t) t.logo_url = e.target.value;
+                          setTenants(updated);
+                        }
+                      }}
+                      placeholder="https://exemplo.com/logo.png"
+                    />
+                  </div>
+
+                  <div className="flex flex-col gap-2">
+                    <label className="font-bold text-slate-400 uppercase tracking-wider text-[9px]">Cor Primária do Tema (Hexadecimal)</label>
+                    <div className="flex gap-3 items-center">
+                      <input
+                        type="color"
+                        className="bg-transparent border-0 w-10 h-10 cursor-pointer"
+                        value={selectedTenant?.primary_color || '#8b5cf6'}
+                        onChange={(e) => {
+                          if (selectedTenant) {
+                            const updated = [...tenants];
+                            const t = updated.find(x => x.id === selectedTenant.id);
+                            if (t) {
+                              t.primary_color = e.target.value;
+                              document.documentElement.style.setProperty('--primary-color', e.target.value);
+                            }
+                            setTenants(updated);
+                          }
+                        }}
+                      />
+                      <input
+                        type="text"
+                        className="bg-slate-950 border border-white/10 rounded-lg p-3 text-xs text-white focus:outline-none focus:border-violet-500 font-mono w-28 text-center"
+                        value={selectedTenant?.primary_color || '#8b5cf6'}
+                        onChange={(e) => {
+                          if (selectedTenant) {
+                            const updated = [...tenants];
+                            const t = updated.find(x => x.id === selectedTenant.id);
+                            if (t) {
+                              t.primary_color = e.target.value;
+                              document.documentElement.style.setProperty('--primary-color', e.target.value);
+                            }
+                            setTenants(updated);
+                          }
+                        }}
+                      />
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={async () => {
+                      if (!selectedTenant || !token) return;
+                      try {
+                        const res = await fetch(`${API_BASE_URL}/api/v1/tenants/update_style`, {
+                          method: 'POST',
+                          headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${token}`
+                          },
+                          body: JSON.stringify({
+                            tenant_id: selectedTenant.id,
+                            logo_url: selectedTenant.logo_url,
+                            primary_color: selectedTenant.primary_color
+                          })
+                        });
+                        if (res.ok) {
+                          alert("Identidade visual White-Label atualizada com sucesso!");
+                        } else {
+                          const txt = await res.text();
+                          alert("Falha ao salvar: " + txt);
+                        }
+                      } catch (err) {
+                        alert("Erro ao conectar à API: " + err);
+                      }
+                    }}
+                    className="py-3 px-6 rounded-xl bg-violet-600 hover:bg-violet-500 text-slate-950 font-extrabold uppercase tracking-wider text-[10px] transition-all cursor-pointer w-fit"
+                  >
+                    Salvar Identidade Visual
+                  </button>
+                </div>
+
+                <div className="p-4 rounded-xl bg-slate-950/40 border border-white/5 flex flex-col gap-3 justify-center">
+                  <h5 className="font-extrabold uppercase text-[10px] text-violet-400">💡 Demonstração White-Label</h5>
+                  <p className="text-slate-400 leading-relaxed">
+                    Nossa plataforma permite a customização de cores, marcas e logos de forma isolada por domínio. Ao alterar o logotipo e cor acima, os estilos são gravados no banco de dados e aplicados em tempo de execução ao cabeçalho e menus sempre que este cliente estiver selecionado.
+                  </p>
                 </div>
               </div>
             </div>
@@ -2362,6 +2584,90 @@ export default function CockpitPage() {
 
       </main>
 
+      {/* 2.5. Active Shift Handover Acknowledge Overlay (Blocking) */}
+      {activeHandover && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-md p-4">
+          <div className="glass-card w-full max-w-lg rounded-2xl p-6 border border-rose-500/25 shadow-2xl flex flex-col gap-4 text-center">
+            <div className="flex flex-col items-center gap-2">
+              <Clock className="w-12 h-12 text-rose-400 animate-pulse" />
+              <h3 className="text-lg font-extrabold uppercase tracking-wider text-rose-400">Passagem de Bastão (Shift Handover)</h3>
+              <p className="text-xs text-slate-400">Um operador de turno anterior registrou o encerramento das atividades. Você deve revisar as notas de bordo para prosseguir.</p>
+            </div>
+
+            <div className="p-4 rounded-xl bg-slate-900/60 border border-white/5 text-left text-xs text-slate-300 flex flex-col gap-2.5 max-h-60 overflow-y-auto">
+              <div>
+                <span className="text-[9px] uppercase font-bold text-slate-500 block">Operador de Saída</span>
+                <span className="font-bold text-white">{activeHandover.outgoing_operator_name}</span>
+              </div>
+              <div>
+                <span className="text-[9px] uppercase font-bold text-slate-500 block">Horário de Saída</span>
+                <span className="font-mono text-slate-400">{new Date(activeHandover.created_at).toLocaleString()}</span>
+              </div>
+              <div>
+                <span className="text-[9px] uppercase font-bold text-slate-500 block">Incidentes Críticos Pendentes</span>
+                <span className="font-extrabold text-rose-400">{activeHandover.pending_alerts_count} incidentes</span>
+              </div>
+              <div className="border-t border-white/5 pt-2">
+                <span className="text-[9px] uppercase font-bold text-slate-500 block mb-1">Resumo das Atividades / Diário de Bordo</span>
+                <p className="whitespace-pre-wrap leading-relaxed italic">"{activeHandover.shift_summary}"</p>
+              </div>
+            </div>
+
+            <button
+              onClick={handleAckHandover}
+              className="w-full py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-extrabold uppercase tracking-wider text-xs transition-all shadow-lg hover:shadow-emerald-500/10 cursor-pointer"
+            >
+              Confirmar Leitura e Assumir Turno
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* 2.6. Create Shift Handover Modal */}
+      {showHandoverModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
+          <div className="glass-card w-full max-w-md rounded-2xl p-6 border border-white/10 shadow-2xl flex flex-col gap-4">
+            <div className="flex justify-between items-center border-b border-white/5 pb-3">
+              <h3 className="text-sm font-extrabold uppercase tracking-wider">Passar Turno (Shift Handover)</h3>
+              <button onClick={() => setShowHandoverModal(false)} className="text-slate-500 hover:text-slate-300 text-xs">Fechar</button>
+            </div>
+
+            <form onSubmit={handleSubmitHandover} className="flex flex-col gap-4 text-xs">
+              <div className="flex flex-col gap-1.5">
+                <label className="text-[9px] uppercase font-bold tracking-wider text-slate-400">Resumo das Atividades / Notas de Bordo</label>
+                <textarea
+                  required
+                  value={handoverSummary}
+                  onChange={(e) => setHandoverSummary(e.target.value)}
+                  placeholder="Descreva o andamento do turno, manutenções em execução ou incidentes críticos herdados..."
+                  className="bg-slate-950 border border-white/10 rounded-lg p-3 text-xs text-white focus:outline-none focus:border-violet-500 h-28 resize-none"
+                />
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <label className="text-[9px] uppercase font-bold tracking-wider text-slate-400">Quantidade de Alertas Críticos Pendentes</label>
+                <input
+                  type="number"
+                  min="0"
+                  value={handoverPendingAlerts}
+                  onChange={(e) => setHandoverPendingAlerts(Number(e.target.value))}
+                  className="bg-slate-950 border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-violet-500"
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={isSubmittingHandover}
+                className="w-full py-3 rounded-xl bg-violet-600 hover:bg-violet-500 text-white font-extrabold uppercase tracking-wider text-xs transition-all cursor-pointer flex items-center justify-center gap-2"
+              >
+                {isSubmittingHandover && <RefreshCw className="w-4.5 h-4.5 animate-spin" />}
+                Registrar Passagem de Turno
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* 3. Didactic Connections / Integrations Modal */}
       {showIntegrationsModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4 animate-fadeIn">
@@ -2403,12 +2709,13 @@ export default function CockpitPage() {
                       setSelectedIntegrationTool(tool.id);
                       setSaveStatus({ status: 'idle' });
                     }}
-                    className={`px-3 py-2.5 rounded-lg text-left text-xs font-bold transition-all flex items-center gap-2 ${
+                    className={`w-full px-3 py-2.5 rounded-lg text-left text-xs font-bold transition-all flex items-center gap-2 ${
                       selectedIntegrationTool === tool.id ? 'bg-white/5 text-white border-l-2 border-cyan-400' : 'text-slate-400 hover:bg-white/[0.02] hover:text-slate-200'
                     }`}
                   >
                     <span className={`w-2 h-2 rounded-full ${selectedIntegrationTool === tool.id ? 'bg-cyan-400' : 'bg-slate-600'}`}></span>
-                    {tool.name}
+                    <span>{tool.name}</span>
+                    <span className="ml-auto w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" title="Conexão Saudável (Watchdog Online)"></span>
                   </button>
                 ))}
 

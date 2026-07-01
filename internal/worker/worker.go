@@ -15,6 +15,8 @@ import (
 	"noc-api/internal/model"
 	"noc-api/internal/repository"
 
+	"strings"
+
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -112,6 +114,18 @@ func (wp *WorkerPool) worker(ctx context.Context, id int) {
 func (wp *WorkerPool) processEvent(ctx context.Context, event model.UnifiedIncident) error {
 	// Construct RLS context for this tenant
 	tenantCtx := db.WithTenantID(ctx, event.TenantID)
+
+	// 0. Dynamic Ingestion Normalization: lookup mapping rules in PostgreSQL
+	var severityOverride string
+	queryRule := `
+		SELECT normalized_value 
+		FROM tenant_mapping_rules 
+		WHERE tenant_id = $1 AND source_tool = $2 AND source_field = 'severity' AND source_value = $3
+	`
+	err := wp.pgPool.QueryRow(tenantCtx, queryRule, event.TenantID, string(event.Source), string(event.Severity)).Scan(&severityOverride)
+	if err == nil && severityOverride != "" {
+		event.Severity = model.AlertSeverity(severityOverride)
+	}
 
 	var deviceIDStr string
 	if event.DeviceID != nil {
@@ -438,5 +452,73 @@ func (wp *WorkerPool) triggerSOARPlaybooks(ctx context.Context, alert *model.Ale
 				wp.publishToPubSub(ctxBg, alert.TenantID, &a)
 			}
 		}(runbookID, name, script, vaultKeyHost)
+	}
+}
+
+// StartWatchdog initializes the background heartbeat ticker checker.
+func (wp *WorkerPool) StartWatchdog(ctx context.Context) {
+	ticker := time.NewTicker(30 * time.Second)
+	go func() {
+		for {
+			select {
+			case <-wp.stopChan:
+				ticker.Stop()
+				return
+			case <-ctx.Done():
+				ticker.Stop()
+				return
+			case <-ticker.C:
+				wp.checkConnectorsHealth(ctx)
+			}
+		}
+	}()
+}
+
+func (wp *WorkerPool) checkConnectorsHealth(ctx context.Context) {
+	keys, err := wp.redisClient.Keys(ctx, "heartbeat:connector:*").Result()
+	if err != nil {
+		return
+	}
+
+	currentTime := time.Now().Unix()
+	const limitSeconds = 600 // 10 minutes without telemetry signal
+
+	for _, key := range keys {
+		lastSeenStr, err := wp.redisClient.Get(ctx, key).Result()
+		if err != nil {
+			continue
+		}
+		var lastSeen int64
+		_, _ = fmt.Sscanf(lastSeenStr, "%d", &lastSeen)
+
+		timeElapsed := currentTime - lastSeen
+		if timeElapsed > limitSeconds {
+			parts := strings.Split(key, ":")
+			if len(parts) < 4 {
+				continue
+			}
+			tenantIDStr := parts[2]
+			connectorName := parts[3]
+
+			tenantID, err := uuid.Parse(tenantIDStr)
+			if err != nil {
+				continue
+			}
+
+			summary := fmt.Sprintf("Watchdog Heartbeat: Perda de Telemetria / Falha de Comunicação com conector %s há %ds", connectorName, timeElapsed)
+
+			incident := model.UnifiedIncident{
+				ID:        uuid.New(),
+				TenantID:  tenantID,
+				Source:    model.SourceSystem,
+				EventType: "telemetry_loss_" + connectorName,
+				Severity:  model.SeverityCritical,
+				Title:     summary,
+				Timestamp: time.Now(),
+				Host:      "watchdog",
+			}
+
+			_ = wp.processEvent(ctx, incident)
+		}
 	}
 }

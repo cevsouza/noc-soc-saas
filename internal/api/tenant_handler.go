@@ -149,3 +149,35 @@ func HandleGetPublicTenants(pgPool *pgxpool.Pool) http.HandlerFunc {
 		_ = json.NewEncoder(w).Encode(list)
 	}
 }
+
+type UpdateTenantStyleRequest struct {
+	TenantID     uuid.UUID `json:"tenant_id"`
+	LogoURL      string    `json:"logo_url"`
+	PrimaryColor string    `json:"primary_color"`
+}
+
+// HandleUpdateTenantStyle updates logo URL and primary brand color for a tenant.
+func HandleUpdateTenantStyle(pgPool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req UpdateTenantStyleRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid request payload", http.StatusBadRequest)
+			return
+		}
+
+		ctx := r.Context()
+		query := `
+			UPDATE tenants 
+			SET logo_url = $1, primary_color = $2, updated_at = NOW() 
+			WHERE id = $3
+		`
+		_, err := pgPool.Exec(ctx, query, req.LogoURL, req.PrimaryColor, req.TenantID)
+		if err != nil {
+			http.Error(w, "Failed to update tenant style: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"success","message":"Tenant visual style updated successfully"}`))
+	}
+}

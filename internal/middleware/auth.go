@@ -289,3 +289,40 @@ func ResolveTenantFromToken(token string, jwtSecret []byte, pgPool *pgxpool.Pool
 	return uuid.Nil, errors.New("invalid token")
 }
 
+// RateLimiter protects endpoints from DOS/brute-force by applying a per-tenant limit on Redis.
+func RateLimiter(redisClient *redis.Client, limit int) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			tenantID, ok := db.TenantIDFromContext(r.Context())
+			if !ok {
+				// If no tenant is resolved yet, skip rate limiting
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			ctx := r.Context()
+			currentMinute := time.Now().Unix() / 60
+			key := fmt.Sprintf("ratelimit:tenant:%s:%d", tenantID.String(), currentMinute)
+
+			// Multi/Pipeline increments and sets TTL of 60s
+			pipe := redisClient.Pipeline()
+			incr := pipe.Incr(ctx, key)
+			pipe.Expire(ctx, key, 60*time.Second)
+
+			_, err := pipe.Exec(ctx)
+			if err != nil {
+				// Fails open if Redis has issues (avoid blocking critical telemetry)
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			if incr.Val() > int64(limit) {
+				http.Error(w, "Too Many Requests: Rate limit exceeded for this tenant (Max 500/min)", http.StatusTooManyRequests)
+				return
+			}
+
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+

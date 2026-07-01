@@ -151,6 +151,7 @@ func main() {
 	// 4. Initialize & Start Concurrent Worker Pool
 	wp := worker.NewWorkerPool(pgPool, redisClient, numWorkers)
 	wp.Start(ctx)
+	wp.StartWatchdog(ctx)
 	defer wp.Stop()
 
 	// 5. Initialize & Start WebSocket Infrastructure (SRE Multiplexed Pattern)
@@ -310,31 +311,31 @@ func main() {
 		_, _ = w.Write([]byte(`{"status":"healthy","uptime":"online"}`))
 	})
 
-	// High-Performance Ingestion endpoint (protected by API Key auth middleware)
+	// High-Performance Ingestion endpoint (protected by API Key auth middleware & rate limiter)
 	ingestHandler := api.HandleIngest(pgPool, redisClient)
-	protectedIngest := middleware.APIKeyAuth(pgPool, redisClient, jwtSecret)(ingestHandler)
+	protectedIngest := middleware.APIKeyAuth(pgPool, redisClient, jwtSecret)(middleware.RateLimiter(redisClient, 500)(ingestHandler))
 	mux.Handle("/api/v1/ingest", protectedIngest)
 
 	// High-Performance Prometheus Alertmanager & Wazuh Webhook Ingestion
 	promHandler := api.HandlePrometheusIngest(pgPool, redisClient)
-	protectedProm := middleware.APIKeyAuth(pgPool, redisClient, jwtSecret)(promHandler)
+	protectedProm := middleware.APIKeyAuth(pgPool, redisClient, jwtSecret)(middleware.RateLimiter(redisClient, 500)(promHandler))
 	mux.Handle("/api/v1/ingest/prometheus", protectedProm)
 
 	wazuhHandler := api.HandleWazuhIngest(pgPool, redisClient)
-	protectedWazuh := middleware.APIKeyAuth(pgPool, redisClient, jwtSecret)(wazuhHandler)
+	protectedWazuh := middleware.APIKeyAuth(pgPool, redisClient, jwtSecret)(middleware.RateLimiter(redisClient, 500)(wazuhHandler))
 	mux.Handle("/api/v1/ingest/wazuh", protectedWazuh)
 
 	// High-Performance Uptime Kuma, Grafana & Zabbix Webhook Ingestions
 	uptimekumaHandler := api.HandleUptimeKumaIngest(pgPool, redisClient)
-	protectedUptimeKuma := middleware.APIKeyAuth(pgPool, redisClient, jwtSecret)(uptimekumaHandler)
+	protectedUptimeKuma := middleware.APIKeyAuth(pgPool, redisClient, jwtSecret)(middleware.RateLimiter(redisClient, 500)(uptimekumaHandler))
 	mux.Handle("/api/v1/ingest/uptimekuma", protectedUptimeKuma)
 
 	grafanaHandler := api.HandleGrafanaIngest(pgPool, redisClient)
-	protectedGrafana := middleware.APIKeyAuth(pgPool, redisClient, jwtSecret)(grafanaHandler)
+	protectedGrafana := middleware.APIKeyAuth(pgPool, redisClient, jwtSecret)(middleware.RateLimiter(redisClient, 500)(grafanaHandler))
 	mux.Handle("/api/v1/ingest/grafana", protectedGrafana)
 
 	zabbixHandler := api.HandleZabbixIngest(pgPool, redisClient)
-	protectedZabbix := middleware.APIKeyAuth(pgPool, redisClient, jwtSecret)(zabbixHandler)
+	protectedZabbix := middleware.APIKeyAuth(pgPool, redisClient, jwtSecret)(middleware.RateLimiter(redisClient, 500)(zabbixHandler))
 	mux.Handle("/api/v1/ingest/zabbix", protectedZabbix)
 
 	// User authentication endpoints (unauthenticated)
@@ -342,6 +343,7 @@ func main() {
 	mux.Handle("/api/v1/auth/verify", api.HandleVerify(pgPool))
 	mux.Handle("/api/v1/auth/login", api.HandleLogin(pgPool, jwtSecret))
 	mux.Handle("/api/v1/public/tenants", api.HandleGetPublicTenants(pgPool))
+	mux.Handle("/api/v1/tenants/update_style", middleware.JWTAuth(jwtSecret)(api.HandleUpdateTenantStyle(pgPool)))
 
 	// Administrator endpoints (protected by JWT and Admin Role check)
 	protectedAdminUsers := middleware.JWTAuth(jwtSecret)(
@@ -455,6 +457,15 @@ func main() {
 	// ITSM Ticket Synchronization simulator endpoint
 	protectedITSMSync := middleware.JWTAuth(jwtSecret)(api.HandleSyncITSM(pgPool))
 	mux.Handle("/api/v1/itsm/sync", protectedITSMSync)
+
+	// Shift Handover Endpoints
+	protectedCreateHandover := middleware.JWTAuth(jwtSecret)(api.HandleCreateShiftHandover(pgPool))
+	protectedGetCurrentHandover := middleware.JWTAuth(jwtSecret)(api.HandleGetCurrentShiftHandover(pgPool))
+	protectedAckHandover := middleware.JWTAuth(jwtSecret)(api.HandleAcknowledgeShiftHandover(pgPool))
+	
+	mux.Handle("/api/v1/shift/handover", protectedCreateHandover)
+	mux.Handle("/api/v1/shift/handover/current", protectedGetCurrentHandover)
+	mux.Handle("/api/v1/shift/handover/ack", protectedAckHandover)
 
 	// Real-Time Operator WebSocket Subscription endpoint (Multiplexed, resolved by JWT/APIKey/UUID)
 	mux.Handle("/api/v1/ws", ws.ServeWS(hub, pgPool, jwtSecret))
