@@ -24,6 +24,9 @@ DB_PASSWORD = os.environ.get("DB_PASSWORD", "postgres")
 DB_NAME = os.environ.get("DB_NAME", "noc")
 
 def get_db_connection():
+    db_url = os.environ.get("DATABASE_URL")
+    if db_url:
+        return psycopg2.connect(db_url, cursor_factory=RealDictCursor)
     return psycopg2.connect(
         host=DB_HOST,
         port=DB_PORT,
