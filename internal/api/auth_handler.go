@@ -1,7 +1,6 @@
 package api
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -13,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"noc-api/internal/db"
 	"noc-api/internal/middleware"
 	"noc-api/internal/model"
 	"noc-api/internal/security"
