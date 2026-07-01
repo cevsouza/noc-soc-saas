@@ -35,9 +35,14 @@ func NewSelfHealingExecutor(pgPool *pgxpool.Pool) *SelfHealingExecutor {
 		pgPool: pgPool,
 		repo:   repository.NewPostgresSelfHealingRepository(),
 		scripts: map[string]string{
-			"cpu":          "./workers/ssh_remediation.py",
-			"memory":       "./workers/ssh_remediation.py",
-			"network_link": "./workers/ssh_remediation.py",
+			"cpu":               "./workers/ssh_remediation.py",
+			"memory":            "./workers/ssh_remediation.py",
+			"network_link":      "./workers/ssh_remediation.py",
+			"database_log_full": "./scripts/playbooks/noc_sql_self_healing.py",
+			"db_space":          "./scripts/playbooks/noc_sql_self_healing.py",
+			"app_degradation":   "./scripts/playbooks/noc_app_self_healing.py",
+			"service_failed":    "./scripts/playbooks/noc_app_self_healing.py",
+			"security_threat":   "./scripts/playbooks/soc_firewall_endpoint_soar.py",
 		},
 	}
 }

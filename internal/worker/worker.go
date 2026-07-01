@@ -1,10 +1,12 @@
 package worker
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log"
+	"os/exec"
 	"sync"
 	"time"
 
@@ -80,7 +82,7 @@ func (wp *WorkerPool) worker(ctx context.Context, id int) {
 		default:
 			// BRPOP: Blocking POP from the right (LPUSH put it on the left)
 			// Timeout is set to 2 seconds to allow regular checking of stopChan
-			result, err := wp.redisClient.BRPop(ctx, 2*time.Second, api.AlertsQueueKey).Result()
+			result, err := wp.redisClient.BRPop(ctx, 2*time.Second, api.AlertsNormalizedQueueKey).Result()
 			if err != nil {
 				if err == redis.Nil {
 					// Queue empty, continue polling
@@ -419,7 +421,27 @@ func (wp *WorkerPool) triggerSOARPlaybooks(ctx context.Context, alert *model.Ale
 				}
 				return nil
 			})
-			
+
+			if execStatus == "falha" {
+				// Fallback ITSM escalation: spawn the Python itsm_jira_fallback.py script
+				log.Printf("[SOAR Fallback] Execution failed. Escalating to Jira Service Management...")
+				fallbackCmd := exec.Command("python", "./scripts/playbooks/itsm_jira_fallback.py",
+					"--summary", fmt.Sprintf("SOAR Automação Falhou: %s no ativo %s", alert.Summary, alert.Host),
+					"--details", fmt.Sprintf("Logs:\n%s", output),
+					"--severity", "critical",
+					"--group", "Escalation N3 Operations",
+				)
+				var fallbackOut bytes.Buffer
+				fallbackCmd.Stdout = &fallbackOut
+				fallbackCmd.Stderr = &fallbackOut
+				errFallback := fallbackCmd.Run()
+				if errFallback != nil {
+					log.Printf("[SOAR Fallback Error] Failed to run ITSM fallback: %v. Output: %s", errFallback, fallbackOut.String())
+				} else {
+					log.Printf("[SOAR Fallback Success] JSM ticket opened. Output: %s", fallbackOut.String())
+				}
+			}
+
 			// Refresh alert UI via websocket
 			var a model.Alert
 			var pBytes []byte
@@ -521,4 +543,127 @@ func (wp *WorkerPool) checkConnectorsHealth(ctx context.Context) {
 			_ = wp.processEvent(ctx, incident)
 		}
 	}
+}
+
+// StartMappingEngine runs a background thread that translates raw messages into normalized UnifiedIncident structures.
+func (wp *WorkerPool) StartMappingEngine(ctx context.Context) {
+	wp.wg.Add(1)
+	go func() {
+		defer wp.wg.Done()
+		log.Println("[Mapping Engine] Ingestion Data Mapping Consumer started...")
+
+		for {
+			select {
+			case <-wp.stopChan:
+				return
+			case <-ctx.Done():
+				return
+			default:
+				// BRPOP raw events
+				result, err := wp.redisClient.BRPop(ctx, 2*time.Second, api.AlertsRawQueueKey).Result()
+				if err != nil {
+					if err == redis.Nil {
+						continue
+					}
+					log.Printf("[Mapping Engine Error] BRPOP failed: %v", err)
+					time.Sleep(1 * time.Second)
+					continue
+				}
+
+				if len(result) < 2 {
+					continue
+				}
+
+				rawBytes := []byte(result[1])
+				var rawMsg api.RawWebhookMessage
+				if err := json.Unmarshal(rawBytes, &rawMsg); err != nil {
+					// Parse failure: write to DLQ
+					log.Printf("[Mapping Engine] Malformed JSON raw message, writing to DLQ")
+					_ = wp.redisClient.LPush(ctx, api.AlertsDLQQueueKey, rawBytes).Err()
+					continue
+				}
+
+				// Map to universal incident schema based on integration type
+				incident, err := wp.mapToUniversalSchema(ctx, rawMsg)
+				if err != nil {
+					// Mapping failure: write to DLQ
+					log.Printf("[Mapping Engine] Mapping failed: %v. Writing to DLQ.", err)
+					_ = wp.redisClient.LPush(ctx, api.AlertsDLQQueueKey, rawBytes).Err()
+					continue
+				}
+
+				// Push mapped incident to alerts.normalized queue
+				incidentBytes, _ := json.Marshal(incident)
+				err = wp.redisClient.LPush(ctx, api.AlertsNormalizedQueueKey, incidentBytes).Err()
+				if err != nil {
+					log.Printf("[Mapping Engine] Failed to push normalized event: %v", err)
+				}
+			}
+		}
+	}()
+}
+
+func (wp *WorkerPool) mapToUniversalSchema(ctx context.Context, rawMsg api.RawWebhookMessage) (model.UnifiedIncident, error) {
+	payloadBytes, err := json.Marshal(rawMsg.Payload)
+	if err != nil {
+		return model.UnifiedIncident{}, err
+	}
+
+	var incident model.UnifiedIncident
+
+	switch strings.ToLower(rawMsg.IntegrationType) {
+	case "prometheus":
+		var pPayload api.AlertmanagerPayload
+		if err := json.Unmarshal(payloadBytes, &pPayload); err == nil && len(pPayload.Alerts) > 0 {
+			incident = api.MapPrometheusToUnified(pPayload.Alerts[0], rawMsg.TenantID)
+		} else {
+			var alert api.AlertmanagerAlert
+			if err := json.Unmarshal(payloadBytes, &alert); err != nil {
+				return model.UnifiedIncident{}, err
+			}
+			incident = api.MapPrometheusToUnified(alert, rawMsg.TenantID)
+		}
+	case "wazuh":
+		var wPayload api.WazuhAlertPayload
+		if err := json.Unmarshal(payloadBytes, &wPayload); err != nil {
+			return model.UnifiedIncident{}, err
+		}
+		incident = api.MapWazuhToUnified(wPayload, rawMsg.TenantID)
+	case "uptimekuma":
+		var uPayload api.UptimeKumaPayload
+		if err := json.Unmarshal(payloadBytes, &uPayload); err != nil {
+			return model.UnifiedIncident{}, err
+		}
+		incident = api.MapUptimeKumaToUnified(uPayload, rawMsg.TenantID)
+	case "grafana":
+		var gPayload api.AlertmanagerPayload
+		if err := json.Unmarshal(payloadBytes, &gPayload); err == nil && len(gPayload.Alerts) > 0 {
+			incident = api.MapGrafanaToUnified(gPayload.Alerts[0], rawMsg.TenantID)
+		} else {
+			var alert api.AlertmanagerAlert
+			if err := json.Unmarshal(payloadBytes, &alert); err != nil {
+				return model.UnifiedIncident{}, err
+			}
+			incident = api.MapGrafanaToUnified(alert, rawMsg.TenantID)
+		}
+	case "zabbix":
+		var zPayload api.ZabbixPayload
+		if err := json.Unmarshal(payloadBytes, &zPayload); err != nil {
+			return model.UnifiedIncident{}, err
+		}
+		incident = api.MapZabbixToUnified(zPayload, rawMsg.TenantID)
+	default:
+		incident = model.UnifiedIncident{
+			ID:        uuid.New(),
+			TenantID:  rawMsg.TenantID,
+			Source:    model.IncidentSource(rawMsg.IntegrationType),
+			EventType: "generic_webhook_event",
+			Severity:  model.SeverityInfo,
+			Title:     "Generic Ingested Alert",
+			Timestamp: time.Now(),
+			Payload:   rawMsg.Payload,
+		}
+	}
+
+	return incident, nil
 }

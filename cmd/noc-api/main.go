@@ -152,6 +152,7 @@ func main() {
 	wp := worker.NewWorkerPool(pgPool, redisClient, numWorkers)
 	wp.Start(ctx)
 	wp.StartWatchdog(ctx)
+	wp.StartMappingEngine(ctx)
 	defer wp.Stop()
 
 	// 5. Initialize & Start WebSocket Infrastructure (SRE Multiplexed Pattern)
@@ -337,6 +338,11 @@ func main() {
 	zabbixHandler := api.HandleZabbixIngest(pgPool, redisClient)
 	protectedZabbix := middleware.APIKeyAuth(pgPool, redisClient, jwtSecret)(middleware.RateLimiter(redisClient, 500)(zabbixHandler))
 	mux.Handle("/api/v1/ingest/zabbix", protectedZabbix)
+
+	// Ingestion webhook endpoint (POST /api/v1/webhook/{integration_type}/{tenant_id})
+	webhookHandler := api.HandleGenericWebhook(pgPool, redisClient)
+	protectedWebhook := middleware.RateLimiter(redisClient, 500)(webhookHandler)
+	mux.Handle("/api/v1/webhook/", protectedWebhook)
 
 	// User authentication endpoints (unauthenticated)
 	mux.Handle("/api/v1/auth/register", api.HandleRegister(pgPool))

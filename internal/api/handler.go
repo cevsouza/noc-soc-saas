@@ -85,7 +85,76 @@ type WazuhAlertPayload struct {
 	Id       string                 `json:"id"` // optional
 }
 
-const AlertsQueueKey = "noc:queue:alerts"
+type RawWebhookMessage struct {
+	TenantID        uuid.UUID              `json:"tenant_id"`
+	IntegrationType string                 `json:"integration_type"`
+	Payload         map[string]interface{} `json:"payload"`
+}
+
+const (
+	AlertsQueueKey           = "noc:queue:alerts"
+	AlertsRawQueueKey        = "noc:queue:alerts:raw"
+	AlertsNormalizedQueueKey = "noc:queue:alerts:normalized"
+	AlertsDLQQueueKey        = "noc:queue:alerts:dlq"
+)
+
+// HandleGenericWebhook handles POST /api/v1/webhook/{integration_type}/{tenant_id}
+func HandleGenericWebhook(pgPool *pgxpool.Pool, redisClient *redis.Client) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		// Extract integration_type and tenant_id from path /api/v1/webhook/{type}/{tenant}
+		pathParts := strings.Split(r.URL.Path, "/")
+		if len(pathParts) < 6 {
+			http.Error(w, "Bad Request: Invalid webhook path format", http.StatusBadRequest)
+			return
+		}
+		integrationType := pathParts[4]
+		tenantIDStr := pathParts[5]
+
+		tenantID, err := uuid.Parse(tenantIDStr)
+		if err != nil {
+			http.Error(w, "Bad Request: Invalid tenant UUID", http.StatusBadRequest)
+			return
+		}
+
+		var payload map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			http.Error(w, "Bad Request: Invalid JSON body", http.StatusBadRequest)
+			return
+		}
+
+		rawMsg := RawWebhookMessage{
+			TenantID:        tenantID,
+			IntegrationType: integrationType,
+			Payload:         payload,
+		}
+
+		rawMsgBytes, err := json.Marshal(rawMsg)
+		if err != nil {
+			http.Error(w, "Internal Server Error: marshal failed", http.StatusInternalServerError)
+			return
+		}
+
+		// Register heartbeat in Redis
+		ctx := r.Context()
+		redisClient.Set(ctx, fmt.Sprintf("heartbeat:connector:%s:%s", tenantID.String(), integrationType), time.Now().Unix(), 24*time.Hour)
+
+		// Push to alerts.raw queue
+		err = redisClient.LPush(ctx, AlertsRawQueueKey, rawMsgBytes).Err()
+		if err != nil {
+			http.Error(w, "Internal Server Error: failed to queue raw alert", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{"status":"Accepted","message":"Raw event dispatched to alerts.raw queue"}`))
+	}
+}
 
 // HandleIngest handles generic alert ingestion
 func HandleIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) http.HandlerFunc {
@@ -203,7 +272,7 @@ func HandlePrometheusIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) htt
 		var eventBytesList [][]byte
 
 		for _, alert := range payload.Alerts {
-			incident := mapPrometheusToUnified(alert, tenantID)
+			incident := MapPrometheusToUnified(alert, tenantID)
 			incidentIDs = append(incidentIDs, incident.ID)
 
 			bytes, err := json.Marshal(incident)
@@ -266,7 +335,7 @@ func HandleWazuhIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) http.Han
 			return
 		}
 
-		incident := mapWazuhToUnified(payload, tenantID)
+		incident := MapWazuhToUnified(payload, tenantID)
 
 		eventBytes, err := json.Marshal(incident)
 		if err != nil {
@@ -291,7 +360,7 @@ func HandleWazuhIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) http.Han
 	}
 }
 
-func mapPrometheusToUnified(alert AlertmanagerAlert, tenantID uuid.UUID) model.UnifiedIncident {
+func MapPrometheusToUnified(alert AlertmanagerAlert, tenantID uuid.UUID) model.UnifiedIncident {
 	severity := model.SeverityInfo
 	if sevLabel, ok := alert.Labels["severity"]; ok {
 		switch strings.ToLower(sevLabel) {
@@ -342,7 +411,7 @@ func mapPrometheusToUnified(alert AlertmanagerAlert, tenantID uuid.UUID) model.U
 	}
 }
 
-func mapWazuhToUnified(alert WazuhAlertPayload, tenantID uuid.UUID) model.UnifiedIncident {
+func MapWazuhToUnified(alert WazuhAlertPayload, tenantID uuid.UUID) model.UnifiedIncident {
 	severity := model.SeverityInfo
 	level := alert.Rule.Level
 	if level >= 12 {
@@ -697,7 +766,7 @@ func HandleUptimeKumaIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) htt
 			return
 		}
 
-		incident := mapUptimeKumaToUnified(payload, tenantID)
+		incident := MapUptimeKumaToUnified(payload, tenantID)
 
 		eventBytes, err := json.Marshal(incident)
 		if err != nil {
@@ -754,7 +823,7 @@ func HandleGrafanaIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) http.H
 		var eventBytesList [][]byte
 
 		for _, alert := range payload.Alerts {
-			incident := mapGrafanaToUnified(alert, tenantID)
+			incident := MapGrafanaToUnified(alert, tenantID)
 			incidentIDs = append(incidentIDs, incident.ID)
 
 			bytes, err := json.Marshal(incident)
@@ -816,7 +885,7 @@ func HandleZabbixIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) http.Ha
 			return
 		}
 
-		incident := mapZabbixToUnified(payload, tenantID)
+		incident := MapZabbixToUnified(payload, tenantID)
 
 		eventBytes, err := json.Marshal(incident)
 		if err != nil {
@@ -841,7 +910,7 @@ func HandleZabbixIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) http.Ha
 	}
 }
 
-func mapUptimeKumaToUnified(payload UptimeKumaPayload, tenantID uuid.UUID) model.UnifiedIncident {
+func MapUptimeKumaToUnified(payload UptimeKumaPayload, tenantID uuid.UUID) model.UnifiedIncident {
 	severity := model.SeverityInfo
 	if payload.Heartbeat.Status == 0 {
 		severity = model.SeverityCritical
@@ -878,13 +947,13 @@ func mapUptimeKumaToUnified(payload UptimeKumaPayload, tenantID uuid.UUID) model
 	}
 }
 
-func mapGrafanaToUnified(alert AlertmanagerAlert, tenantID uuid.UUID) model.UnifiedIncident {
-	incident := mapPrometheusToUnified(alert, tenantID)
+func MapGrafanaToUnified(alert AlertmanagerAlert, tenantID uuid.UUID) model.UnifiedIncident {
+	incident := MapPrometheusToUnified(alert, tenantID)
 	incident.Source = model.SourceGrafana
 	return incident
 }
 
-func mapZabbixToUnified(payload ZabbixPayload, tenantID uuid.UUID) model.UnifiedIncident {
+func MapZabbixToUnified(payload ZabbixPayload, tenantID uuid.UUID) model.UnifiedIncident {
 	severity := model.SeverityInfo
 	switch strings.ToLower(payload.Severity) {
 	case "warning", "average":
