@@ -423,10 +423,14 @@ func (wp *WorkerPool) triggerSOARPlaybooks(ctx context.Context, alert *model.Ale
 			})
 
 			if execStatus == "falha" {
+				hostStr := "unknown_host"
+				if h, ok := alert.AIAnalysis["host"].(string); ok {
+					hostStr = h
+				}
 				// Fallback ITSM escalation: spawn the Python itsm_jira_fallback.py script
 				log.Printf("[SOAR Fallback] Execution failed. Escalating to Jira Service Management...")
 				fallbackCmd := exec.Command("python", "./scripts/playbooks/itsm_jira_fallback.py",
-					"--summary", fmt.Sprintf("SOAR Automação Falhou: %s no ativo %s", alert.Summary, alert.Host),
+					"--summary", fmt.Sprintf("SOAR Automação Falhou: %s no ativo %s", alert.Summary, hostStr),
 					"--details", fmt.Sprintf("Logs:\n%s", output),
 					"--severity", "critical",
 					"--group", "Escalation N3 Operations",
@@ -661,7 +665,7 @@ func (wp *WorkerPool) mapToUniversalSchema(ctx context.Context, rawMsg api.RawWe
 			Severity:  model.SeverityInfo,
 			Title:     "Generic Ingested Alert",
 			Timestamp: time.Now(),
-			Payload:   rawMsg.Payload,
+			RawPayload: rawMsg.Payload,
 		}
 	}
 
