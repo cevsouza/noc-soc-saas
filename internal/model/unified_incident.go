@@ -15,6 +15,7 @@ const (
 	SourceUptimeKuma IncidentSource = "uptimekuma"
 	SourceGrafana    IncidentSource = "grafana"
 	SourceZabbix     IncidentSource = "zabbix"
+	SourceSystem     IncidentSource = "system"
 )
 
 // UnifiedIncident is the normalized internal JSON structure used by the SaaS NOC/SOC engine.
