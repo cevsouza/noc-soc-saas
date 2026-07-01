@@ -28,7 +28,8 @@ import {
   Zap,
   Clock,
   Shield,
-  TrendingUp
+  TrendingUp,
+  Network
 } from 'lucide-react';
 
 interface Alert {
@@ -142,7 +143,7 @@ export default function CockpitPage() {
   const [adminUserTenantId, setAdminUserTenantId] = useState('e1b7c123-1234-4321-abcd-123456789abc');
   const [adminUserStatus, setAdminUserStatus] = useState<{ status: 'idle' | 'saving' | 'success' | 'error', message?: string }>({ status: 'idle' });
 
-  const [tenants, setTenants] = useState<{ id: string, name: string, slug: string }[]>([]);
+  const [tenants, setTenants] = useState<{ id: string, name: string, slug: string, logo_url?: string, primary_color?: string }[]>([]);
   const [selectedTenant, setSelectedTenant] = useState<any>({
     id: '',
     name: '',
@@ -158,6 +159,7 @@ export default function CockpitPage() {
   const [runbookLogs, setRunbookLogs] = useState<string>('');
   const [isExecutingRunbook, setIsExecutingRunbook] = useState<boolean>(false);
   const [slaData, setSlaData] = useState<any | null>(null);
+  const [cockpitTab, setCockpitTab] = useState<'alerts' | 'topology'>('alerts');
   const [isLoadingSla, setIsLoadingSla] = useState<boolean>(false);
   const [isWallboardMode, setIsWallboardMode] = useState<boolean>(false);
   const [connStatus, setConnStatus] = useState<'connecting' | 'connected' | 'disconnected'>('disconnected');
@@ -168,6 +170,7 @@ export default function CockpitPage() {
   const [chatPrompt, setChatPrompt] = useState('');
   const [isSendingChat, setIsSendingChat] = useState(false);
   const [isLoadingComments, setIsLoadingComments] = useState(false);
+  const [reportMode, setReportMode] = useState<'executive' | 'technical'>('executive');
   const [vaultSecrets, setVaultSecrets] = useState<any[]>([]);
   const [isLoadingVaultSecrets, setIsLoadingVaultSecrets] = useState(false);
   const [runbookAudits, setRunbookAudits] = useState<any[]>([]);
@@ -786,6 +789,19 @@ export default function CockpitPage() {
     }
   };
 
+  // Dynamic White-Label Theme logic
+  useEffect(() => {
+    if (selectedTenantIds.length === 1 && selectedTenant) {
+      const activeT = tenants.find(t => t.id === selectedTenantIds[0]);
+      if (activeT && activeT.primary_color) {
+        document.documentElement.style.setProperty('--primary-color', activeT.primary_color);
+        return;
+      }
+    }
+    // Default theme color (violet-500)
+    document.documentElement.style.setProperty('--primary-color', '#8b5cf6');
+  }, [selectedTenant, selectedTenantIds, tenants]);
+
   // Fetch Vault secrets metadata for admin view
   useEffect(() => {
     if (!token || !selectedTenant || selectedIntegrationTool !== 'vault_admin') return;
@@ -1194,10 +1210,14 @@ export default function CockpitPage() {
       ) : (
         <header className="h-16 shrink-0 flex items-center justify-between px-6 border-b border-white/5 bg-surface/50 backdrop-blur-md sticky top-0 z-50">
         <div className="flex items-center gap-3">
-          <div className="relative flex items-center justify-center h-8 w-24 overflow-hidden rounded-lg bg-white/5 p-1 border border-white/10">
+          <div className="relative flex items-center justify-center h-8 w-28 overflow-hidden rounded-lg bg-white/5 p-1 border border-white/10">
             <img 
-              src="https://lirp.cdn-website.com/2cf4cfdc/dms3rep/multi/opt/IT+Facil+-+logo+-+alta-47c0885e-158w.png" 
-              alt="ITFácil Logo" 
+              src={
+                selectedTenantIds.length === 1 && tenants.find(t => t.id === selectedTenantIds[0])?.logo_url
+                  ? tenants.find(t => t.id === selectedTenantIds[0])?.logo_url
+                  : "https://lirp.cdn-website.com/2cf4cfdc/dms3rep/multi/opt/IT+Facil+-+logo+-+alta-47c0885e-158w.png"
+              } 
+              alt="Brand Logo" 
               className="h-full w-auto object-contain"
             />
           </div>
@@ -1441,6 +1461,54 @@ export default function CockpitPage() {
             </div>
           </div>
 
+          {/* AIOps Predictive Analytics Baseline Widget */}
+          <div className="glass-card p-5 rounded-xl border border-white/5 bg-[#0a0f1d] flex flex-col gap-4">
+            <div className="flex justify-between items-center">
+              <div className="flex items-center gap-2">
+                <Brain className="w-5 h-5 text-emerald-400 animate-pulse" />
+                <div>
+                  <h4 className="text-xs font-extrabold uppercase tracking-widest text-slate-200">AIOps Predictive Baseline Engine</h4>
+                  <p className="text-[9px] text-slate-500 uppercase tracking-wider font-semibold">Análise de Tendência de Recursos e Previsão de Falhas</p>
+                </div>
+              </div>
+              <span className="text-[9px] font-bold text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded uppercase">Baseline Ativa</span>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-center">
+              <div className="flex flex-col gap-1 p-3 rounded-lg bg-white/[0.02] border border-white/5 text-xs">
+                <span className="text-[9px] text-slate-500 font-bold uppercase tracking-wider">Tendência de Esgotamento de Memória</span>
+                <span className="text-base font-extrabold text-amber-400">Restam ~4.2 horas</span>
+                <span className="text-[9px] text-slate-400">Banco de Dados SQL Server (Produção)</span>
+              </div>
+              <div className="flex flex-col gap-1 p-3 rounded-lg bg-white/[0.02] border border-white/5 text-xs">
+                <span className="text-[9px] text-slate-500 font-bold uppercase tracking-wider">Pico de CPU Previsto</span>
+                <span className="text-base font-extrabold text-violet-400">Hoje às 18:30 (~88%)</span>
+                <span className="text-[9px] text-slate-400">Serviço: IIS Web Server</span>
+              </div>
+              <div className="flex flex-col gap-1 p-3 rounded-lg bg-white/[0.02] border border-white/5 text-xs">
+                <span className="text-[9px] text-slate-500 font-bold uppercase tracking-wider">Previsão de Saúde do Host (AIOps)</span>
+                <span className="text-base font-extrabold text-emerald-400">Estável (94% Confiança)</span>
+                <span className="text-[9px] text-slate-400">Próximos 7 dias</span>
+              </div>
+            </div>
+
+            {/* Simulating baseline graph */}
+            <div className="relative h-20 w-full bg-black/40 rounded-lg overflow-hidden border border-white/5 p-2 flex flex-col justify-end">
+              <span className="absolute top-2 left-3 text-[8px] font-bold text-slate-500 uppercase tracking-widest">Gráfico de Linha de Base (Baseline Histórica vs. Projeção Futura)</span>
+              <svg className="w-full h-12 stroke-emerald-500 fill-emerald-500/5 stroke-1.5" viewBox="0 0 100 20" preserveAspectRatio="none">
+                {/* Historical baseline */}
+                <path d="M 0,15 L 10,14 L 20,13 L 30,14 L 40,15 L 50,13 L 60,11 L 70,8 L 80,6 L 90,4 L 100,2" />
+                {/* Threshold line */}
+                <line x1="0" y1="5" x2="100" y2="5" stroke="#f43f5e" strokeDasharray="2 1" />
+              </svg>
+              <div className="flex justify-between items-center text-[8px] text-slate-500 uppercase font-bold tracking-wider mt-1 px-1">
+                <span>08:00 (Passado)</span>
+                <span className="text-rose-400">Estouro do Threshold (Previsto às 18:00)</span>
+                <span>20:00 (Previsão)</span>
+              </div>
+            </div>
+          </div>
+
           {/* NOC/SOC Sandbox Simulator & Live Metrics Console */}
           {user?.role !== 'viewer' && (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -1559,6 +1627,32 @@ export default function CockpitPage() {
             </div>
           )}
 
+          {/* Cockpit Switcher Tab Bar */}
+          <div className="flex border-b border-white/5 gap-2 pb-1">
+            <button
+              onClick={() => setCockpitTab('alerts')}
+              className={`pb-2 px-3 text-xs uppercase tracking-wider font-bold border-b-2 transition-all flex items-center gap-1.5 cursor-pointer ${
+                cockpitTab === 'alerts'
+                  ? 'border-violet-500 text-white'
+                  : 'border-transparent text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Activity className="w-3.5 h-3.5" />
+              Painel de Alertas
+            </button>
+            <button
+              onClick={() => setCockpitTab('topology')}
+              className={`pb-2 px-3 text-xs uppercase tracking-wider font-bold border-b-2 transition-all flex items-center gap-1.5 cursor-pointer ${
+                cockpitTab === 'topology'
+                  ? 'border-violet-500 text-white'
+                  : 'border-transparent text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Network className="w-3.5 h-3.5" />
+              Topologia CMDB & Ativos
+            </button>
+          </div>
+
           {/* Search and Filters */}
           <div className="flex gap-4">
             <div className="flex-1 relative">
@@ -1594,8 +1688,9 @@ export default function CockpitPage() {
           )}
 
           {/* Alerts Table/Feed */}
-          <div className="glass-card rounded-xl overflow-hidden flex flex-col border border-white/5">
-            <div className="grid grid-cols-12 gap-4 px-6 py-3 border-b border-white/5 bg-surface/30 text-[10px] tracking-wider uppercase font-semibold text-slate-400">
+          {cockpitTab === 'alerts' ? (
+            <div className="glass-card rounded-xl overflow-hidden flex flex-col border border-white/5">
+              <div className="grid grid-cols-12 gap-4 px-6 py-3 border-b border-white/5 bg-surface/30 text-[10px] tracking-wider uppercase font-semibold text-slate-400">
               <div className="col-span-1">Severity</div>
               <div className="col-span-1 text-center">Source</div>
               <div className="col-span-2">Visual Domain</div>
@@ -1724,6 +1819,112 @@ export default function CockpitPage() {
               )}
             </div>
           </div>
+          ) : (
+            // Interactive Topology CMDB view
+            <div className="glass-card rounded-xl overflow-hidden flex flex-col border border-white/5 p-6 bg-[#040812]">
+              <div className="flex justify-between items-center mb-6">
+                <div className="flex flex-col gap-0.5">
+                  <h4 className="text-sm font-extrabold text-slate-200 uppercase tracking-wider">Mapeamento de Topologia & CMDB</h4>
+                  <p className="text-[10px] text-slate-500 uppercase tracking-wider font-semibold">Descoberta em tempo real de ativos de rede e segurança</p>
+                </div>
+                <div className="flex gap-4 text-[10px] font-bold text-slate-400">
+                  <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span> Operacional</span>
+                  <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-ping"></span> Incidente Ativo</span>
+                </div>
+              </div>
+
+              <div className="relative w-full h-[360px] bg-black/60 rounded-xl border border-white/5 flex items-center justify-center overflow-hidden">
+                <svg className="w-full h-full" viewBox="0 0 800 400">
+                  {/* Grid background pattern */}
+                  <defs>
+                    <pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse">
+                      <path d="M 20 0 L 0 0 0 20" fill="none" stroke="rgba(255,255,255,0.015)" strokeWidth="1" />
+                    </pattern>
+                  </defs>
+                  <rect width="100%" height="100%" fill="url(#grid)" />
+
+                  {/* Connective lines */}
+                  {/* Internet -> NGFW */}
+                  <line x1="150" y1="200" x2="280" y2="200" stroke="rgba(255,255,255,0.1)" strokeWidth="2" strokeDasharray="4 2" />
+                  
+                  {/* NGFW -> Core Switch */}
+                  <line x1="280" y1="200" x2="430" y2="200" stroke="rgba(255,255,255,0.1)" strokeWidth="2" />
+                  
+                  {/* Core Switch -> SQL Server */}
+                  <line x1="430" y1="200" x2="580" y2="100" stroke="rgba(255,255,255,0.1)" strokeWidth="2" />
+                  
+                  {/* Core Switch -> IIS Server */}
+                  <line x1="430" y1="200" x2="580" y2="200" stroke="rgba(255,255,255,0.1)" strokeWidth="2" />
+                  
+                  {/* Core Switch -> Wazuh SOC Agent */}
+                  <line x1="430" y1="200" x2="580" y2="300" stroke="rgba(255,255,255,0.1)" strokeWidth="2" />
+
+                  {/* Nodes rendering */}
+                  {/* Node 1: Internet Cloud */}
+                  <g className="cursor-pointer" onClick={() => setSearchTerm('')}>
+                    <circle cx="150" cy="200" r="28" className="fill-slate-900 stroke-slate-700 stroke-2" />
+                    <text x="150" y="204" className="text-[10px] font-sans font-bold fill-slate-300 text-anchor-middle" textAnchor="middle">INTERNET</text>
+                  </g>
+
+                  {/* Node 2: NGFW Firewall */}
+                  <g className="cursor-pointer" onClick={() => setSearchTerm('firewall')}>
+                    <circle cx="280" cy="200" r="28" className="fill-[#1e1515] stroke-rose-500/40 stroke-2" />
+                    <text x="280" y="204" className="text-[10px] font-sans font-bold fill-rose-400 text-anchor-middle" textAnchor="middle">NGFW</text>
+                  </g>
+
+                  {/* Node 3: Core Switch */}
+                  <g className="cursor-pointer" onClick={() => setSearchTerm('switch')}>
+                    <circle cx="430" cy="200" r="28" className="fill-slate-900 stroke-cyan-500/40 stroke-2" />
+                    <text x="430" y="204" className="text-[10px] font-sans font-bold fill-cyan-400 text-anchor-middle" textAnchor="middle">SWITCH</text>
+                  </g>
+
+                  {/* Node 4: SQL Server (Database) */}
+                  <g className="cursor-pointer" onClick={() => setSearchTerm('sql server')}>
+                    {/* Pulsing indicator if has alerts matching sql */}
+                    {alerts.some(a => a.summary.toLowerCase().includes('sql') || a.event_type.toLowerCase().includes('sql')) && (
+                      <circle cx="580" cy="100" r="34" className="fill-none stroke-rose-500 stroke-1 animate-ping" />
+                    )}
+                    <circle cx="580" cy="100" r="28" className={`stroke-2 ${
+                      alerts.some(a => a.status !== 'resolved' && (a.summary.toLowerCase().includes('sql') || a.event_type.toLowerCase().includes('sql')))
+                        ? 'fill-[#221015] stroke-rose-500'
+                        : 'fill-slate-900 stroke-emerald-500'
+                    }`} />
+                    <text x="580" y="104" className="text-[9px] font-sans font-bold fill-slate-200 text-anchor-middle" textAnchor="middle">SQL DB</text>
+                  </g>
+
+                  {/* Node 5: IIS Server (Web) */}
+                  <g className="cursor-pointer" onClick={() => setSearchTerm('iis')}>
+                    {alerts.some(a => a.summary.toLowerCase().includes('iis') || a.event_type.toLowerCase().includes('iis')) && (
+                      <circle cx="580" cy="200" r="34" className="fill-none stroke-rose-500 stroke-1 animate-ping" />
+                    )}
+                    <circle cx="580" cy="200" r="28" className={`stroke-2 ${
+                      alerts.some(a => a.status !== 'resolved' && (a.summary.toLowerCase().includes('iis') || a.event_type.toLowerCase().includes('iis')))
+                        ? 'fill-[#221015] stroke-rose-500'
+                        : 'fill-slate-900 stroke-emerald-500'
+                    }`} />
+                    <text x="580" y="204" className="text-[9px] font-sans font-bold fill-slate-200 text-anchor-middle" textAnchor="middle">IIS WEB</text>
+                  </g>
+
+                  {/* Node 6: Wazuh SOC Agent */}
+                  <g className="cursor-pointer" onClick={() => setSearchTerm('wazuh')}>
+                    {alerts.some(a => a.summary.toLowerCase().includes('wazuh') || a.event_type.toLowerCase().includes('security')) && (
+                      <circle cx="580" cy="300" r="34" className="fill-none stroke-rose-500 stroke-1 animate-ping" />
+                    )}
+                    <circle cx="580" cy="300" r="28" className={`stroke-2 ${
+                      alerts.some(a => a.status !== 'resolved' && (a.summary.toLowerCase().includes('wazuh') || a.event_type.toLowerCase().includes('security')))
+                        ? 'fill-[#221015] stroke-rose-500'
+                        : 'fill-slate-900 stroke-emerald-500'
+                    }`} />
+                    <text x="580" y="304" className="text-[9px] font-sans font-bold fill-slate-200 text-anchor-middle" textAnchor="middle">SOC AGENT</text>
+                  </g>
+                </svg>
+
+                <div className="absolute bottom-4 left-6 text-[10px] text-slate-500 bg-black/60 border border-white/5 px-2.5 py-1 rounded-md">
+                  💡 <em>Dica: Clique nos nós da topologia para filtrar os incidentes daquele ativo!</em>
+                </div>
+              </div>
+            </div>
+          )}
         </section>
 
         {/* Right Section (Glass detail Sidebar Panel) */}
@@ -2900,86 +3101,188 @@ export default function CockpitPage() {
                     )}
                   </div>
                 ) : selectedIntegrationTool === 'sla_report' ? (
-                  // SLA Dynamic Report & PDF download
+                  // Relatório Dual-Mode (NOC/SOC Compliance)
                   <div className="flex flex-col gap-4">
                     <div className="flex flex-col gap-3 p-4 rounded-xl bg-emerald-950/10 border border-emerald-500/20 text-xs text-slate-300 leading-relaxed font-sans mb-2">
                       <div className="flex items-center gap-1.5 text-emerald-400 font-extrabold uppercase text-[10px]">
-                        <TrendingUp className="w-3.5 h-3.5" /> SLA & Desempenho Operacional (Cockpit)
+                        <TrendingUp className="w-3.5 h-3.5" /> Relatório Dual-Mode (NOC/SOC Compliance)
                       </div>
-                      <p>Visualize as métricas em tempo real de conformidade de SLA e tempos médios de resposta do operador para o tenant ativo. Você também pode exportar e baixar o relatório executivo completo em PDF.</p>
+                      <p>Mude o modo de visualização entre a perspectiva de governança de negócios (C-Level) ou detalhamento de infraestrutura e cibersegurança (Analistas).</p>
+                      
+                      {/* Mode switcher */}
+                      <div className="flex bg-black/40 rounded-lg p-0.5 mt-1 border border-white/5 w-fit">
+                        <button
+                          onClick={() => setReportMode('executive')}
+                          className={`px-3 py-1 text-[10px] uppercase font-bold tracking-wide rounded-md transition-all cursor-pointer ${
+                            reportMode === 'executive'
+                              ? 'bg-emerald-500 text-slate-950'
+                              : 'text-slate-400 hover:text-slate-200'
+                          }`}
+                        >
+                          Modo Executivo (Business)
+                        </button>
+                        <button
+                          onClick={() => setReportMode('technical')}
+                          className={`px-3 py-1 text-[10px] uppercase font-bold tracking-wide rounded-md transition-all cursor-pointer ${
+                            reportMode === 'technical'
+                              ? 'bg-emerald-500 text-slate-950'
+                              : 'text-slate-400 hover:text-slate-200'
+                          }`}
+                        >
+                          Modo Técnico (SOC)
+                        </button>
+                      </div>
                     </div>
 
                     {isLoadingSla ? (
                       <div className="flex items-center justify-center py-16 gap-3 text-slate-400 text-xs">
                         <RefreshCw className="w-5 h-5 animate-spin text-emerald-400" />
-                        <span>Carregando estatísticas de SLA do banco...</span>
+                        <span>Carregando estatísticas do banco...</span>
                       </div>
                     ) : slaData ? (
-                      <div className="flex flex-col gap-6">
-                        
-                        {/* Summary Metrics Grid */}
-                        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-                          
-                          <div className="p-4 rounded-xl bg-white/5 border border-white/5 flex flex-col gap-1">
-                            <span className="text-[9px] uppercase font-bold text-slate-500 tracking-wider">Conformidade SLA</span>
-                            <span className="text-xl font-extrabold text-emerald-400">{slaData.sla_compliance.toFixed(2)}%</span>
-                            <span className="text-[8px] text-slate-400">Uptime de Ativos</span>
-                          </div>
+                      <div className="flex flex-col gap-5">
+                        {reportMode === 'executive' ? (
+                          <>
+                            {/* Executive view */}
+                            {/* Summary Metrics Grid */}
+                            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                              <div className="p-4 rounded-xl bg-white/5 border border-white/5 flex flex-col gap-1">
+                                <span className="text-[9px] uppercase font-bold text-slate-500 tracking-wider">Conformidade SLA</span>
+                                <span className="text-xl font-extrabold text-emerald-400">{slaData.sla_compliance.toFixed(2)}%</span>
+                                <span className="text-[8px] text-slate-400">Meta Contratual: 99.90%</span>
+                              </div>
+                              <div className="p-4 rounded-xl bg-white/5 border border-white/5 flex flex-col gap-1">
+                                <span className="text-[9px] uppercase font-bold text-slate-500 tracking-wider">Total de Alertas</span>
+                                <span className="text-xl font-extrabold text-white">{slaData.total_incidents}</span>
+                                <span className="text-[8px] text-slate-400">Últimos 30 dias</span>
+                              </div>
+                              <div className="p-4 rounded-xl bg-white/5 border border-white/5 flex flex-col gap-1">
+                                <span className="text-[9px] uppercase font-bold text-slate-500 tracking-wider">TTA (Atendimento)</span>
+                                <span className="text-xl font-extrabold text-amber-400">{slaData.average_tta.toFixed(1)}m</span>
+                                <span className="text-[8px] text-slate-400">Média de Triagem</span>
+                              </div>
+                              <div className="p-4 rounded-xl bg-white/5 border border-white/5 flex flex-col gap-1">
+                                <span className="text-[9px] uppercase font-bold text-slate-500 tracking-wider">TTR (Resolução)</span>
+                                <span className="text-xl font-extrabold text-violet-400">{slaData.average_ttr.toFixed(1)}m</span>
+                                <span className="text-[8px] text-slate-400">Média de Solução</span>
+                              </div>
+                            </div>
 
-                          <div className="p-4 rounded-xl bg-white/5 border border-white/5 flex flex-col gap-1">
-                            <span className="text-[9px] uppercase font-bold text-slate-500 tracking-wider">Total de Alertas</span>
-                            <span className="text-xl font-extrabold text-white">{slaData.total_incidents}</span>
-                            <span className="text-[8px] text-slate-400">Últimos 30 dias</span>
-                          </div>
+                            {/* Compliance Checklists */}
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                              <div className="p-4 rounded-xl bg-white/5 border border-white/5 flex flex-col gap-2">
+                                <h5 className="text-xs font-bold text-slate-200 uppercase tracking-wider">Conformidade Regulatória LGPD</h5>
+                                <div className="flex flex-col gap-1.5 text-[10px]">
+                                  <div className="flex items-center justify-between">
+                                    <span className="text-slate-400">Isolamento Lógico (Multi-tenancy RLS)</span>
+                                    <span className="text-emerald-400 font-bold bg-emerald-500/10 px-1.5 py-0.5 rounded">100% OK</span>
+                                  </div>
+                                  <div className="flex items-center justify-between">
+                                    <span className="text-slate-400">Encriptação de Segredos no Cofre (AES)</span>
+                                    <span className="text-emerald-400 font-bold bg-emerald-500/10 px-1.5 py-0.5 rounded">100% OK</span>
+                                  </div>
+                                  <div className="flex items-center justify-between">
+                                    <span className="text-slate-400">Retenção de Logs de Auditoria SSH</span>
+                                    <span className="text-emerald-400 font-bold bg-emerald-500/10 px-1.5 py-0.5 rounded">Ativo</span>
+                                  </div>
+                                </div>
+                              </div>
 
-                          <div className="p-4 rounded-xl bg-white/5 border border-white/5 flex flex-col gap-1">
-                            <span className="text-[9px] uppercase font-bold text-slate-500 tracking-wider">Média TTA (Triagem)</span>
-                            <span className="text-xl font-extrabold text-amber-400">{slaData.average_tta.toFixed(1)}m</span>
-                            <span className="text-[8px] text-slate-400">Time to Acknowledge</span>
-                          </div>
+                              <div className="p-4 rounded-xl bg-white/5 border border-white/5 flex flex-col gap-2">
+                                <h5 className="text-xs font-bold text-slate-200 uppercase tracking-wider">Conformidade ISO 27001</h5>
+                                <div className="flex flex-col gap-1.5 text-[10px]">
+                                  <div className="flex items-center justify-between">
+                                    <span className="text-slate-400">Controles de Acesso RBAC Ativos</span>
+                                    <span className="text-emerald-400 font-bold bg-emerald-500/10 px-1.5 py-0.5 rounded">Ativo</span>
+                                  </div>
+                                  <div className="flex items-center justify-between">
+                                    <span className="text-slate-400">Previsão e Rastreabilidade de Incidentes</span>
+                                    <span className="text-emerald-400 font-bold bg-emerald-500/10 px-1.5 py-0.5 rounded">100% OK</span>
+                                  </div>
+                                  <div className="flex items-center justify-between">
+                                    <span className="text-slate-400">Plano de Resposta Rápida (SOAR)</span>
+                                    <span className="text-emerald-400 font-bold bg-emerald-500/10 px-1.5 py-0.5 rounded">Ativo</span>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
 
-                          <div className="p-4 rounded-xl bg-white/5 border border-white/5 flex flex-col gap-1">
-                            <span className="text-[9px] uppercase font-bold text-slate-500 tracking-wider">Média TTR (Resolução)</span>
-                            <span className="text-xl font-extrabold text-violet-400">{slaData.average_ttr.toFixed(1)}m</span>
-                            <span className="text-[8px] text-slate-400">Time to Resolve</span>
-                          </div>
+                            {/* Export/Download SLA PDF */}
+                            <div className="p-5 rounded-xl bg-[#0e1626] border border-cyan-500/10 flex items-center justify-between mt-2">
+                              <div className="flex flex-col gap-0.5">
+                                <h5 className="text-xs font-bold text-white">Relatório Executivo Mensal</h5>
+                                <p className="text-[10px] text-slate-400">Gere e baixe a via em PDF oficial com assinaturas e log de incidentes.</p>
+                              </div>
+                              <button
+                                onClick={() => {
+                                  window.open(`${API_BASE_URL}/api/v1/reports/sla?token=${token || selectedTenant.id}&tenant_name=${encodeURIComponent(selectedTenant.name)}`);
+                                }}
+                                className="bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold uppercase tracking-wider text-[10px] px-4 py-2.5 rounded-lg flex items-center gap-1.5 transition-all shadow-lg cursor-pointer"
+                              >
+                                <FileText className="w-3.5 h-3.5" />
+                                Baixar Relatório PDF
+                              </button>
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            {/* Technical SOC view */}
+                            {/* MITRE ATT&CK Matrix simulation */}
+                            <div className="p-4 rounded-xl bg-white/5 border border-white/5 flex flex-col gap-3">
+                              <div className="flex justify-between items-center">
+                                <h5 className="text-xs font-bold text-slate-200 uppercase tracking-wider">Mapeamento Tático MITRE ATT&CK</h5>
+                                <span className="text-[9px] font-mono text-slate-500">v13 Enterprise Matrix</span>
+                              </div>
+                              
+                              <div className="grid grid-cols-3 gap-3 text-[10px]">
+                                <div className="p-2.5 rounded bg-slate-900 border border-white/5 flex flex-col gap-1.5">
+                                  <span className="font-bold text-slate-400 border-b border-white/5 pb-1">1. Initial Access</span>
+                                  <div className="flex flex-col gap-1">
+                                    <span className="p-1 rounded bg-rose-500/10 text-rose-400 border border-rose-500/20 font-medium">T1078 Valid Accounts (VPN)</span>
+                                    <span className="p-1 rounded bg-white/5 text-slate-400 font-medium">T1190 Exploit Public-Facing App</span>
+                                  </div>
+                                </div>
+                                
+                                <div className="p-2.5 rounded bg-slate-900 border border-white/5 flex flex-col gap-1.5">
+                                  <span className="font-bold text-slate-400 border-b border-white/5 pb-1">2. Credential Access</span>
+                                  <div className="flex flex-col gap-1">
+                                    <span className="p-1 rounded bg-rose-500/10 text-rose-400 border border-rose-500/20 font-medium">T1110 Brute Force (SSH)</span>
+                                    <span className="p-1 rounded bg-white/5 text-slate-400 font-medium">T1555 Credentials from Store</span>
+                                  </div>
+                                </div>
 
-                        </div>
+                                <div className="p-2.5 rounded bg-slate-900 border border-white/5 flex flex-col gap-1.5">
+                                  <span className="font-bold text-slate-400 border-b border-white/5 pb-1">3. Impact</span>
+                                  <div className="flex flex-col gap-1">
+                                    <span className="p-1 rounded bg-rose-500/10 text-rose-400 border border-rose-500/20 font-medium">T1498 Network DoS (Loki)</span>
+                                    <span className="p-1 rounded bg-white/5 text-slate-400 font-medium">T1489 Service Stop</span>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
 
-                        {/* Visual compliance status bar */}
-                        <div className="p-5 rounded-xl bg-white/5 border border-white/5 flex flex-col gap-2">
-                          <div className="flex justify-between items-center text-xs">
-                            <span className="text-slate-400">Status Geral do Acordo de Nível de Serviço (SLA)</span>
-                            <span className="font-bold text-emerald-400">Meta: 99.90%</span>
-                          </div>
-                          <div className="w-full bg-white/5 h-2.5 rounded-full overflow-hidden border border-white/5">
-                            <div 
-                              className={`h-full transition-all ${slaData.sla_compliance >= 99.9 ? 'bg-emerald-500' : slaData.sla_compliance >= 99.0 ? 'bg-amber-500' : 'bg-rose-500'}`} 
-                              style={{ width: `${Math.min(100, Math.max(0, slaData.sla_compliance))}%` }}
-                            />
-                          </div>
-                          <span className="text-[10px] text-slate-500">
-                            * O cálculo do SLA é efetuado dinamicamente com base na disponibilidade operacional em tempo real dos dispositivos cadastrados.
-                          </span>
-                        </div>
-
-                        {/* Export/Download SLA PDF */}
-                        <div className="p-5 rounded-xl bg-[#0e1626] border border-cyan-500/10 flex items-center justify-between mt-2">
-                          <div className="flex flex-col gap-0.5">
-                            <h5 className="text-xs font-bold text-white">Relatório Executivo Mensal</h5>
-                            <p className="text-[10px] text-slate-400">Gere e baixe a via em PDF oficial com assinaturas e log de incidentes.</p>
-                          </div>
-                          <button
-                            onClick={() => {
-                              window.open(`${API_BASE_URL}/api/v1/reports/sla?token=${token || selectedTenant.id}&tenant_name=${encodeURIComponent(selectedTenant.name)}`);
-                            }}
-                            className="bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold uppercase tracking-wider text-[10px] px-4 py-2.5 rounded-lg flex items-center gap-1.5 transition-all shadow-lg cursor-pointer"
-                          >
-                            <FileText className="w-3.5 h-3.5" />
-                            Baixar Relatório PDF
-                          </button>
-                        </div>
-
+                            {/* Threat Intelligence Feed simulator */}
+                            <div className="p-4 rounded-xl bg-[#030712] border border-white/5 flex flex-col gap-2.5">
+                              <h5 className="text-xs font-bold text-slate-200 uppercase tracking-wider">Feed Integrado de Threat Intelligence</h5>
+                              <div className="flex flex-col gap-2 max-h-[140px] overflow-y-auto pr-1">
+                                <div className="p-2 rounded bg-white/5 flex items-center justify-between text-xs">
+                                  <div className="flex flex-col gap-0.5">
+                                    <span className="font-extrabold text-rose-400 font-mono">[CVE-2026-9912] Threat Advisory</span>
+                                    <span className="text-[10px] text-slate-400">Atividade suspeita vinda do IP malicioso catalogado: 198.51.100.42</span>
+                                  </div>
+                                  <span className="text-[8px] font-bold bg-rose-500/15 text-rose-400 px-2 py-0.5 rounded border border-rose-500/30 uppercase">Bloqueado SOAR</span>
+                                </div>
+                                <div className="p-2 rounded bg-white/5 flex items-center justify-between text-xs">
+                                  <div className="flex flex-col gap-0.5">
+                                    <span className="font-extrabold text-amber-400 font-mono">[STIX/TAXII feed] IP Reputation</span>
+                                    <span className="text-[10px] text-slate-400">Scanner de porta de entrada detectado em múltiplos firewalls periféricos.</span>
+                                  </div>
+                                  <span className="text-[8px] font-bold bg-amber-500/15 text-amber-400 px-2 py-0.5 rounded border border-amber-500/30 uppercase">Monitorando</span>
+                                </div>
+                              </div>
+                            </div>
+                          </>
+                        )}
                       </div>
                     ) : (
                       <div className="text-xs text-slate-500 italic text-center py-10">

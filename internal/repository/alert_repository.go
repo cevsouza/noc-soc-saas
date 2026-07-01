@@ -49,8 +49,8 @@ func (r *PostgresAlertRepository) Create(ctx context.Context, q db.Queryer, aler
 	}
 
 	query := `
-		INSERT INTO alerts (id, tenant_id, device_id, event_type, severity, status, summary, payload, ai_analysis, created_at, updated_at, acknowledged_at, ai_diagnostic)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), $11, $12)
+		INSERT INTO alerts (id, tenant_id, device_id, event_type, severity, status, summary, payload, ai_analysis, created_at, updated_at, acknowledged_at, ai_diagnostic, itsm_ticket_ref, mitre_tactics, ueba_anomalous)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), $11, $12, $13, $14, $15)
 		RETURNING updated_at
 	`
 
@@ -67,6 +67,9 @@ func (r *PostgresAlertRepository) Create(ctx context.Context, q db.Queryer, aler
 		alert.CreatedAt,
 		alert.AcknowledgedAt,
 		alert.AIDiagnostic,
+		alert.ITSMTicketRef,
+		alert.MitreTactics,
+		alert.UEBAAnomalous,
 	).Scan(&alert.UpdatedAt)
 
 	if err != nil {
@@ -80,7 +83,7 @@ func (r *PostgresAlertRepository) Create(ctx context.Context, q db.Queryer, aler
 // (searching only the targeted partition instead of doing an expensive global scan).
 func (r *PostgresAlertRepository) GetByID(ctx context.Context, q db.Queryer, id uuid.UUID, createdAt time.Time) (*model.Alert, error) {
 	query := `
-		SELECT id, tenant_id, device_id, event_type, severity, status, summary, payload, ai_analysis, created_at, updated_at, resolved_at, acknowledged_at, ai_diagnostic
+		SELECT id, tenant_id, device_id, event_type, severity, status, summary, payload, ai_analysis, created_at, updated_at, resolved_at, acknowledged_at, ai_diagnostic, itsm_ticket_ref, mitre_tactics, ueba_anomalous
 		FROM alerts
 		WHERE id = $1 AND created_at = $2
 	`
@@ -104,6 +107,9 @@ func (r *PostgresAlertRepository) GetByID(ctx context.Context, q db.Queryer, id 
 		&a.ResolvedAt,
 		&a.AcknowledgedAt,
 		&a.AIDiagnostic,
+		&a.ITSMTicketRef,
+		&a.MitreTactics,
+		&a.UEBAAnomalous,
 	)
 
 	if err != nil {
@@ -128,7 +134,7 @@ func (r *PostgresAlertRepository) GetByID(ctx context.Context, q db.Queryer, id 
 
 func (r *PostgresAlertRepository) List(ctx context.Context, q db.Queryer, limit, offset int) ([]*model.Alert, error) {
 	query := `
-		SELECT id, tenant_id, device_id, event_type, severity, status, summary, payload, ai_analysis, created_at, updated_at, resolved_at, acknowledged_at, ai_diagnostic
+		SELECT id, tenant_id, device_id, event_type, severity, status, summary, payload, ai_analysis, created_at, updated_at, resolved_at, acknowledged_at, ai_diagnostic, itsm_ticket_ref, mitre_tactics, ueba_anomalous
 		FROM alerts
 		ORDER BY created_at DESC
 		LIMIT $1 OFFSET $2
@@ -161,6 +167,9 @@ func (r *PostgresAlertRepository) List(ctx context.Context, q db.Queryer, limit,
 			&a.ResolvedAt,
 			&a.AcknowledgedAt,
 			&a.AIDiagnostic,
+			&a.ITSMTicketRef,
+			&a.MitreTactics,
+			&a.UEBAAnomalous,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan alert: %w", err)
@@ -244,8 +253,8 @@ func (r *PostgresAlertRepository) Update(ctx context.Context, q db.Queryer, aler
 
 	query := `
 		UPDATE alerts
-		SET status = $1, summary = $2, payload = $3, ai_analysis = $4, updated_at = NOW(), resolved_at = $5, acknowledged_at = $6, ai_diagnostic = $7
-		WHERE id = $8 AND created_at = $9 AND tenant_id = $10
+		SET status = $1, summary = $2, payload = $3, ai_analysis = $4, updated_at = NOW(), resolved_at = $5, acknowledged_at = $6, ai_diagnostic = $7, itsm_ticket_ref = $8, mitre_tactics = $9, ueba_anomalous = $10
+		WHERE id = $11 AND created_at = $12 AND tenant_id = $13
 	`
 
 	cmdTag, err := q.Exec(ctx, query,
@@ -256,6 +265,9 @@ func (r *PostgresAlertRepository) Update(ctx context.Context, q db.Queryer, aler
 		alert.ResolvedAt,
 		alert.AcknowledgedAt,
 		alert.AIDiagnostic,
+		alert.ITSMTicketRef,
+		alert.MitreTactics,
+		alert.UEBAAnomalous,
 		alert.ID,
 		alert.CreatedAt,
 		tenantID,

@@ -18,6 +18,8 @@ type Tenant struct {
 	Name      string       `json:"name"`
 	Slug      string       `json:"slug"`
 	Status    TenantStatus `json:"status"`
+	LogoURL   *string      `json:"logo_url,omitempty"`
+	PrimaryColor *string   `json:"primary_color,omitempty"`
 	CreatedAt time.Time    `json:"created_at"`
 	UpdatedAt time.Time    `json:"updated_at"`
 }

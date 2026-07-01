@@ -452,6 +452,10 @@ func main() {
 	)
 	mux.Handle("/api/v1/vault/list", protectedVaultList)
 
+	// ITSM Ticket Synchronization simulator endpoint
+	protectedITSMSync := middleware.JWTAuth(jwtSecret)(api.HandleSyncITSM(pgPool))
+	mux.Handle("/api/v1/itsm/sync", protectedITSMSync)
+
 	// Real-Time Operator WebSocket Subscription endpoint (Multiplexed, resolved by JWT/APIKey/UUID)
 	mux.Handle("/api/v1/ws", ws.ServeWS(hub, pgPool, jwtSecret))
 

@@ -39,4 +39,7 @@ type Alert struct {
 	ResolvedAt     *time.Time             `json:"resolved_at,omitempty"`
 	AcknowledgedAt *time.Time             `json:"acknowledged_at,omitempty"`
 	AIDiagnostic   *string                `json:"ai_diagnostic,omitempty"`
+	ITSMTicketRef  *string                `json:"itsm_ticket_ref,omitempty"`
+	MitreTactics   *string                `json:"mitre_tactics,omitempty"`
+	UEBAAnomalous  *bool                  `json:"ueba_anomalous,omitempty"`
 }

@@ -281,9 +281,9 @@ func (wp *WorkerPool) createNewAlert(ctx context.Context, tx pgx.Tx, event model
 		}
 	}(newAlert.ID, newAlert.TenantID, newAlert.Summary, event.Host, newAlert.Payload)
 
-	// Trigger self healing remote script if CRITICAL/FATAL
+	// Trigger self healing remote script (SOAR Playbook Auto-Healing Engine) if CRITICAL/FATAL
 	if newAlert.Severity == model.SeverityCritical || newAlert.Severity == model.SeverityFatal {
-		wp.triggerSelfHealingStub(ctx, newAlert)
+		wp.triggerSOARPlaybooks(ctx, newAlert)
 	}
 
 	return nil
@@ -299,6 +299,144 @@ func (wp *WorkerPool) publishToPubSub(ctx context.Context, tenantID uuid.UUID, a
 	_ = wp.redisClient.Publish(ctx, channel, alertBytes).Err()
 }
 
-func (wp *WorkerPool) triggerSelfHealingStub(ctx context.Context, alert *model.Alert) {
-	wp.executor.ExecuteMitigation(ctx, alert)
+func (wp *WorkerPool) triggerSOARPlaybooks(ctx context.Context, alert *model.Alert) {
+	tenantCtx := db.WithTenantID(ctx, alert.TenantID)
+	
+	// Query auto-trigger runbooks for this tenant
+	query := `
+		SELECT id, name, script, vault_key_host 
+		FROM tenant_runbooks 
+		WHERE tenant_id = $1 AND auto_trigger = TRUE
+	`
+	rows, err := wp.pgPool.Query(tenantCtx, query, alert.TenantID)
+	if err != nil {
+		log.Printf("[SOAR Warning] Failed to query auto-trigger runbooks: %v", err)
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var runbookID uuid.UUID
+		var name, script, vaultKeyHost string
+		if err := rows.Scan(&runbookID, &name, &script, &vaultKeyHost); err != nil {
+			continue
+		}
+
+		log.Printf("[SOAR Engine] Auto-triggering SOAR playbook [%s] for alert %s", name, alert.ID)
+
+		// Execute the SOAR playbook in a background goroutine
+		go func(rID uuid.UUID, rbName, rbScript, vkHost string) {
+			ctxBg := db.WithTenantID(context.Background(), alert.TenantID)
+			
+			// 1. Fetch host SSH credentials from the Vault
+			hostKey := vkHost + "_host"
+			userKey := vkHost + "_user"
+			passKey := vkHost + "_password"
+			privKey := vkHost + "_private_key"
+
+			var sshHost, sshUser, sshPass, sshPriv string
+			
+			secretQuery := `
+				SELECT secret_key, decrypted_value 
+				FROM decrypted_vault 
+				WHERE tenant_id = $1 AND secret_key IN ($2, $3, $4, $5)
+			`
+			secRows, err := wp.pgPool.Query(ctxBg, secretQuery, alert.TenantID, hostKey, userKey, passKey, privKey)
+			if err == nil {
+				defer secRows.Close()
+				for secRows.Next() {
+					var k, val string
+					if err := secRows.Scan(&k, &val); err == nil {
+						if k == hostKey {
+							sshHost = val
+						} else if k == userKey {
+							sshUser = val
+						} else if k == passKey {
+							sshPass = val
+						} else if k == privKey {
+							sshPriv = val
+						}
+					}
+				}
+			}
+
+			if sshHost == "" || sshUser == "" {
+				log.Printf("[SOAR Error] SSH host or user credentials missing in Vault for key %s", vkHost)
+				return
+			}
+
+			// 2. Execute remote SSH script
+			output, err := api.ExecuteSSH(sshHost, sshUser, sshPass, sshPriv, rbScript)
+			execStatus := "sucesso"
+			if err != nil {
+				execStatus = "falha"
+				output = fmt.Sprintf("SOAR Execution Error: %v\nLogs:\n%s", err, output)
+			}
+
+			// 3. Record log inside comments and execution audit logs table within a transaction
+			_ = db.ExecuteInTenantTx(ctxBg, wp.pgPool, func(tx pgx.Tx) error {
+				logQuery := `
+					INSERT INTO incident_comments (incident_id, tenant_id, author, comment)
+					VALUES ($1, $2, '🤖 SOAR Auto-Healing Engine', $3)
+				`
+				commentText := fmt.Sprintf("🤖 **SOAR Playbook Auto-Trigger [%s]**: Status: %s\n\n```bash\n%s\n```", rbName, execStatus, output)
+				_, err = tx.Exec(ctxBg, logQuery, alert.ID, alert.TenantID, commentText)
+				if err != nil {
+					return err
+				}
+
+				auditQuery := `
+					INSERT INTO runbook_execution_logs (tenant_id, runbook_id, incident_id, operator_name, script, output, status)
+					VALUES ($1, $2, $3, $4, $5, $6, $7)
+				`
+				_, err = tx.Exec(ctxBg, auditQuery, alert.TenantID, rID, alert.ID, "🤖 SOAR Auto-Healing Engine", rbScript, output, execStatus)
+				if err != nil {
+					return err
+				}
+
+				// If successful, resolve the alert automatically!
+				if execStatus == "sucesso" {
+					updateAlertQuery := `
+						UPDATE alerts 
+						SET status = 'resolved', resolved_at = NOW(), updated_at = NOW() 
+						WHERE id = $1 AND tenant_id = $2
+					`
+					_, _ = tx.Exec(ctxBg, updateAlertQuery, alert.ID, alert.TenantID)
+				}
+				return nil
+			})
+			
+			// Refresh alert UI via websocket
+			var a model.Alert
+			var pBytes []byte
+			var aiBytes []byte
+			queryDetails := "SELECT id, tenant_id, device_id, event_type, severity, status, summary, payload, ai_analysis, created_at, updated_at, resolved_at, acknowledged_at, ai_diagnostic, itsm_ticket_ref, mitre_tactics, ueba_anomalous FROM alerts WHERE id = $1"
+			err = wp.pgPool.QueryRow(ctxBg, queryDetails, alert.ID).Scan(
+				&a.ID,
+				&a.TenantID,
+				&a.DeviceID,
+				&a.EventType,
+				&a.Severity,
+				&a.Status,
+				&a.Summary,
+				&pBytes,
+				&aiBytes,
+				&a.CreatedAt,
+				&a.UpdatedAt,
+				&a.ResolvedAt,
+				&a.AcknowledgedAt,
+				&a.AIDiagnostic,
+				&a.ITSMTicketRef,
+				&a.MitreTactics,
+				&a.UEBAAnomalous,
+			)
+			if err == nil {
+				_ = json.Unmarshal(pBytes, &a.Payload)
+				if len(aiBytes) > 0 {
+					_ = json.Unmarshal(aiBytes, &a.AIAnalysis)
+				}
+				wp.publishToPubSub(ctxBg, alert.TenantID, &a)
+			}
+		}(runbookID, name, script, vaultKeyHost)
+	}
 }
