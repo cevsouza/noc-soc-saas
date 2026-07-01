@@ -396,7 +396,7 @@ export default function CockpitPage() {
       const response = await fetch(`${API_BASE_URL}/api/v1/auth/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: authEmail, password: authPassword, name: authName, tenant_id: authTenant })
+        body: JSON.stringify({ email: authEmail, password: authPassword, name: authName })
       });
       if (response.ok) {
         const data = await response.json();
@@ -450,8 +450,7 @@ export default function CockpitPage() {
           email: adminUserEmail,
           password: adminUserPassword,
           name: adminUserName,
-          role: adminUserRole,
-          tenant_id: adminUserTenantId
+          role: adminUserRole
         })
       });
       if (response.ok) {
@@ -759,18 +758,7 @@ export default function CockpitPage() {
                   />
                 </div>
 
-                <div className="flex flex-col gap-1.5">
-                  <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Sua Empresa / Tenant</label>
-                  <select
-                    value={authTenant}
-                    onChange={(e) => setAuthTenant(e.target.value)}
-                    className="bg-[#0b0f19] border border-white/10 rounded-lg p-2.5 text-xs text-slate-200 focus:outline-none focus:border-violet-500 transition-all cursor-pointer"
-                  >
-                    {(publicTenants || []).map(t => (
-                      <option key={t.id} value={t.id} className="bg-slate-900 text-white">{t.name}</option>
-                    ))}
-                  </select>
-                </div>
+
               </>
             )}
 
@@ -2010,18 +1998,7 @@ export default function CockpitPage() {
                         </select>
                       </div>
 
-                      <div className="flex flex-col gap-1.5">
-                        <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Empresa / Tenant Associado</label>
-                        <select
-                          value={adminUserTenantId}
-                          onChange={(e) => setAdminUserTenantId(e.target.value)}
-                          className="bg-[#0b0f19] border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-violet-500 transition-all cursor-pointer"
-                        >
-                          {tenants.map(t => (
-                            <option key={t.id} value={t.id}>{t.name}</option>
-                          ))}
-                        </select>
-                      </div>
+
 
                       <button
                         type="submit"

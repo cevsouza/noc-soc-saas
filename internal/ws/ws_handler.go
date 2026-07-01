@@ -116,8 +116,17 @@ func ServeWS(hub *Hub, pgPool *pgxpool.Pool, jwtSecret []byte) http.HandlerFunc 
 		}
 
 		if len(tenantIDs) == 0 {
-			// BYPASS / OMITIR AUTENTICAÇÃO: Usa o tenant padrão para WebSocket se falhar
-			tenantIDs = append(tenantIDs, uuid.MustParse("e1b7c123-1234-4321-abcd-123456789abc"))
+			// Fallback: subscribe to all active tenants
+			rows, err := pgPool.Query(r.Context(), "SELECT id FROM tenants WHERE status = 'active'")
+			if err == nil {
+				defer rows.Close()
+				for rows.Next() {
+					var tid uuid.UUID
+					if err := rows.Scan(&tid); err == nil {
+						tenantIDs = append(tenantIDs, tid)
+					}
+				}
+			}
 		}
 
 		// Upgrade HTTP connection to WebSocket

@@ -142,52 +142,7 @@ func HandleRegister(pgPool *pgxpool.Pool) http.HandlerFunc {
 			return
 		}
 
-		var tenantID uuid.UUID
-		if req.TenantID != "" {
-			parsedID, err := uuid.Parse(req.TenantID)
-			if err == nil {
-				tenantID = parsedID
-			}
-		}
-		if tenantID == uuid.Nil {
-			// Find first active tenant in database
-			err = tx.QueryRow(ctx, "SELECT id FROM tenants WHERE status = 'active' LIMIT 1").Scan(&tenantID)
-			if err != nil {
-				// If database is completely empty, insert a bootstrap default tenant
-				tenantID = uuid.New()
-				_, err = tx.Exec(ctx, "INSERT INTO tenants (id, name, slug, status) VALUES ($1, 'ITFácil NOC', 'itfacil-noc', 'active')", tenantID)
-				if err != nil {
-					http.Error(w, "Internal Server Error: Failed to bootstrap default tenant", http.StatusInternalServerError)
-					return
-				}
-			}
-		}
-
-		queryInsertTenantUser := `
-			INSERT INTO tenant_users (tenant_id, user_id, role)
-			VALUES ($1, $2, $3)
-		`
-		_, err = tx.Exec(ctx, queryInsertTenantUser, tenantID, userID, string(role))
-		if err != nil {
-			http.Error(w, "Internal Server Error: Failed to associate tenant", http.StatusInternalServerError)
-			return
-		}
-
-		// Also auto-generate an API Key for the user's tenant if they are an admin and it's missing
-		if role == model.RoleAdmin {
-			var apiKeyExists bool
-			err = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM tenant_api_keys WHERE tenant_id = $1)", tenantID).Scan(&apiKeyExists)
-			if err == nil && !apiKeyExists {
-				rawKey := fmt.Sprintf("noc_api_%s_%d", tenantID.String()[:8], time.Now().Unix())
-				hash := sha256.Sum256([]byte(rawKey))
-				keyHash := hex.EncodeToString(hash[:])
-				_, _ = tx.Exec(ctx, `
-					INSERT INTO tenant_api_keys (tenant_id, key_hash, name)
-					VALUES ($1, $2, $3)
-				`, tenantID, keyHash, "Default System Ingestion Key")
-				log.Printf("[System Config] Created default API key for Tenant %s: %s", tenantID, rawKey)
-			}
-		}
+		// No tenant binding during user registration. Users are global.
 
 		if err := tx.Commit(ctx); err != nil {
 			http.Error(w, "Internal Server Error: Transaction commit failed", http.StatusInternalServerError)
@@ -447,36 +402,7 @@ func HandleAdminCreateUser(pgPool *pgxpool.Pool) http.HandlerFunc {
 			return
 		}
 
-		var tenantID uuid.UUID
-		if req.TenantID != "" {
-			parsedID, err := uuid.Parse(req.TenantID)
-			if err == nil {
-				tenantID = parsedID
-			}
-		}
-		if tenantID == uuid.Nil {
-			// Find first active tenant in database
-			err = tx.QueryRow(ctx, "SELECT id FROM tenants WHERE status = 'active' LIMIT 1").Scan(&tenantID)
-			if err != nil {
-				// Bootstrap default tenant
-				tenantID = uuid.New()
-				_, err = tx.Exec(ctx, "INSERT INTO tenants (id, name, slug, status) VALUES ($1, 'ITFácil NOC', 'itfacil-noc', 'active')", tenantID)
-				if err != nil {
-					http.Error(w, "Internal Server Error: Failed to bootstrap default tenant", http.StatusInternalServerError)
-					return
-				}
-			}
-		}
-
-		queryInsertTenantUser := `
-			INSERT INTO tenant_users (tenant_id, user_id, role)
-			VALUES ($1, $2, $3)
-		`
-		_, err = tx.Exec(ctx, queryInsertTenantUser, tenantID, userID, string(req.Role))
-		if err != nil {
-			http.Error(w, "Internal Server Error: Failed to associate tenant", http.StatusInternalServerError)
-			return
-		}
+		// No tenant binding for created user. Users are global.
 
 		if err := tx.Commit(ctx); err != nil {
 			http.Error(w, "Internal Server Error: Failed to commit transaction", http.StatusInternalServerError)
