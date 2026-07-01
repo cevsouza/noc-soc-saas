@@ -207,19 +207,28 @@ def generate_pdf(tenant_id: str, tenant_name: str, alerts: list, output_path: st
     
     # Show last 10 alerts in detail
     display_alerts = alerts[:10]
-    for a in display_alerts:
-        created_str = a['created_at'].strftime('%Y-%m-%d %H:%M')
-        
-        severity_label = a['severity'].upper()
-        status_label = a['status'].upper()
-        
+    if not display_alerts:
         ledger_data.append([
-            Paragraph(f"<b>{severity_label}</b>", table_cell_style),
-            Paragraph(a['event_type'], table_cell_style),
-            Paragraph(a['summary'], table_cell_style),
-            Paragraph(created_str, table_cell_style),
-            Paragraph(status_label, table_cell_style)
+            Paragraph("No incidents", table_cell_style),
+            Paragraph("N/A", table_cell_style),
+            Paragraph("No active or resolved incidents recorded in this timeframe.", table_cell_style),
+            Paragraph("-", table_cell_style),
+            Paragraph("CLEAN", table_cell_style)
         ])
+    else:
+        for a in display_alerts:
+            created_str = a['created_at'].strftime('%Y-%m-%d %H:%M')
+            
+            severity_label = a['severity'].upper()
+            status_label = a['status'].upper()
+            
+            ledger_data.append([
+                Paragraph(f"<b>{severity_label}</b>", table_cell_style),
+                Paragraph(a['event_type'], table_cell_style),
+                Paragraph(a['summary'], table_cell_style),
+                Paragraph(created_str, table_cell_style),
+                Paragraph(status_label, table_cell_style)
+            ])
         
     t_ledger = Table(ledger_data, colWidths=[70, 90, 200, 100, 70])
     t_ledger.setStyle(TableStyle([
@@ -286,11 +295,6 @@ def main():
         os.makedirs(out_dir)
 
     alerts = fetch_sla_data(args.tenant)
-    
-    if not alerts:
-        logger.warning(f"No database events found for tenant {args.tenant}. Generating mock SLA dashboard data.")
-        alerts = generate_mock_alerts()
-
     generate_pdf(args.tenant, args.name, alerts, args.output)
 
 if __name__ == "__main__":
