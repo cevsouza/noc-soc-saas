@@ -341,9 +341,10 @@ export default function CockpitPage() {
       const response = await fetch(`${API_BASE_URL}/api/v1/public/tenants`);
       if (response.ok) {
         const data = await response.json();
-        setPublicTenants(data);
-        if (data.length > 0) {
-          setAuthTenant(data[0].id);
+        const validList = data || [];
+        setPublicTenants(validList);
+        if (validList.length > 0) {
+          setAuthTenant(validList[0].id);
         }
       }
     } catch (err) {
@@ -765,7 +766,7 @@ export default function CockpitPage() {
                     onChange={(e) => setAuthTenant(e.target.value)}
                     className="bg-[#0b0f19] border border-white/10 rounded-lg p-2.5 text-xs text-slate-200 focus:outline-none focus:border-violet-500 transition-all cursor-pointer"
                   >
-                    {publicTenants.map(t => (
+                    {(publicTenants || []).map(t => (
                       <option key={t.id} value={t.id} className="bg-slate-900 text-white">{t.name}</option>
                     ))}
                   </select>

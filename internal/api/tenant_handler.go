@@ -135,7 +135,7 @@ func HandleGetPublicTenants(pgPool *pgxpool.Pool) http.HandlerFunc {
 			Name string    `json:"name"`
 		}
 
-		var list []PublicTenant
+		list := make([]PublicTenant, 0)
 		for rows.Next() {
 			var t PublicTenant
 			if err := rows.Scan(&t.ID, &t.Name); err != nil {
