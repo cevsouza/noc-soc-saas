@@ -137,7 +137,7 @@ func HandleGenericWebhook(pgPool *pgxpool.Pool, redisClient *redis.Client) http.
 			mac := hmac.New(sha256.New, []byte("itfacil_super_secret_signing_key_9988"))
 			mac.Write(bodyBytes)
 			expected := hex.EncodeToString(mac.Sum(nil))
-			if !hmac.CompareDigest([]byte(expected), []byte(xSignature)) {
+			if !hmac.Equal([]byte(expected), []byte(xSignature)) {
 				http.Error(w, "Unauthorized: HMAC signature verification failed", http.StatusUnauthorized)
 				return
 			}
