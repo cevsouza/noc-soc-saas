@@ -88,6 +88,16 @@ func main() {
 		log.Fatalf("Fatal: Database migration failed: %v", err)
 	}
 
+	// Temporary user deletion script
+	{
+		res, err := pgPool.Exec(ctx, "DELETE FROM users WHERE email IN ('cevsuza@hotmail.com', 'cevsouza@hotmail.com', 'cadu.souza@itfacilservicos.com.br')")
+		if err != nil {
+			log.Printf("[DB TEMP] Failed to delete temporary users: %v", err)
+		} else {
+			log.Printf("[DB TEMP] Successfully deleted users: %d rows affected", res.RowsAffected())
+		}
+	}
+
 	// 2. Load Redis Connection (Support direct REDIS_URL or fallback to parameters)
 	var redisClient *redis.Client
 	redisURL := getEnv("REDIS_URL", "")
