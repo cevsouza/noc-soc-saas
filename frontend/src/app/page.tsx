@@ -109,6 +109,13 @@ export default function CockpitPage() {
   const [integrationName, setIntegrationName] = useState('');
   const [integrationStatus, setIntegrationStatus] = useState<{ status: 'idle' | 'saving' | 'success' | 'error', message?: string }>({ status: 'idle' });
 
+  // Admin Tenant integrations management states
+  const [selectedAdminTenant, setSelectedAdminTenant] = useState<any | null>(null);
+  const [adminIntegrationTool, setAdminIntegrationTool] = useState('zabbix');
+  const [adminIntegrationName, setAdminIntegrationName] = useState('');
+  const [adminIntegrations, setAdminIntegrations] = useState<any[]>([]);
+  const [adminIntegrationStatus, setAdminIntegrationStatus] = useState<{ status: 'idle' | 'saving' | 'success' | 'error', message?: string }>({ status: 'idle' });
+
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -249,6 +256,82 @@ export default function CockpitPage() {
       fetchIntegrations();
     }
   }, [token, selectedTenant]);
+
+  const fetchAdminTenantIntegrations = async (tenantId: string) => {
+    if (!token) return;
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/v1/integrations?tenant_id=${tenantId}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setAdminIntegrations(data);
+      }
+    } catch (err) {
+      console.error("Falha ao buscar integrações do tenant admin:", err);
+    }
+  };
+
+  const handleAdminCreateIntegration = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!token || !selectedAdminTenant) return;
+    setAdminIntegrationStatus({ status: 'saving' });
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/v1/integrations?tenant_id=${selectedAdminTenant.id}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          name: adminIntegrationName,
+          type: adminIntegrationTool,
+          status: 'active'
+        })
+      });
+      if (response.ok) {
+        setAdminIntegrationStatus({ status: 'success', message: 'Integração ativada com sucesso!' });
+        setAdminIntegrationName('');
+        fetchAdminTenantIntegrations(selectedAdminTenant.id);
+        fetchIntegrations(); // Refresh global integrations too
+        setTimeout(() => setAdminIntegrationStatus({ status: 'idle' }), 3000);
+      } else {
+        const msg = await response.text();
+        setAdminIntegrationStatus({ status: 'error', message: msg || 'Falha ao ativar integração.' });
+      }
+    } catch (err) {
+      setAdminIntegrationStatus({ status: 'error', message: 'Erro de conexão com a API.' });
+    }
+  };
+
+  const handleAdminDeleteIntegration = async (id: string) => {
+    if (!token || !selectedAdminTenant) return;
+    if (!confirm('Deseja desativar esta integração para o tenant selecionado?')) return;
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/v1/integrations?id=${id}&tenant_id=${selectedAdminTenant.id}`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      if (response.ok) {
+        fetchAdminTenantIntegrations(selectedAdminTenant.id);
+        fetchIntegrations(); // Refresh global integrations too
+      } else {
+        alert('Falha ao desativar integração.');
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  useEffect(() => {
+    if (selectedAdminTenant) {
+      fetchAdminTenantIntegrations(selectedAdminTenant.id);
+    }
+  }, [selectedAdminTenant]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1917,56 +2000,188 @@ export default function CockpitPage() {
                       <div className="flex items-center gap-1.5 text-violet-400 font-extrabold uppercase text-[10px]">
                         <Activity className="w-3.5 h-3.5" /> Painel de Controle de Tenants (Multi-tenancy)
                       </div>
-                      <p>Adicione novos Tenants (clientes, empresas ou divisões internas) para segmentação física e isolamento de alertas. Cada novo Tenant ganha um UUID exclusivo para ser configurado nas integrações.</p>
+                      <p>Adicione novos Tenants para segmentação física de alertas. Selecione um Tenant da lista para gerenciar e associar suas integrações ativas diretamente.</p>
                     </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                      {/* Left: Create Form */}
-                      <form onSubmit={handleCreateTenant} className="flex flex-col gap-4">
-                        <div className="flex flex-col gap-1.5">
-                          <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Nome da Empresa / Tenant</label>
-                          <input
-                            type="text"
-                            required
-                            value={newTenantName}
-                            onChange={(e) => setNewTenantName(e.target.value)}
-                            placeholder="Ex: Banco Alfa S.A."
-                            className="bg-[#0b0f19] border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-violet-500 transition-all placeholder:text-slate-600"
-                          />
-                        </div>
-
-                        <button
-                          type="submit"
-                          disabled={tenantCreateStatus.status === 'saving'}
-                          className="bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white font-bold text-xs py-3 px-4 rounded-lg transition-all shadow-md shadow-violet-950/30 flex items-center justify-center gap-2"
-                        >
-                          {tenantCreateStatus.status === 'saving' && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
-                          Cadastrar Novo Tenant
-                        </button>
-
-                        {tenantCreateStatus.status === 'success' && (
-                          <div className="p-3 bg-emerald-950/20 border border-emerald-500/20 text-emerald-400 text-xs rounded-lg font-sans">
-                            {tenantCreateStatus.message}
+                      {/* Left: Create Form & Active Tenants List */}
+                      <div className="flex flex-col gap-4">
+                        <form onSubmit={handleCreateTenant} className="flex flex-col gap-3">
+                          <div className="flex flex-col gap-1">
+                            <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Nome da Empresa / Tenant</label>
+                            <input
+                              type="text"
+                              required
+                              value={newTenantName}
+                              onChange={(e) => setNewTenantName(e.target.value)}
+                              placeholder="Ex: Banco Alfa S.A."
+                              className="bg-[#0b0f19] border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-violet-500 transition-all placeholder:text-slate-600"
+                            />
                           </div>
-                        )}
-                        {tenantCreateStatus.status === 'error' && (
-                          <div className="p-3 bg-rose-950/20 border border-rose-500/20 text-rose-400 text-xs rounded-lg font-sans">
-                            {tenantCreateStatus.message}
-                          </div>
-                        )}
-                      </form>
 
-                      {/* Right: Active Tenants List */}
-                      <div className="flex flex-col gap-3">
-                        <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400 block">Tenants Ativos no Banco</label>
-                        <div className="flex flex-col gap-2 max-h-[300px] overflow-y-auto pr-1">
-                          {tenants.map(t => (
-                            <div key={t.id} className="p-3 rounded-lg bg-white/5 border border-white/5 flex flex-col gap-1">
-                              <span className="text-xs font-bold text-slate-200">{t.name}</span>
-                              <span className="text-[10px] font-mono text-slate-500 select-all truncate">{t.id}</span>
+                          <button
+                            type="submit"
+                            disabled={tenantCreateStatus.status === 'saving'}
+                            className="bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white font-bold text-xs py-2.5 px-4 rounded-lg transition-all shadow-md shadow-violet-950/30 flex items-center justify-center gap-2 cursor-pointer"
+                          >
+                            {tenantCreateStatus.status === 'saving' && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+                            Cadastrar Novo Tenant
+                          </button>
+
+                          {tenantCreateStatus.status === 'success' && (
+                            <div className="p-2 bg-emerald-950/20 border border-emerald-500/20 text-emerald-400 text-[10px] rounded-lg font-sans">
+                              {tenantCreateStatus.message}
                             </div>
-                          ))}
+                          )}
+                          {tenantCreateStatus.status === 'error' && (
+                            <div className="p-2 bg-rose-950/20 border border-rose-500/20 text-rose-400 text-[10px] rounded-lg font-sans">
+                              {tenantCreateStatus.message}
+                            </div>
+                          )}
+                        </form>
+
+                        <div className="flex flex-col gap-2 mt-2">
+                          <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400 block">Tenants Ativos no Banco</label>
+                          <div className="flex flex-col gap-2 max-h-[180px] overflow-y-auto pr-1">
+                            {tenants.map(t => (
+                              <div
+                                key={t.id}
+                                onClick={() => setSelectedAdminTenant(t)}
+                                className={`p-2.5 rounded-lg border transition-all cursor-pointer flex flex-col gap-0.5 select-none ${
+                                  selectedAdminTenant?.id === t.id
+                                    ? 'bg-violet-600/10 border-violet-500/50 text-white'
+                                    : 'bg-white/5 border-white/5 text-slate-400 hover:bg-white/[0.07] hover:text-slate-300'
+                                }`}
+                              >
+                                <span className="text-xs font-bold">{t.name}</span>
+                                <span className="text-[8px] font-mono select-all truncate">{t.id}</span>
+                              </div>
+                            ))}
+                          </div>
                         </div>
+                      </div>
+
+                      {/* Right: Tenant Integrations Manager */}
+                      <div className="flex flex-col gap-4 border-l border-white/5 pl-6">
+                        <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400 block">
+                          Gerenciar Conexões por Tenant
+                        </label>
+
+                        {/* Tenant selection selector */}
+                        <div className="flex flex-col gap-2">
+                          <span className="text-xs text-slate-400">Selecione um tenant para configurar:</span>
+                          <select
+                            value={selectedAdminTenant?.id || ''}
+                            onChange={(e) => {
+                              const t = tenants.find(x => x.id === e.target.value);
+                              setSelectedAdminTenant(t || null);
+                            }}
+                            className="bg-[#0b0f19] border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-violet-500"
+                          >
+                            <option value="">-- Selecione um Tenant --</option>
+                            {tenants.map(t => (
+                              <option key={t.id} value={t.id}>{t.name}</option>
+                            ))}
+                          </select>
+                        </div>
+
+                        {selectedAdminTenant ? (
+                          <div className="flex flex-col gap-4 mt-2">
+                            <div className="p-3.5 rounded-xl bg-violet-950/20 border border-violet-500/20">
+                              <h6 className="text-xs font-bold text-slate-200 uppercase tracking-wide leading-none mb-1">
+                                {selectedAdminTenant.name}
+                              </h6>
+                              <span className="text-[9px] font-mono text-slate-400 select-all">{selectedAdminTenant.id}</span>
+                            </div>
+
+                            {/* Tool Selector */}
+                            <div className="flex flex-col gap-1.5">
+                              <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Ferramenta / App</label>
+                              <select
+                                value={adminIntegrationTool}
+                                onChange={(e) => setAdminIntegrationTool(e.target.value)}
+                                className="bg-[#0b0f19] border border-white/10 rounded-lg p-2 text-xs text-white focus:outline-none"
+                              >
+                                <option value="uptimekuma">Uptime Kuma</option>
+                                <option value="zabbix">Zabbix Monitor</option>
+                                <option value="prometheus">Prometheus Alertmanager</option>
+                                <option value="wazuh">Wazuh SIEM</option>
+                                <option value="grafana">Grafana Webhook</option>
+                              </select>
+                            </div>
+
+                            {/* Webhook URL preview */}
+                            <div className="flex flex-col gap-1.5">
+                              <label className="text-[9px] uppercase font-bold tracking-wider text-slate-400">URL do Webhook do Tenant</label>
+                              <div className="flex bg-[#040811] border border-white/5 rounded-lg p-2 items-center justify-between font-mono text-[10px] text-cyan-400 select-all select-text">
+                                <span className="truncate mr-3">
+                                  {`${API_BASE_URL}/api/v1/ingest/${adminIntegrationTool}?token=${selectedAdminTenant.id}`}
+                                </span>
+                                <button
+                                  onClick={() => handleCopyWebhookUrl(`${API_BASE_URL}/api/v1/ingest/${adminIntegrationTool}?token=${selectedAdminTenant.id}`)}
+                                  className="p-1 rounded bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white transition-all shrink-0"
+                                >
+                                  {copiedText ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                                </button>
+                              </div>
+                            </div>
+
+                            {/* Active Integrations list for this tenant & tool */}
+                            <div className="flex flex-col gap-2">
+                              <span className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Conexões Cadastradas</span>
+                              {(adminIntegrations || []).filter(i => i.type === adminIntegrationTool).length > 0 ? (
+                                <div className="flex flex-col gap-1.5 max-h-[110px] overflow-y-auto pr-1">
+                                  {(adminIntegrations || []).filter(i => i.type === adminIntegrationTool).map(item => (
+                                    <div key={item.id} className="p-2 rounded-lg bg-black/40 border border-white/5 flex items-center justify-between text-xs">
+                                      <span className="font-bold text-slate-300 truncate">{item.name}</span>
+                                      <button
+                                        onClick={() => handleAdminDeleteIntegration(item.id)}
+                                        className="text-[9px] text-rose-400 hover:text-rose-300 bg-rose-500/10 hover:bg-rose-500/20 px-2 py-0.5 rounded transition-all font-bold cursor-pointer"
+                                      >
+                                        Remover
+                                      </button>
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : (
+                                <span className="text-[10px] text-amber-500 font-medium">Nenhuma conexão de {adminIntegrationTool} ativada para este tenant.</span>
+                              )}
+                            </div>
+
+                            {/* Add Integration Form */}
+                            <form onSubmit={handleAdminCreateIntegration} className="p-3 rounded-lg bg-white/[0.01] border border-white/5 flex flex-col gap-2">
+                              <span className="text-[9px] font-bold uppercase tracking-wider text-slate-300">Nova Conexão</span>
+                              <div className="flex gap-1.5">
+                                <input
+                                  type="text"
+                                  required
+                                  value={adminIntegrationName}
+                                  onChange={(e) => setAdminIntegrationName(e.target.value)}
+                                  placeholder="Nome identificador"
+                                  className="flex-1 bg-[#0b0f19] border border-white/10 rounded p-2 text-xs text-white placeholder:text-slate-600 focus:outline-none"
+                                />
+                                <button
+                                  type="submit"
+                                  disabled={adminIntegrationStatus.status === 'saving'}
+                                  className="bg-violet-600 hover:bg-violet-500 text-white font-bold text-[10px] px-3 rounded transition-all flex items-center gap-1 shrink-0 cursor-pointer"
+                                >
+                                  {adminIntegrationStatus.status === 'saving' && <RefreshCw className="w-2.5 h-2.5 animate-spin" />}
+                                  Ativar
+                                </button>
+                              </div>
+                              {adminIntegrationStatus.status === 'success' && (
+                                <span className="text-[9px] text-emerald-400">{adminIntegrationStatus.message}</span>
+                              )}
+                              {adminIntegrationStatus.status === 'error' && (
+                                <span className="text-[9px] text-rose-400">{adminIntegrationStatus.message}</span>
+                              )}
+                            </form>
+                          </div>
+                        ) : (
+                          <div className="p-4 rounded-xl bg-white/[0.02] border border-white/5 text-center text-xs text-slate-500 mt-4">
+                            Selecione um tenant na lista para gerenciar suas integrações.
+                          </div>
+                        )}
                       </div>
                     </div>
                   </div>

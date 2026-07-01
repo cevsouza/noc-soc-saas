@@ -31,7 +31,26 @@ type CreateIntegrationRequest struct {
 func HandleGetIntegrations(pgPool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
-		tenantID, ok := db.TenantIDFromContext(ctx)
+		var tenantID uuid.UUID
+		var ok bool
+
+		// If user is admin, allow overriding tenant_id via query parameter
+		tenantIDStr := r.URL.Query().Get("tenant_id")
+		if tenantIDStr != "" {
+			claims, claimsOk := middleware.ClaimsFromContext(ctx)
+			if claimsOk && claims.Role == model.RoleAdmin {
+				parsedID, err := uuid.Parse(tenantIDStr)
+				if err == nil {
+					tenantID = parsedID
+					ok = true
+				}
+			}
+		}
+
+		if !ok {
+			tenantID, ok = db.TenantIDFromContext(ctx)
+		}
+
 		if !ok {
 			http.Error(w, "Unauthorized: Tenant context not found", http.StatusUnauthorized)
 			return
@@ -68,7 +87,26 @@ func HandleGetIntegrations(pgPool *pgxpool.Pool) http.HandlerFunc {
 func HandleCreateIntegration(pgPool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
-		tenantID, ok := db.TenantIDFromContext(ctx)
+		var tenantID uuid.UUID
+		var ok bool
+
+		// If user is admin, allow overriding tenant_id via query parameter
+		tenantIDStr := r.URL.Query().Get("tenant_id")
+		if tenantIDStr != "" {
+			claims, claimsOk := middleware.ClaimsFromContext(ctx)
+			if claimsOk && claims.Role == model.RoleAdmin {
+				parsedID, err := uuid.Parse(tenantIDStr)
+				if err == nil {
+					tenantID = parsedID
+					ok = true
+				}
+			}
+		}
+
+		if !ok {
+			tenantID, ok = db.TenantIDFromContext(ctx)
+		}
+
 		if !ok {
 			http.Error(w, "Unauthorized: Tenant context not found", http.StatusUnauthorized)
 			return
@@ -127,7 +165,26 @@ func HandleCreateIntegration(pgPool *pgxpool.Pool) http.HandlerFunc {
 func HandleDeleteIntegration(pgPool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
-		tenantID, ok := db.TenantIDFromContext(ctx)
+		var tenantID uuid.UUID
+		var ok bool
+
+		// If user is admin, allow overriding tenant_id via query parameter
+		tenantIDStr := r.URL.Query().Get("tenant_id")
+		if tenantIDStr != "" {
+			claims, claimsOk := middleware.ClaimsFromContext(ctx)
+			if claimsOk && claims.Role == model.RoleAdmin {
+				parsedID, err := uuid.Parse(tenantIDStr)
+				if err == nil {
+					tenantID = parsedID
+					ok = true
+				}
+			}
+		}
+
+		if !ok {
+			tenantID, ok = db.TenantIDFromContext(ctx)
+		}
+
 		if !ok {
 			http.Error(w, "Unauthorized: Tenant context not found", http.StatusUnauthorized)
 			return
