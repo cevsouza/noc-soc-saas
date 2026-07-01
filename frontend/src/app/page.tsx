@@ -58,14 +58,9 @@ const getWSUrl = (tenantIds: string[]) => {
 };
 
 export default function CockpitPage() {
-  // Authentication States (Bypassed by default for easy access)
-  const [token, setToken] = useState<string | null>('bypass-token');
-  const [user, setUser] = useState<{ id: string, email: string, name: string, role: string } | null>({
-    id: 'd567fae3-a2e6-42d4-bb6e-7119e34b123a',
-    email: 'cadu.souza@itfacilservicos.com.br',
-    name: 'Cadu Souza',
-    role: 'admin'
-  });
+  // Authentication States
+  const [token, setToken] = useState<string | null>(null);
+  const [user, setUser] = useState<{ id: string, email: string, name: string, role: string } | null>(null);
   const [authView, setAuthView] = useState<'login' | 'register'>('login');
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
@@ -109,6 +104,11 @@ export default function CockpitPage() {
   const [vaultValue, setVaultValue] = useState('');
   const [saveStatus, setSaveStatus] = useState<{ status: 'idle' | 'saving' | 'success' | 'error', message?: string }>({ status: 'idle' });
 
+  // Integrations states
+  const [integrations, setIntegrations] = useState<any[]>([]);
+  const [integrationName, setIntegrationName] = useState('');
+  const [integrationStatus, setIntegrationStatus] = useState<{ status: 'idle' | 'saving' | 'success' | 'error', message?: string }>({ status: 'idle' });
+
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -133,14 +133,8 @@ export default function CockpitPage() {
         setSelectedTenant(JSON.parse(cachedTenant));
       }
     } else {
-      // Omitir autenticação temporariamente: Login automático como SRE Admin
-      setToken('bypass-token');
-      setUser({
-        id: 'd567fae3-a2e6-42d4-bb6e-7119e34b123a',
-        email: 'cadu.souza@itfacilservicos.com.br',
-        name: 'Cadu Souza',
-        role: 'admin'
-      });
+      setToken(null);
+      setUser(null);
     }
   }, []);
 
@@ -181,11 +175,80 @@ export default function CockpitPage() {
     }
   };
 
+  const fetchIntegrations = async () => {
+    if (!token || token === 'bypass-token') return;
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/v1/integrations`, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setIntegrations(data);
+      }
+    } catch (err) {
+      console.error("Falha ao buscar integrações:", err);
+    }
+  };
+
+  const handleCreateIntegrationSetting = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!token) return;
+    setIntegrationStatus({ status: 'saving' });
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/v1/integrations`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          name: integrationName,
+          type: selectedIntegrationTool,
+          status: 'active'
+        })
+      });
+      if (response.ok) {
+        setIntegrationStatus({ status: 'success', message: 'Integração ativada com sucesso!' });
+        setIntegrationName('');
+        fetchIntegrations();
+        setTimeout(() => setIntegrationStatus({ status: 'idle' }), 3000);
+      } else {
+        const msg = await response.text();
+        setIntegrationStatus({ status: 'error', message: msg || 'Falha ao ativar integração.' });
+      }
+    } catch (err) {
+      setIntegrationStatus({ status: 'error', message: 'Erro de conectividade com a API.' });
+    }
+  };
+
+  const handleDeleteIntegrationSetting = async (id: string) => {
+    if (!token) return;
+    if (!confirm('Deseja desativar esta integração para o tenant atual?')) return;
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/v1/integrations?id=${id}`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      if (response.ok) {
+        fetchIntegrations();
+      } else {
+        alert('Falha ao desativar integração.');
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
   useEffect(() => {
     if (token) {
       fetchTenants();
+      fetchIntegrations();
     }
-  }, [token]);
+  }, [token, selectedTenant]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -525,6 +588,112 @@ export default function CockpitPage() {
 
 
 
+  if (!token) {
+    return (
+      <div className="min-h-screen bg-[#070b13] text-slate-100 flex items-center justify-center font-sans p-4 relative overflow-hidden">
+        <div className="absolute top-1/4 left-1/4 -translate-x-1/2 -translate-y-1/2 w-96 h-96 rounded-full bg-violet-600/10 blur-[100px] pointer-events-none"></div>
+        <div className="absolute bottom-1/4 right-1/4 translate-x-1/2 translate-y-1/2 w-96 h-96 rounded-full bg-cyan-600/10 blur-[100px] pointer-events-none"></div>
+
+        <div className="glass-card w-full max-w-md border border-white/10 rounded-2xl shadow-2xl p-8 relative z-10 bg-slate-900/60 backdrop-blur-md">
+          <div className="flex flex-col items-center gap-2 mb-8 text-center">
+            <div className="relative flex items-center justify-center h-12 w-36 overflow-hidden rounded-xl bg-white/5 p-1.5 border border-white/10 mb-2">
+              <img 
+                src="https://lirp.cdn-website.com/2cf4cfdc/dms3rep/multi/opt/IT+Facil+-+logo+-+alta-47c0885e-158w.png" 
+                alt="ITFácil Logo" 
+                className="h-full w-auto object-contain"
+              />
+            </div>
+            <h1 className="text-xl font-bold uppercase tracking-wider text-white">ITFácil NOC</h1>
+            <p className="text-xs text-slate-400">Painel SRE Multi-tenant de Gerenciamento & Auto-cura</p>
+          </div>
+
+          {typeof window !== 'undefined' && window.location.search.includes('verified=true') && (
+            <div className="mb-6 p-3 rounded-lg bg-emerald-950/20 border border-emerald-500/20 text-emerald-400 text-xs flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 shrink-0" />
+              <span>E-mail verificado com sucesso! Você já pode realizar o login.</span>
+            </div>
+          )}
+
+          <div className="flex border-b border-white/5 mb-6">
+            <button
+              onClick={() => { setAuthView('login'); setAuthStatus({ status: 'idle' }); }}
+              className={`flex-1 pb-3 text-sm font-bold transition-all ${authView === 'login' ? 'text-violet-400 border-b-2 border-violet-500' : 'text-slate-400 hover:text-slate-200'}`}
+            >
+              Acessar Cockpit
+            </button>
+            <button
+              onClick={() => { setAuthView('register'); setAuthStatus({ status: 'idle' }); }}
+              className={`flex-1 pb-3 text-sm font-bold transition-all ${authView === 'register' ? 'text-violet-400 border-b-2 border-violet-500' : 'text-slate-400 hover:text-slate-200'}`}
+            >
+              Criar Conta
+            </button>
+          </div>
+
+          <form onSubmit={authView === 'login' ? handleLogin : handleRegister} className="flex flex-col gap-4">
+            {authView === 'register' && (
+              <div className="flex flex-col gap-1.5">
+                <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Nome Completo</label>
+                <input
+                  type="text"
+                  required
+                  value={authName}
+                  onChange={(e) => setAuthName(e.target.value)}
+                  placeholder="Seu nome"
+                  className="bg-black/30 border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-violet-500 transition-all placeholder:text-slate-600"
+                />
+              </div>
+            )}
+
+            <div className="flex flex-col gap-1.5">
+              <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">E-mail Corporativo</label>
+              <input
+                type="email"
+                required
+                value={authEmail}
+                onChange={(e) => setAuthEmail(e.target.value)}
+                placeholder="seu-nome@empresa.com"
+                className="bg-black/30 border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-violet-500 transition-all placeholder:text-slate-600"
+              />
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Senha</label>
+              <input
+                type="password"
+                required
+                value={authPassword}
+                onChange={(e) => setAuthPassword(e.target.value)}
+                placeholder="Mínimo de 6 caracteres"
+                className="bg-black/30 border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-violet-500 transition-all placeholder:text-slate-600"
+              />
+            </div>
+
+            <button
+              type="submit"
+              disabled={authStatus.status === 'loading'}
+              className="w-full bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white font-bold text-xs py-3 rounded-lg mt-2 transition-all shadow-md shadow-violet-950/40 flex items-center justify-center gap-2 cursor-pointer"
+            >
+              {authStatus.status === 'loading' && <RefreshCw className="w-4 h-4 animate-spin" />}
+              {authView === 'login' ? 'Entrar no Painel' : 'Registrar Minha Conta'}
+            </button>
+
+            {authStatus.status === 'success' && authStatus.message && (
+              <div className="p-3 bg-emerald-950/20 border border-emerald-500/20 text-emerald-400 text-xs rounded-lg mt-2 font-sans">
+                {authStatus.message}
+              </div>
+            )}
+
+            {authStatus.status === 'error' && authStatus.message && (
+              <div className="p-3 bg-rose-950/20 border border-rose-500/20 text-rose-400 text-xs rounded-lg mt-2 font-sans">
+                {authStatus.message}
+              </div>
+            )}
+          </form>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-background text-slate-100 flex flex-col font-sans select-none">
       
@@ -682,12 +851,18 @@ export default function CockpitPage() {
             )}
           </div>
 
-          {/* User Profile (Sem Logout) */}
+          {/* User Profile and Logout */}
           <div className="flex items-center gap-3 px-3 py-1 rounded-lg bg-white/5 border border-white/5 ml-2">
             <div className="flex flex-col text-right">
               <span className="text-[10px] text-white font-bold leading-none">{user?.name}</span>
               <span className="text-[8px] text-slate-400 uppercase tracking-widest font-semibold">{user?.role}</span>
             </div>
+            <button
+              onClick={handleLogout}
+              className="text-[9px] text-rose-400 hover:text-rose-300 bg-rose-500/10 hover:bg-rose-500/20 px-2 py-1 rounded transition-all font-bold cursor-pointer"
+            >
+              Sair
+            </button>
           </div>
         </div>
       </header>
@@ -1442,23 +1617,80 @@ export default function CockpitPage() {
                 {/* 2. Webhook URLs (Push) */}
                 {['uptimekuma', 'zabbix', 'prometheus', 'wazuh', 'grafana'].includes(selectedIntegrationTool) ? (
                   <div className="flex flex-col gap-4">
-                    <div className="flex flex-col gap-2">
+                    {/* Active Integrations list */}
+                    <div className="flex flex-col gap-2.5">
                       <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">
-                        Sua URL de Ingestão Exclusiva (Webhook URL)
+                        Integrações Ativas ({selectedTenant.name})
                       </label>
-                      <div className="flex bg-[#040811] border border-white/5 rounded-lg overflow-hidden p-2.5 items-center justify-between font-mono text-xs text-cyan-400 select-all select-text">
-                        <span className="truncate mr-3">
-                          {`${API_BASE_URL}/api/v1/ingest/${selectedIntegrationTool}?token=${selectedTenant.id}`}
-                        </span>
-                        <button
-                          onClick={() => handleCopyWebhookUrl(`${API_BASE_URL}/api/v1/ingest/${selectedIntegrationTool}?token=${selectedTenant.id}`)}
-                          className="p-1.5 rounded bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white transition-all shrink-0"
-                          title="Copiar URL"
-                        >
-                          {copiedText ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
-                        </button>
-                      </div>
+                      
+                      {integrations.filter(i => i.type === selectedIntegrationTool).length > 0 ? (
+                        <div className="flex flex-col gap-2 max-h-[150px] overflow-y-auto pr-1">
+                          {integrations.filter(i => i.type === selectedIntegrationTool).map(item => (
+                            <div key={item.id} className="p-3 rounded-lg bg-[#040811] border border-white/5 flex items-center justify-between font-sans text-xs">
+                              <div className="flex flex-col gap-0.5">
+                                <span className="font-bold text-slate-200">{item.name}</span>
+                                <span className="text-[9px] font-mono text-cyan-400 select-all leading-none mt-1">
+                                  {`${API_BASE_URL}/api/v1/ingest/${selectedIntegrationTool}?token=${selectedTenant.id}`}
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-2 shrink-0 ml-4">
+                                <button
+                                  onClick={() => handleCopyWebhookUrl(`${API_BASE_URL}/api/v1/ingest/${selectedIntegrationTool}?token=${selectedTenant.id}`)}
+                                  className="p-1.5 rounded bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white transition-all"
+                                  title="Copiar URL de Ingestão"
+                                >
+                                  {copiedText ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                                </button>
+                                {user?.role === 'admin' && (
+                                  <button
+                                    onClick={() => handleDeleteIntegrationSetting(item.id)}
+                                    className="p-1.5 rounded bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 transition-all font-bold text-[10px]"
+                                    title="Desativar Integração"
+                                  >
+                                    Remover
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="p-3 rounded-lg bg-amber-950/10 border border-amber-500/10 text-amber-400 text-xs font-sans">
+                          Nenhuma integração deste tipo está ativa para o Tenant atual. Ative abaixo para liberar a recepção de alertas.
+                        </div>
+                      )}
                     </div>
+
+                    {/* Admin Integration Activation Form */}
+                    {user?.role === 'admin' && (
+                      <form onSubmit={handleCreateIntegrationSetting} className="p-4 rounded-xl bg-white/[0.02] border border-white/5 flex flex-col gap-3">
+                        <h5 className="text-[10px] font-bold uppercase tracking-wider text-slate-200">Ativar Nova Integração</h5>
+                        <div className="flex gap-2">
+                          <input
+                            type="text"
+                            required
+                            value={integrationName}
+                            onChange={(e) => setIntegrationName(e.target.value)}
+                            placeholder="Nome identificador (Ex: Zabbix Produção)"
+                            className="flex-1 bg-[#0b0f19] border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-violet-500 transition-all placeholder:text-slate-600"
+                          />
+                          <button
+                            type="submit"
+                            disabled={integrationStatus.status === 'saving'}
+                            className="bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white font-bold text-xs px-4 rounded-lg transition-all shadow-md flex items-center gap-1.5 shrink-0 cursor-pointer"
+                          >
+                            {integrationStatus.status === 'saving' && <RefreshCw className="w-3 h-3 animate-spin" />}
+                            Ativar
+                          </button>
+                        </div>
+                        {integrationStatus.status === 'success' && (
+                          <div className="text-[10px] text-emerald-400 font-sans">{integrationStatus.message}</div>
+                        )}
+                        {integrationStatus.status === 'error' && (
+                          <div className="text-[10px] text-rose-400 font-sans">{integrationStatus.message}</div>
+                        )}
+                      </form>
+                    )}
 
                     <div className="flex flex-col gap-3 p-4 rounded-xl bg-slate-900/40 border border-white/5 text-xs text-slate-300 leading-relaxed font-sans">
                       <h5 className="font-bold text-slate-200 uppercase tracking-wider text-[10px]">Como configurar na sua ferramenta:</h5>

@@ -30,59 +30,70 @@ const (
 
 // APIKeyAuth is a high-performance middleware that authenticates requests using an API Key.
 // It uses Redis caching to avoid hitting PostgreSQL on every single event ingestion request under high load.
-func APIKeyAuth(pgPool *pgxpool.Pool, redisClient *redis.Client) func(http.Handler) http.Handler {
+// It also falls back to resolving the "token" query parameter for simple webhooks (supporting raw UUID, JWT, or API Keys).
+func APIKeyAuth(pgPool *pgxpool.Pool, redisClient *redis.Client, jwtSecret []byte) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			apiKey := r.Header.Get(ApiKeyHeader)
-			if apiKey == "" {
-				http.Error(w, "Unauthorized: Missing API Key header", http.StatusUnauthorized)
-				return
-			}
-
-			// Compute SHA-256 hash of the API Key
-			hash := sha256.Sum256([]byte(apiKey))
-			keyHash := hex.EncodeToString(hash[:])
-
-			ctx := r.Context()
+			
 			var tenantID uuid.UUID
 			var err error
 
-			// 1. Try retrieving from Redis cache first
-			cacheKey := ApiKeyCachePrefix + keyHash
-			cachedTenantID, err := redisClient.Get(ctx, cacheKey).Result()
-			if err == nil && cachedTenantID != "" {
-				tenantID, err = uuid.Parse(cachedTenantID)
+			if apiKey != "" {
+				// 1. Authenticate using API Key header (standard high-performance flow with Redis cache)
+				hash := sha256.Sum256([]byte(apiKey))
+				keyHash := hex.EncodeToString(hash[:])
+
+				ctx := r.Context()
+				cacheKey := ApiKeyCachePrefix + keyHash
+				cachedTenantID, err := redisClient.Get(ctx, cacheKey).Result()
+				if err == nil && cachedTenantID != "" {
+					tenantID, err = uuid.Parse(cachedTenantID)
+					if err == nil {
+						// Cache hit! Inject tenant ID and proceed
+						ctx = db.WithTenantID(ctx, tenantID)
+						next.ServeHTTP(w, r.WithContext(ctx))
+						return
+					}
+				}
+
+				// Cache miss: Query PostgreSQL to resolve tenant ID
+				query := `
+					SELECT tenant_id 
+					FROM tenant_api_keys 
+					WHERE key_hash = $1 AND (expires_at IS NULL OR expires_at > NOW())
+				`
+				err = pgPool.QueryRow(ctx, query, keyHash).Scan(&tenantID)
+				if err != nil {
+					if errors.Is(err, pgx.ErrNoRows) {
+						http.Error(w, "Unauthorized: Invalid or expired API Key", http.StatusUnauthorized)
+						return
+					}
+					http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+					return
+				}
+
+				// Cache the successful resolution in Redis
+				_ = redisClient.Set(ctx, cacheKey, tenantID.String(), ApiKeyCacheTTL).Err()
+
+				// Inject tenant ID into context and proceed
+				ctx = db.WithTenantID(ctx, tenantID)
+				next.ServeHTTP(w, r.WithContext(ctx))
+				return
+			}
+
+			// 2. Fallback to query parameter "token" (standard for simple webhooks)
+			token := r.URL.Query().Get("token")
+			if token != "" {
+				tenantID, err = ResolveTenantFromToken(token, jwtSecret, pgPool)
 				if err == nil {
-					// Cache hit! Inject tenant ID and proceed
-					ctx = db.WithTenantID(ctx, tenantID)
+					ctx := db.WithTenantID(r.Context(), tenantID)
 					next.ServeHTTP(w, r.WithContext(ctx))
 					return
 				}
 			}
 
-			// 2. Cache miss: Query PostgreSQL to resolve tenant ID
-			// RLS is bypassed here since we are doing systemic authentication lookup using the pool
-			query := `
-				SELECT tenant_id 
-				FROM tenant_api_keys 
-				WHERE key_hash = $1 AND (expires_at IS NULL OR expires_at > NOW())
-			`
-			err = pgPool.QueryRow(ctx, query, keyHash).Scan(&tenantID)
-			if err != nil {
-				if errors.Is(err, pgx.ErrNoRows) {
-					http.Error(w, "Unauthorized: Invalid or expired API Key", http.StatusUnauthorized)
-					return
-				}
-				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-				return
-			}
-
-			// 3. Cache the successful resolution in Redis
-			_ = redisClient.Set(ctx, cacheKey, tenantID.String(), ApiKeyCacheTTL).Err()
-
-			// Inject tenant ID into context and proceed
-			ctx = db.WithTenantID(ctx, tenantID)
-			next.ServeHTTP(w, r.WithContext(ctx))
+			http.Error(w, "Unauthorized: Missing API Key header or valid token parameter", http.StatusUnauthorized)
 		})
 	}
 }
@@ -122,14 +133,8 @@ func JWTAuth(jwtSecret []byte) func(http.Handler) http.Handler {
 			}
 
 			if err != nil {
-				// BYPASS / OMITIR AUTENTICAÇÃO: Injeta administrador padrão para testes
-				claims = &JWTClaims{
-					UserID:   uuid.MustParse("d567fae3-a2e6-42d4-bb6e-7119e34b123a"),
-					TenantID: uuid.MustParse("e1b7c123-1234-4321-abcd-123456789abc"), // Telco Global Corp
-					Role:     model.RoleAdmin,
-					Email:    "cadu.souza@itfacilservicos.com.br",
-					Exp:      time.Now().Add(24 * time.Hour).Unix(),
-				}
+				http.Error(w, "Unauthorized: "+err.Error(), http.StatusUnauthorized)
+				return
 			}
 
 			// Injeta tenant ID e claims no contexto

@@ -88,7 +88,7 @@ type WazuhAlertPayload struct {
 const AlertsQueueKey = "noc:queue:alerts"
 
 // HandleIngest handles generic alert ingestion
-func HandleIngest(redisClient *redis.Client) http.HandlerFunc {
+func HandleIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
@@ -98,6 +98,14 @@ func HandleIngest(redisClient *redis.Client) http.HandlerFunc {
 		tenantID, ok := db.TenantIDFromContext(r.Context())
 		if !ok {
 			http.Error(w, "Unauthorized: Tenant context not found", http.StatusUnauthorized)
+			return
+		}
+
+		// Verify active integration setting
+		var exists bool
+		err := pgPool.QueryRow(r.Context(), "SELECT EXISTS(SELECT 1 FROM tenant_integrations WHERE tenant_id = $1 AND type = $2 AND status = 'active')", tenantID, "generic").Scan(&exists)
+		if err != nil || !exists {
+			http.Error(w, "Forbidden: Generic integration not active for this tenant", http.StatusForbidden)
 			return
 		}
 
@@ -164,7 +172,7 @@ func HandleIngest(redisClient *redis.Client) http.HandlerFunc {
 }
 
 // HandlePrometheusIngest normalizes Prometheus/Alertmanager webhook alerts
-func HandlePrometheusIngest(redisClient *redis.Client) http.HandlerFunc {
+func HandlePrometheusIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
@@ -174,6 +182,14 @@ func HandlePrometheusIngest(redisClient *redis.Client) http.HandlerFunc {
 		tenantID, ok := db.TenantIDFromContext(r.Context())
 		if !ok {
 			http.Error(w, "Unauthorized: Tenant context not found", http.StatusUnauthorized)
+			return
+		}
+
+		// Verify active integration setting
+		var exists bool
+		err := pgPool.QueryRow(r.Context(), "SELECT EXISTS(SELECT 1 FROM tenant_integrations WHERE tenant_id = $1 AND type = $2 AND status = 'active')", tenantID, "prometheus").Scan(&exists)
+		if err != nil || !exists {
+			http.Error(w, "Forbidden: Prometheus integration not active for this tenant", http.StatusForbidden)
 			return
 		}
 
@@ -223,7 +239,7 @@ func HandlePrometheusIngest(redisClient *redis.Client) http.HandlerFunc {
 }
 
 // HandleWazuhIngest normalizes Wazuh security alerts
-func HandleWazuhIngest(redisClient *redis.Client) http.HandlerFunc {
+func HandleWazuhIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
@@ -233,6 +249,14 @@ func HandleWazuhIngest(redisClient *redis.Client) http.HandlerFunc {
 		tenantID, ok := db.TenantIDFromContext(r.Context())
 		if !ok {
 			http.Error(w, "Unauthorized: Tenant context not found", http.StatusUnauthorized)
+			return
+		}
+
+		// Verify active integration setting
+		var exists bool
+		err := pgPool.QueryRow(r.Context(), "SELECT EXISTS(SELECT 1 FROM tenant_integrations WHERE tenant_id = $1 AND type = $2 AND status = 'active')", tenantID, "wazuh").Scan(&exists)
+		if err != nil || !exists {
+			http.Error(w, "Forbidden: Wazuh integration not active for this tenant", http.StatusForbidden)
 			return
 		}
 
@@ -445,7 +469,7 @@ type ZabbixPayload struct {
 }
 
 // HandleUptimeKumaIngest ingests and normalizes Uptime Kuma status notifications
-func HandleUptimeKumaIngest(redisClient *redis.Client) http.HandlerFunc {
+func HandleUptimeKumaIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
@@ -455,6 +479,14 @@ func HandleUptimeKumaIngest(redisClient *redis.Client) http.HandlerFunc {
 		tenantID, ok := db.TenantIDFromContext(r.Context())
 		if !ok {
 			http.Error(w, "Unauthorized: Tenant context not found", http.StatusUnauthorized)
+			return
+		}
+
+		// Verify active integration setting
+		var exists bool
+		err := pgPool.QueryRow(r.Context(), "SELECT EXISTS(SELECT 1 FROM tenant_integrations WHERE tenant_id = $1 AND type = $2 AND status = 'active')", tenantID, "uptimekuma").Scan(&exists)
+		if err != nil || !exists {
+			http.Error(w, "Forbidden: Uptime Kuma integration not active for this tenant", http.StatusForbidden)
 			return
 		}
 
@@ -490,7 +522,7 @@ func HandleUptimeKumaIngest(redisClient *redis.Client) http.HandlerFunc {
 }
 
 // HandleGrafanaIngest ingests and normalizes Grafana alerts via webhook
-func HandleGrafanaIngest(redisClient *redis.Client) http.HandlerFunc {
+func HandleGrafanaIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
@@ -500,6 +532,14 @@ func HandleGrafanaIngest(redisClient *redis.Client) http.HandlerFunc {
 		tenantID, ok := db.TenantIDFromContext(r.Context())
 		if !ok {
 			http.Error(w, "Unauthorized: Tenant context not found", http.StatusUnauthorized)
+			return
+		}
+
+		// Verify active integration setting
+		var exists bool
+		err := pgPool.QueryRow(r.Context(), "SELECT EXISTS(SELECT 1 FROM tenant_integrations WHERE tenant_id = $1 AND type = $2 AND status = 'active')", tenantID, "grafana").Scan(&exists)
+		if err != nil || !exists {
+			http.Error(w, "Forbidden: Grafana integration not active for this tenant", http.StatusForbidden)
 			return
 		}
 
@@ -548,7 +588,7 @@ func HandleGrafanaIngest(redisClient *redis.Client) http.HandlerFunc {
 }
 
 // HandleZabbixIngest ingests and normalizes Zabbix problem triggers
-func HandleZabbixIngest(redisClient *redis.Client) http.HandlerFunc {
+func HandleZabbixIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
@@ -558,6 +598,14 @@ func HandleZabbixIngest(redisClient *redis.Client) http.HandlerFunc {
 		tenantID, ok := db.TenantIDFromContext(r.Context())
 		if !ok {
 			http.Error(w, "Unauthorized: Tenant context not found", http.StatusUnauthorized)
+			return
+		}
+
+		// Verify active integration setting
+		var exists bool
+		err := pgPool.QueryRow(r.Context(), "SELECT EXISTS(SELECT 1 FROM tenant_integrations WHERE tenant_id = $1 AND type = $2 AND status = 'active')", tenantID, "zabbix").Scan(&exists)
+		if err != nil || !exists {
+			http.Error(w, "Forbidden: Zabbix integration not active for this tenant", http.StatusForbidden)
 			return
 		}
 

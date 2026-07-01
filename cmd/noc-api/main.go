@@ -294,30 +294,30 @@ func main() {
 	})
 
 	// High-Performance Ingestion endpoint (protected by API Key auth middleware)
-	ingestHandler := api.HandleIngest(redisClient)
-	protectedIngest := middleware.APIKeyAuth(pgPool, redisClient)(ingestHandler)
+	ingestHandler := api.HandleIngest(pgPool, redisClient)
+	protectedIngest := middleware.APIKeyAuth(pgPool, redisClient, jwtSecret)(ingestHandler)
 	mux.Handle("/api/v1/ingest", protectedIngest)
 
 	// High-Performance Prometheus Alertmanager & Wazuh Webhook Ingestion
-	promHandler := api.HandlePrometheusIngest(redisClient)
-	protectedProm := middleware.APIKeyAuth(pgPool, redisClient)(promHandler)
+	promHandler := api.HandlePrometheusIngest(pgPool, redisClient)
+	protectedProm := middleware.APIKeyAuth(pgPool, redisClient, jwtSecret)(promHandler)
 	mux.Handle("/api/v1/ingest/prometheus", protectedProm)
 
-	wazuhHandler := api.HandleWazuhIngest(redisClient)
-	protectedWazuh := middleware.APIKeyAuth(pgPool, redisClient)(wazuhHandler)
+	wazuhHandler := api.HandleWazuhIngest(pgPool, redisClient)
+	protectedWazuh := middleware.APIKeyAuth(pgPool, redisClient, jwtSecret)(wazuhHandler)
 	mux.Handle("/api/v1/ingest/wazuh", protectedWazuh)
 
 	// High-Performance Uptime Kuma, Grafana & Zabbix Webhook Ingestions
-	uptimekumaHandler := api.HandleUptimeKumaIngest(redisClient)
-	protectedUptimeKuma := middleware.APIKeyAuth(pgPool, redisClient)(uptimekumaHandler)
+	uptimekumaHandler := api.HandleUptimeKumaIngest(pgPool, redisClient)
+	protectedUptimeKuma := middleware.APIKeyAuth(pgPool, redisClient, jwtSecret)(uptimekumaHandler)
 	mux.Handle("/api/v1/ingest/uptimekuma", protectedUptimeKuma)
 
-	grafanaHandler := api.HandleGrafanaIngest(redisClient)
-	protectedGrafana := middleware.APIKeyAuth(pgPool, redisClient)(grafanaHandler)
+	grafanaHandler := api.HandleGrafanaIngest(pgPool, redisClient)
+	protectedGrafana := middleware.APIKeyAuth(pgPool, redisClient, jwtSecret)(grafanaHandler)
 	mux.Handle("/api/v1/ingest/grafana", protectedGrafana)
 
-	zabbixHandler := api.HandleZabbixIngest(redisClient)
-	protectedZabbix := middleware.APIKeyAuth(pgPool, redisClient)(zabbixHandler)
+	zabbixHandler := api.HandleZabbixIngest(pgPool, redisClient)
+	protectedZabbix := middleware.APIKeyAuth(pgPool, redisClient, jwtSecret)(zabbixHandler)
 	mux.Handle("/api/v1/ingest/zabbix", protectedZabbix)
 
 	// User authentication endpoints (unauthenticated)
@@ -357,6 +357,30 @@ func main() {
 			protectedPostTenants.ServeHTTP(w, r)
 		} else if r.Method == http.MethodGet {
 			protectedGetTenants.ServeHTTP(w, r)
+		} else {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	}))
+
+	// Integration management routes (GET to list active tenant integrations, POST to add, DELETE to remove)
+	protectedGetIntegrations := middleware.JWTAuth(jwtSecret)(api.HandleGetIntegrations(pgPool))
+	protectedPostIntegrations := middleware.JWTAuth(jwtSecret)(
+		middleware.RequireRole(model.RoleAdmin)(
+			api.HandleCreateIntegration(pgPool),
+		),
+	)
+	protectedDeleteIntegrations := middleware.JWTAuth(jwtSecret)(
+		middleware.RequireRole(model.RoleAdmin)(
+			api.HandleDeleteIntegration(pgPool),
+		),
+	)
+	mux.Handle("/api/v1/integrations", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			protectedGetIntegrations.ServeHTTP(w, r)
+		} else if r.Method == http.MethodPost {
+			protectedPostIntegrations.ServeHTTP(w, r)
+		} else if r.Method == http.MethodDelete {
+			protectedDeleteIntegrations.ServeHTTP(w, r)
 		} else {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		}
