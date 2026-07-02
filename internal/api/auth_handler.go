@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"net"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -18,6 +20,35 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/crypto/bcrypt"
 )
+
+var emailRegex = regexp.MustCompile(`^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`)
+
+func validateEmail(email string) error {
+	email = strings.TrimSpace(email)
+	if !emailRegex.MatchString(email) {
+		return errors.New("formato de e-mail inválido")
+	}
+
+	parts := strings.Split(email, "@")
+	if len(parts) != 2 {
+		return errors.New("formato de e-mail inválido")
+	}
+	domain := parts[1]
+
+	// DNS MX Record lookup
+	mx, err := net.LookupMX(domain)
+	if err == nil && len(mx) > 0 {
+		return nil
+	}
+
+	// Fallback DNS A/AAAA lookup
+	ips, err := net.LookupIP(domain)
+	if err == nil && len(ips) > 0 {
+		return nil
+	}
+
+	return errors.New("o domínio do e-mail não é válido ou não possui registros DNS ativos")
+}
 
 type RegisterRequest struct {
 	Email    string `json:"email"`
@@ -63,6 +94,11 @@ func HandleRegister(pgPool *pgxpool.Pool) http.HandlerFunc {
 
 		if req.Email == "" || req.Password == "" || req.Name == "" {
 			http.Error(w, "Bad Request: email, password, and name are required fields", http.StatusBadRequest)
+			return
+		}
+
+		if err := validateEmail(req.Email); err != nil {
+			http.Error(w, "Bad Request: "+err.Error(), http.StatusBadRequest)
 			return
 		}
 
@@ -352,6 +388,11 @@ func HandleAdminCreateUser(pgPool *pgxpool.Pool) http.HandlerFunc {
 
 		if req.Email == "" || req.Password == "" || req.Name == "" || req.Role == "" {
 			http.Error(w, "Bad Request: email, password, name, and role are required", http.StatusBadRequest)
+			return
+		}
+
+		if err := validateEmail(req.Email); err != nil {
+			http.Error(w, "Bad Request: "+err.Error(), http.StatusBadRequest)
 			return
 		}
 

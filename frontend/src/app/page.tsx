@@ -31,7 +31,9 @@ import {
   TrendingUp,
   Network,
   Settings,
-  Users
+  Users,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 
 interface Alert {
@@ -136,6 +138,15 @@ export default function CockpitPage() {
   const [authTenant, setAuthTenant] = useState('e1b7c123-1234-4321-abcd-123456789abc');
   const [publicTenants, setPublicTenants] = useState<any[]>([]);
   const [authStatus, setAuthStatus] = useState<{ status: 'idle' | 'loading' | 'success' | 'error', message?: string }>({ status: 'idle' });
+
+  // Password Visibility & Confirmation States
+  const [showLoginPassword, setShowLoginPassword] = useState(false);
+  const [showSignupPassword, setShowSignupPassword] = useState(false);
+  const [showSignupConfirmPassword, setShowSignupConfirmPassword] = useState(false);
+  const [showAdminUserPassword, setShowAdminUserPassword] = useState(false);
+  const [authConfirmPassword, setAuthConfirmPassword] = useState('');
+  const [signupEmailError, setSignupEmailError] = useState('');
+  const [signupPasswordError, setSignupPasswordError] = useState('');
 
   // Admin User Creation States
   const [adminUserEmail, setAdminUserEmail] = useState('');
@@ -585,6 +596,26 @@ export default function CockpitPage() {
 
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    // 1. Validar e-mail corporativo format
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(authEmail)) {
+      setAuthStatus({ status: 'error', message: 'Por favor, informe um endereço de e-mail válido.' });
+      return;
+    }
+
+    // 2. Validar tamanho da senha
+    if (authPassword.length < 6) {
+      setAuthStatus({ status: 'error', message: 'A senha deve ter pelo menos 6 caracteres.' });
+      return;
+    }
+
+    // 3. Validar confirmação de senha
+    if (authPassword !== authConfirmPassword) {
+      setAuthStatus({ status: 'error', message: 'As senhas informadas não coincidem.' });
+      return;
+    }
+
     setAuthStatus({ status: 'loading' });
     try {
       const response = await fetch(`${API_BASE_URL}/api/v1/auth/register`, {
@@ -605,6 +636,7 @@ export default function CockpitPage() {
         }
         setAuthEmail('');
         setAuthPassword('');
+        setAuthConfirmPassword('');
         setAuthName('');
       } else {
         const contentType = response.headers.get('content-type');
@@ -1324,21 +1356,17 @@ export default function CockpitPage() {
 
           <form onSubmit={authView === 'login' ? handleLogin : handleRegister} className="flex flex-col gap-4">
             {authView === 'register' && (
-              <>
-                <div className="flex flex-col gap-1.5">
-                  <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Nome Completo</label>
-                  <input
-                    type="text"
-                    required
-                    value={authName}
-                    onChange={(e) => setAuthName(e.target.value)}
-                    placeholder="Seu nome"
-                    className="bg-black/30 border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-violet-500 transition-all placeholder:text-slate-600"
-                  />
-                </div>
-
-
-              </>
+              <div className="flex flex-col gap-1.5">
+                <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Nome Completo</label>
+                <input
+                  type="text"
+                  required
+                  value={authName}
+                  onChange={(e) => setAuthName(e.target.value)}
+                  placeholder="Seu nome"
+                  className="bg-black/30 border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-violet-500 transition-all placeholder:text-slate-600"
+                />
+              </div>
             )}
 
             <div className="flex flex-col gap-1.5">
@@ -1347,23 +1375,90 @@ export default function CockpitPage() {
                 type="email"
                 required
                 value={authEmail}
-                onChange={(e) => setAuthEmail(e.target.value)}
+                onChange={(e) => {
+                  setAuthEmail(e.target.value);
+                  if (authView === 'register') {
+                    const regex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+                    if (e.target.value && !regex.test(e.target.value)) {
+                      setSignupEmailError('Formato de e-mail inválido');
+                    } else {
+                      setSignupEmailError('');
+                    }
+                  }
+                }}
                 placeholder="seu-nome@empresa.com"
                 className="bg-black/30 border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-violet-500 transition-all placeholder:text-slate-600"
               />
+              {authView === 'register' && signupEmailError && (
+                <span className="text-[10px] text-rose-400 font-medium px-1 mt-0.5">{signupEmailError}</span>
+              )}
             </div>
 
             <div className="flex flex-col gap-1.5">
               <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Senha</label>
-              <input
-                type="password"
-                required
-                value={authPassword}
-                onChange={(e) => setAuthPassword(e.target.value)}
-                placeholder="Mínimo de 6 caracteres"
-                className="bg-black/30 border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-violet-500 transition-all placeholder:text-slate-600"
-              />
+              <div className="relative flex items-center">
+                <input
+                  type={authView === 'login' ? (showLoginPassword ? 'text' : 'password') : (showSignupPassword ? 'text' : 'password')}
+                  required
+                  value={authPassword}
+                  onChange={(e) => {
+                    setAuthPassword(e.target.value);
+                    if (authView === 'register') {
+                      if (e.target.value && e.target.value.length < 6) {
+                        setSignupPasswordError('A senha deve ter pelo menos 6 caracteres');
+                      } else {
+                        setSignupPasswordError('');
+                      }
+                    }
+                  }}
+                  placeholder={authView === 'login' ? 'Sua senha' : 'Mínimo de 6 caracteres'}
+                  className="w-full bg-black/30 border border-white/10 rounded-lg p-2.5 pr-10 text-xs text-white focus:outline-none focus:border-violet-500 transition-all placeholder:text-slate-600"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (authView === 'login') setShowLoginPassword(!showLoginPassword);
+                    else setShowSignupPassword(!showSignupPassword);
+                  }}
+                  className="absolute right-3 text-slate-400 hover:text-white transition-all cursor-pointer"
+                >
+                  {authView === 'login' ? (
+                    showLoginPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />
+                  ) : (
+                    showSignupPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />
+                  )}
+                </button>
+              </div>
+              {authView === 'register' && signupPasswordError && (
+                <span className="text-[10px] text-rose-400 font-medium px-1 mt-0.5">{signupPasswordError}</span>
+              )}
             </div>
+
+            {authView === 'register' && (
+              <div className="flex flex-col gap-1.5">
+                <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Confirmar Senha</label>
+                <div className="relative flex items-center">
+                  <input
+                    type={showSignupConfirmPassword ? 'text' : 'password'}
+                    required
+                    value={authConfirmPassword}
+                    onChange={(e) => setAuthConfirmPassword(e.target.value)}
+                    placeholder="Repita sua senha"
+                    className="w-full bg-black/30 border border-white/10 rounded-lg p-2.5 pr-10 text-xs text-white focus:outline-none focus:border-violet-500 transition-all placeholder:text-slate-600"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowSignupConfirmPassword(!showSignupConfirmPassword)}
+                    className="absolute right-3 text-slate-400 hover:text-white transition-all cursor-pointer"
+                  >
+                    {showSignupConfirmPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+                {authConfirmPassword && authPassword !== authConfirmPassword && (
+                  <span className="text-[10px] text-rose-400 font-medium px-1 mt-0.5">As senhas não coincidem.</span>
+                )}
+              </div>
+            )}
 
             <button
               type="submit"
@@ -3418,14 +3513,23 @@ export default function CockpitPage() {
 
                         <div className="flex flex-col gap-1.5">
                           <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Senha Provisória</label>
-                          <input
-                            type="password"
-                            required
-                            value={adminUserPassword}
-                            onChange={(e) => setAdminUserPassword(e.target.value)}
-                            placeholder="Mínimo de 6 caracteres"
-                            className="bg-[#0b0f19] border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-violet-500 transition-all placeholder:text-slate-600"
-                          />
+                          <div className="relative flex items-center">
+                            <input
+                              type={showAdminUserPassword ? 'text' : 'password'}
+                              required
+                              value={adminUserPassword}
+                              onChange={(e) => setAdminUserPassword(e.target.value)}
+                              placeholder="Mínimo de 6 caracteres"
+                              className="w-full bg-[#0b0f19] border border-white/10 rounded-lg p-2.5 pr-10 text-xs text-white focus:outline-none focus:border-violet-500 transition-all placeholder:text-slate-600"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setShowAdminUserPassword(!showAdminUserPassword)}
+                              className="absolute right-3 text-slate-400 hover:text-white transition-all cursor-pointer"
+                            >
+                              {showAdminUserPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                            </button>
+                          </div>
                         </div>
 
                         <div className="flex flex-col gap-1.5">
