@@ -44,7 +44,7 @@ def fetch_sla_data(tenant_id: str):
             cur.execute("SET LOCAL app.current_tenant_id = %s", (tenant_id,))
             cur.execute(
                 """
-                SELECT id, severity, status, summary, created_at, updated_at, resolved_at 
+                SELECT id, event_type, severity, status, summary, created_at, updated_at, resolved_at 
                 FROM alerts 
                 WHERE created_at >= NOW() - INTERVAL '30 days'
                 ORDER BY created_at DESC
