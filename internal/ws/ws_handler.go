@@ -94,9 +94,29 @@ func (c *Client) writePump() {
 func ServeWS(hub *Hub, pgPool *pgxpool.Pool, jwtSecret []byte) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		tokenStr := r.URL.Query().Get("token")
+		tenantsStr := r.URL.Query().Get("tenants")
 		var tenantIDs []uuid.UUID
 
+		var operatorClaims *middleware.JWTClaims
+		var errVerify error
 		if tokenStr != "" {
+			operatorClaims, errVerify = middleware.VerifyJWT(tokenStr, jwtSecret)
+		}
+
+		if errVerify == nil && operatorClaims != nil {
+			if tenantsStr != "" {
+				tokens := strings.Split(tenantsStr, ",")
+				for _, tok := range tokens {
+					tok = strings.TrimSpace(tok)
+					if parsed, err := uuid.Parse(tok); err == nil {
+						tenantIDs = append(tenantIDs, parsed)
+					}
+				}
+			} else {
+				tenantIDs = append(tenantIDs, operatorClaims.TenantID)
+			}
+		} else if tokenStr != "" {
+			// Fallback: support old direct-token parameter mappings (backwards compatibility)
 			tokens := strings.Split(tokenStr, ",")
 			for _, tok := range tokens {
 				tok = strings.TrimSpace(tok)
@@ -136,11 +156,27 @@ func ServeWS(hub *Hub, pgPool *pgxpool.Pool, jwtSecret []byte) http.HandlerFunc 
 			return
 		}
 
+		var userID uuid.UUID
+		var email string
+		var name string
+		var role string
+		if operatorClaims != nil {
+			userID = operatorClaims.UserID
+			email = operatorClaims.Email
+			name = strings.Split(operatorClaims.Email, "@")[0]
+			role = string(operatorClaims.Role)
+		}
+
 		client := &Client{
-			ID:        uuid.New(),
-			TenantIDs: tenantIDs,
-			Conn:      conn,
-			Send:      make(chan []byte, 256),
+			ID:          uuid.New(),
+			TenantIDs:   tenantIDs,
+			Conn:        conn,
+			Send:        make(chan []byte, 256),
+			UserID:      userID,
+			Email:       email,
+			Name:        name,
+			Role:        role,
+			ConnectedAt: time.Now(),
 		}
 
 		hub.register <- client

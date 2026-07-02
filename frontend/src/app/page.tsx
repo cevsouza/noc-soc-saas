@@ -30,7 +30,8 @@ import {
   Shield,
   TrendingUp,
   Network,
-  Settings
+  Settings,
+  Users
 } from 'lucide-react';
 
 interface Alert {
@@ -112,7 +113,7 @@ const SlaCountdown = ({ alert }: { alert: Alert }) => {
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
 
-const getWSUrl = (tenantIds: string[]) => {
+const getWSUrl = (token: string, tenantIds: string[]) => {
   const base = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
   const host = base.replace(/^https?:\/\//, '');
   
@@ -121,7 +122,7 @@ const getWSUrl = (tenantIds: string[]) => {
   if (base.startsWith('https') || (typeof window !== 'undefined' && window.location.protocol === 'https:')) {
     wsProtocol = 'wss';
   }
-  return `${wsProtocol}://${host}/api/v1/ws?token=${tenantIds.join(',')}`;
+  return `${wsProtocol}://${host}/api/v1/ws?token=${encodeURIComponent(token)}&tenants=${tenantIds.join(',')}`;
 };
 
 export default function CockpitPage() {
@@ -188,6 +189,9 @@ export default function CockpitPage() {
   
   // Integrations Modal States
   const [showIntegrationsModal, setShowIntegrationsModal] = useState(false);
+  const [showActiveUsersModal, setShowActiveUsersModal] = useState(false);
+  const [activeUsers, setActiveUsers] = useState<any[]>([]);
+  const [isLoadingActiveUsers, setIsLoadingActiveUsers] = useState(false);
   const [selectedIntegrationTool, setSelectedIntegrationTool] = useState('uptimekuma');
   const [copiedText, setCopiedText] = useState(false);
   
@@ -293,6 +297,34 @@ export default function CockpitPage() {
       console.error("Falha ao buscar integrações:", err);
     }
   };
+
+  const fetchActiveUsers = async () => {
+    if (!token || user?.role !== 'admin') return;
+    setIsLoadingActiveUsers(true);
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/v1/ws/active_users`, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setActiveUsers(data);
+      }
+    } catch (err) {
+      console.error("Falha ao buscar usuários ativos:", err);
+    } finally {
+      setIsLoadingActiveUsers(false);
+    }
+  };
+
+  useEffect(() => {
+    if (showActiveUsersModal) {
+      fetchActiveUsers();
+      const interval = setInterval(fetchActiveUsers, 10000);
+      return () => clearInterval(interval);
+    }
+  }, [showActiveUsersModal, token]);
 
   const handleCreateIntegrationSetting = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -644,7 +676,7 @@ export default function CockpitPage() {
     }
 
     setConnStatus('connecting');
-    const wsUrl = getWSUrl(selectedTenantIds);
+    const wsUrl = getWSUrl(token, selectedTenantIds);
     
     const socket = new WebSocket(wsUrl);
     wsRef.current = socket;
@@ -1424,6 +1456,17 @@ export default function CockpitPage() {
             >
               <LinkIcon className="w-3.5 h-3.5" />
               <span>Integrações</span>
+            </button>
+          )}
+
+          {/* Active Users Modal Trigger (Admin Only) */}
+          {user?.role === 'admin' && (
+            <button
+              onClick={() => setShowActiveUsersModal(true)}
+              className="flex items-center gap-2 px-3 py-1 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/35 text-emerald-300 text-xs font-bold transition-all uppercase tracking-wider"
+            >
+              <Users className="w-3.5 h-3.5" />
+              <span>Operadores Online</span>
             </button>
           )}
 
@@ -2681,6 +2724,123 @@ export default function CockpitPage() {
                 Registrar Passagem de Turno
               </button>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* 2.5. Active Users / Operators Online Modal (Admin Only) */}
+      {showActiveUsersModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4 animate-fadeIn">
+          <div className="glass-card w-full max-w-2xl h-[500px] rounded-2xl overflow-hidden flex flex-col border border-white/10 shadow-2xl bg-slate-900">
+            {/* Header */}
+            <div className="px-6 py-4 border-b border-white/5 bg-slate-950/40 flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <Users className="w-5 h-5 text-emerald-400" />
+                <h3 className="text-md font-bold uppercase tracking-wider text-slate-100">Operadores Online no NOC</h3>
+              </div>
+              <button 
+                onClick={() => setShowActiveUsersModal(false)}
+                className="text-xs text-slate-400 hover:text-slate-200 bg-white/5 hover:bg-white/10 px-3 py-1.5 rounded-lg transition-all"
+              >
+                Fechar
+              </button>
+            </div>
+
+            {/* Content */}
+            <div className="flex-1 p-6 overflow-y-auto space-y-4">
+              <div className="flex items-center justify-between">
+                <p className="text-xs text-slate-400">
+                  Lista de sessões ativas com conexão WebSocket estabelecida em tempo real.
+                </p>
+                <button
+                  onClick={fetchActiveUsers}
+                  disabled={isLoadingActiveUsers}
+                  className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-white/5 hover:bg-white/10 border border-white/10 text-xs text-slate-300 font-medium transition-all"
+                >
+                  <RefreshCw className={`w-3 h-3 ${isLoadingActiveUsers ? 'animate-spin' : ''}`} />
+                  <span>Atualizar</span>
+                </button>
+              </div>
+
+              {isLoadingActiveUsers ? (
+                <div className="flex flex-col items-center justify-center h-64 space-y-3">
+                  <RefreshCw className="w-8 h-8 text-emerald-400 animate-spin" />
+                  <p className="text-xs text-slate-400">Carregando operadores online...</p>
+                </div>
+              ) : activeUsers.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-64 space-y-3 border border-dashed border-white/5 rounded-xl bg-white/5">
+                  <Users className="w-8 h-8 text-slate-500" />
+                  <p className="text-xs text-slate-400 font-medium">Nenhum operador ativo via WebSocket.</p>
+                  <p className="text-[10px] text-slate-500 max-w-xs text-center">
+                    Geralmente indica que não há sessões abertas no painel Cockpit neste momento.
+                  </p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 gap-3">
+                  {activeUsers.map((activeUser: any) => {
+                    const initials = activeUser.name ? activeUser.name.slice(0, 2).toUpperCase() : 'OP';
+                    const isCurrentUser = activeUser.email === user?.email;
+                    const durationMin = Math.max(1, Math.round((new Date().getTime() - new Date(activeUser.connected_at).getTime()) / 60000));
+                    
+                    return (
+                      <div 
+                        key={activeUser.session_id} 
+                        className={`flex items-center justify-between p-4 rounded-xl border transition-all ${
+                          isCurrentUser 
+                            ? 'bg-emerald-950/15 border-emerald-500/30' 
+                            : 'bg-white/5 border-white/5 hover:border-white/10'
+                        }`}
+                      >
+                        <div className="flex items-center gap-3">
+                          {/* Avatar */}
+                          <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-bold text-sm ${
+                            isCurrentUser 
+                              ? 'bg-emerald-600/20 text-emerald-400 border border-emerald-500/20' 
+                              : 'bg-violet-600/20 text-violet-400 border border-violet-500/20'
+                          }`}>
+                            {initials}
+                          </div>
+                          
+                          {/* Details */}
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm font-bold text-slate-200">{activeUser.name}</span>
+                              {isCurrentUser && (
+                                <span className="px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400 text-[9px] font-bold uppercase tracking-wider">
+                                  Você
+                                </span>
+                              )}
+                              <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider ${
+                                activeUser.role === 'admin' 
+                                  ? 'bg-violet-500/25 text-violet-400' 
+                                  : 'bg-blue-500/25 text-blue-400'
+                              }`}>
+                                {activeUser.role}
+                              </span>
+                            </div>
+                            <div className="text-xs text-slate-400 font-mono mt-0.5">{activeUser.email}</div>
+                          </div>
+                        </div>
+
+                        {/* Status Pulse & Connected duration */}
+                        <div className="flex flex-col items-end gap-1.5">
+                          <div className="flex items-center gap-1.5">
+                            <span className="relative flex h-2 w-2">
+                              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                            </span>
+                            <span className="text-[10px] text-emerald-400 font-bold uppercase tracking-wider">Online</span>
+                          </div>
+                          <span className="text-[10px] text-slate-400 font-medium">
+                            Conectado há {durationMin} min
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}

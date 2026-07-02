@@ -19,6 +19,7 @@ import (
 	"noc-api/internal/model"
 	"noc-api/internal/repository"
 	"noc-api/internal/security"
+	"noc-api/internal/ws"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -1129,4 +1130,14 @@ func HandleSaveSecret(pgPool *pgxpool.Pool, vaultRepo repository.VaultRepository
 		_, _ = w.Write([]byte(`{"status":"success","message":"Credential encrypted and stored in tenant vault securely"}`))
 	}
 }
+
+// HandleGetActiveUsers lists all currently connected WebSocket user sessions (Admin only)
+func HandleGetActiveUsers(hub *ws.Hub) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		activeUsers := hub.GetActiveUsers()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(activeUsers)
+	}
+}
+
 

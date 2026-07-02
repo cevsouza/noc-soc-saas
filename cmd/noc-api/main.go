@@ -517,6 +517,14 @@ func main() {
 	// Real-Time Operator WebSocket Subscription endpoint (Multiplexed, resolved by JWT/APIKey/UUID)
 	mux.Handle("/api/v1/ws", ws.ServeWS(hub, pgPool, jwtSecret))
 
+	// Active operator sessions endpoint (Admin only)
+	protectedActiveUsers := middleware.JWTAuth(jwtSecret)(
+		middleware.RequireRole(model.RoleAdmin)(
+			api.HandleGetActiveUsers(hub),
+		),
+	)
+	mux.Handle("/api/v1/ws/active_users", protectedActiveUsers)
+
 	// 6. Define & Launch Server with Timeout Controls (SRE Best Practice)
 	srv := &http.Server{
 		Addr:         ":" + serverPort,

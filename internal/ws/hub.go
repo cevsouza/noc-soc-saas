@@ -3,6 +3,7 @@ package ws
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
@@ -10,10 +11,15 @@ import (
 
 // Client represents a single active operator WebSocket connection.
 type Client struct {
-	ID        uuid.UUID
-	TenantIDs []uuid.UUID
-	Conn      *websocket.Conn
-	Send      chan []byte // Buffered channel for outbound messages
+	ID          uuid.UUID
+	TenantIDs   []uuid.UUID
+	Conn        *websocket.Conn
+	Send        chan []byte // Buffered channel for outbound messages
+	UserID      uuid.UUID
+	Email       string
+	Name        string
+	Role        string
+	ConnectedAt time.Time
 }
 
 // Hub orchestrates WebSocket client connections grouped by Tenant ID in a thread-safe manner.
@@ -23,6 +29,42 @@ type Hub struct {
 	register   chan *Client
 	unregister chan *Client
 	mu         sync.RWMutex
+}
+
+type ActiveUserDTO struct {
+	SessionID   string    `json:"session_id"`
+	UserID      string    `json:"user_id"`
+	Email       string    `json:"email"`
+	Name        string    `json:"name"`
+	Role        string    `json:"role"`
+	ConnectedAt time.Time `json:"connected_at"`
+}
+
+func (h *Hub) GetActiveUsers() []ActiveUserDTO {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	uniqueClients := make(map[*Client]bool)
+	for _, clients := range h.tenants {
+		for client := range clients {
+			uniqueClients[client] = true
+		}
+	}
+
+	result := make([]ActiveUserDTO, 0, len(uniqueClients))
+	for client := range uniqueClients {
+		if client.Email != "" {
+			result = append(result, ActiveUserDTO{
+				SessionID:   client.ID.String(),
+				UserID:      client.UserID.String(),
+				Email:       client.Email,
+				Name:        client.Name,
+				Role:        client.Role,
+				ConnectedAt: client.ConnectedAt,
+			})
+		}
+	}
+	return result
 }
 
 func NewHub() *Hub {
