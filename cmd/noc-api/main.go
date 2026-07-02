@@ -22,10 +22,8 @@ import (
 	"noc-api/internal/worker"
 	"noc-api/internal/ws"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
-	"golang.org/x/crypto/bcrypt"
 )
 
 func main() {
@@ -99,15 +97,7 @@ func main() {
 		log.Fatalf("Fatal: Database migration failed: %v", err)
 	}
 
-	// 1.6 One-time database cleanup of seeded users (SRE compliance)
-	{
-		res, err := pgPool.Exec(ctx, "DELETE FROM users WHERE email IN ('admin@itfacil.com.br', 'cevsouza@hotmail.com', 'cadu.souza@itfacilservicos.com.br', 'felipe.gomes@itfacilservicos.com.br')")
-		if err != nil {
-			log.Printf("[DB CLEANUP] Failed to execute cleanup: %v", err)
-		} else {
-			log.Printf("[DB CLEANUP] Successfully deleted %d users", res.RowsAffected())
-		}
-	}
+
 
 	// 2. Load Redis Connection (Support direct REDIS_URL or fallback to parameters)
 	var redisClient *redis.Client
