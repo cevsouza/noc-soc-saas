@@ -176,6 +176,7 @@ export default function CockpitPage() {
   const [isLoadingVaultSecrets, setIsLoadingVaultSecrets] = useState(false);
   const [runbookAudits, setRunbookAudits] = useState<any[]>([]);
   const [isLoadingRunbookAudits, setIsLoadingRunbookAudits] = useState(false);
+  const [simulatorNotification, setSimulatorNotification] = useState<string | null>(null);
   
   // Shift Handover States
   const [activeHandover, setActiveHandover] = useState<any | null>(null);
@@ -1084,7 +1085,7 @@ export default function CockpitPage() {
       let payload: any = {};
       
       if (type === 'cpu') {
-        url = `${API_BASE_URL}/api/v1/ingest/prometheus?token=${selectedTenant.id}`;
+        url = `${API_BASE_URL}/api/v1/webhook/prometheus/${selectedTenant.id}`;
         payload = {
           receiver: "webhook",
           status: "firing",
@@ -1097,7 +1098,7 @@ export default function CockpitPage() {
           }]
         };
       } else if (type === 'memory') {
-        url = `${API_BASE_URL}/api/v1/ingest/prometheus?token=${selectedTenant.id}`;
+        url = `${API_BASE_URL}/api/v1/webhook/prometheus/${selectedTenant.id}`;
         payload = {
           receiver: "webhook",
           status: "firing",
@@ -1110,7 +1111,7 @@ export default function CockpitPage() {
           }]
         };
       } else if (type === 'wazuh') {
-        url = `${API_BASE_URL}/api/v1/ingest/wazuh?token=${selectedTenant.id}`;
+        url = `${API_BASE_URL}/api/v1/webhook/wazuh/${selectedTenant.id}`;
         payload = {
           timestamp: new Date().toISOString(),
           rule: { level: 10, comment: "SSH brute force authentication failed", sid: 5716, id: "5716", groups: ["syslog", "sshd", "security_event"] },
@@ -1126,10 +1127,16 @@ export default function CockpitPage() {
         body: JSON.stringify(payload)
       });
       if (response.ok) {
-        console.log(`Simulation of type ${type} successfully sent to backend API.`);
+        setSimulatorNotification(`Simulação de tipo ${type.toUpperCase()} enviada ao pipeline!`);
+        setTimeout(() => setSimulatorNotification(null), 4000);
+      } else {
+        setSimulatorNotification("Erro ao despachar evento simulado.");
+        setTimeout(() => setSimulatorNotification(null), 4000);
       }
     } catch (err) {
       console.error("Simulation dispatch failed:", err);
+      setSimulatorNotification("Falha de rede na simulação.");
+      setTimeout(() => setSimulatorNotification(null), 4000);
     }
   };
 
@@ -1579,25 +1586,31 @@ export default function CockpitPage() {
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-center">
               <div className="flex flex-col gap-1 p-3 rounded-lg bg-white/[0.02] border border-white/5 text-xs">
-                <span className="text-[9px] text-slate-500 font-bold uppercase tracking-wider">Tendência de Esgotamento de Memória</span>
-                <span className="text-base font-extrabold text-amber-400">Restam ~4.2 horas</span>
-                <span className="text-[9px] text-slate-400">Banco de Dados SQL Server (Produção)</span>
+                <span className="text-[9px] text-slate-500 font-bold uppercase tracking-wider">Tendência de Esgotamento de Recursos</span>
+                <span className={`text-base font-extrabold ${alerts.some(a => a.status !== 'resolved' && a.event_type.includes('disk')) ? 'text-amber-400' : 'text-slate-300'}`}>
+                  {alerts.some(a => a.status !== 'resolved' && a.event_type.includes('disk')) ? 'Risco de Esgotamento de Disco' : 'Estável (Sem esgotamento previsto)'}
+                </span>
+                <span className="text-[9px] text-slate-400">Banco de Dados & Armazenamento</span>
               </div>
               <div className="flex flex-col gap-1 p-3 rounded-lg bg-white/[0.02] border border-white/5 text-xs">
-                <span className="text-[9px] text-slate-500 font-bold uppercase tracking-wider">Pico de CPU Previsto</span>
-                <span className="text-base font-extrabold text-violet-400">Hoje às 18:30 (~88%)</span>
-                <span className="text-[9px] text-slate-400">Serviço: IIS Web Server</span>
+                <span className="text-[9px] text-slate-500 font-bold uppercase tracking-wider">Previsão de Pico de CPU</span>
+                <span className={`text-base font-extrabold ${alerts.some(a => a.status !== 'resolved' && a.event_type.includes('cpu')) ? 'text-violet-400' : 'text-slate-300'}`}>
+                  {alerts.some(a => a.status !== 'resolved' && a.event_type.includes('cpu')) ? 'Sobrecarga de CPU Detectada' : 'Normal (Sem picos previstos)'}
+                </span>
+                <span className="text-[9px] text-slate-400">Serviços de Aplicação</span>
               </div>
               <div className="flex flex-col gap-1 p-3 rounded-lg bg-white/[0.02] border border-white/5 text-xs">
                 <span className="text-[9px] text-slate-500 font-bold uppercase tracking-wider">Previsão de Saúde do Host (AIOps)</span>
-                <span className="text-base font-extrabold text-emerald-400">Estável (94% Confiança)</span>
-                <span className="text-[9px] text-slate-400">Próximos 7 dias</span>
+                <span className={`text-base font-extrabold ${alerts.filter(a => a.status !== 'resolved' && (a.severity === 'critical' || a.severity === 'fatal')).length > 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
+                  {alerts.filter(a => a.status !== 'resolved' && (a.severity === 'critical' || a.severity === 'fatal')).length > 0 ? 'Alerta Crítico Ativo' : 'Estável (Sem anomalias ativas)'}
+                </span>
+                <span className="text-[9px] text-slate-400">Varredura de telemetria geral</span>
               </div>
             </div>
 
             {/* Simulating baseline graph */}
             <div className="relative h-20 w-full bg-black/40 rounded-lg overflow-hidden border border-white/5 p-2 flex flex-col justify-end">
-              <span className="absolute top-2 left-3 text-[8px] font-bold text-slate-500 uppercase tracking-widest">Gráfico de Linha de Base (Baseline Histórica vs. Projeção Futura)</span>
+              <span className="absolute top-2 left-3 text-[8px] font-bold text-slate-500 uppercase tracking-widest">Linha de Base Histórica vs. Projeção Futura (AIOps Engine)</span>
               <svg className="w-full h-12 stroke-emerald-500 fill-emerald-500/5 stroke-1.5" viewBox="0 0 100 20" preserveAspectRatio="none">
                 {/* Historical baseline */}
                 <path d="M 0,15 L 10,14 L 20,13 L 30,14 L 40,15 L 50,13 L 60,11 L 70,8 L 80,6 L 90,4 L 100,2" />
@@ -1606,7 +1619,9 @@ export default function CockpitPage() {
               </svg>
               <div className="flex justify-between items-center text-[8px] text-slate-500 uppercase font-bold tracking-wider mt-1 px-1">
                 <span>08:00 (Passado)</span>
-                <span className="text-rose-400">Estouro do Threshold (Previsto às 18:00)</span>
+                <span className={alerts.some(a => a.status !== 'resolved') ? "text-rose-400 animate-pulse" : "text-emerald-400"}>
+                  {alerts.some(a => a.status !== 'resolved') ? "Alerta Detectado (Fora da Linha de Base)" : "Operação Nominal (Dentro do Threshold)"}
+                </span>
                 <span>20:00 (Previsão)</span>
               </div>
             </div>
@@ -1723,7 +1738,7 @@ export default function CockpitPage() {
                   </div>
                   <div className="flex items-center gap-1.5">
                     <span className="w-1.5 h-1.5 rounded-full bg-cyan-500"></span>
-                    <span>Plantonistas: <strong className="text-slate-200">Carlos S. (N1) | Cadu S. (N2)</strong></span>
+                    <span>Operador de Turno: <strong className="text-slate-200">{user ? `${user.name} (${user.role.toUpperCase()})` : 'Nenhum'}</strong></span>
                   </div>
                 </div>
               </div>
@@ -3606,6 +3621,15 @@ export default function CockpitPage() {
         </div>
       )}
 
+      {simulatorNotification && (
+        <div className="fixed bottom-6 right-6 z-50 bg-slate-900/90 backdrop-blur border border-violet-500/30 text-white rounded-xl shadow-2xl p-4 flex items-center gap-3 animate-pulse">
+          <div className="w-2 h-2 rounded-full bg-violet-400 animate-ping"></div>
+          <div className="flex flex-col">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-violet-400">Simulador de Eventos</span>
+            <span className="text-xs text-slate-200 mt-0.5">{simulatorNotification}</span>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
