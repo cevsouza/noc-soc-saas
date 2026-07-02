@@ -177,6 +177,7 @@ export default function CockpitPage() {
   const [runbookAudits, setRunbookAudits] = useState<any[]>([]);
   const [isLoadingRunbookAudits, setIsLoadingRunbookAudits] = useState(false);
   const [simulatorNotification, setSimulatorNotification] = useState<string | null>(null);
+  const [activeSummaryModal, setActiveSummaryModal] = useState<'total' | 'fatal' | 'critical' | 'warning' | 'info' | null>(null);
   
   // Shift Handover States
   const [activeHandover, setActiveHandover] = useState<any | null>(null);
@@ -1511,7 +1512,7 @@ export default function CockpitPage() {
           
           {/* Stat Cards */}
           <div className="grid grid-cols-5 gap-4">
-            <div className="glass-card p-4 rounded-xl flex flex-col gap-1 cursor-pointer" onClick={() => setSeverityFilter('all')}>
+            <div className="glass-card p-4 rounded-xl flex flex-col gap-1 cursor-pointer hover:border-violet-500/35 transition-all" onClick={() => { setSeverityFilter('all'); setActiveSummaryModal('total'); }}>
               <span className="text-[10px] text-slate-400 uppercase tracking-widest font-semibold flex items-center gap-1.5">
                 <Layers className="w-3.5 h-3.5 text-violet-400" /> Active Alerts
               </span>
@@ -1521,9 +1522,9 @@ export default function CockpitPage() {
               </div>
             </div>
 
-            <div className={`glass-card p-4 rounded-xl flex flex-col gap-1 cursor-pointer transition-all ${
+            <div className={`glass-card p-4 rounded-xl flex flex-col gap-1 cursor-pointer transition-all hover:border-rose-500/35 ${
               severityFilter === 'fatal' ? 'glass-card-active border-severity-fatal/50' : ''
-            }`} onClick={() => setSeverityFilter('fatal')}>
+            }`} onClick={() => { setSeverityFilter('fatal'); setActiveSummaryModal('fatal'); }}>
               <span className="text-[10px] text-slate-400 uppercase tracking-widest font-semibold flex items-center gap-1.5">
                 <AlertOctagon className="w-3.5 h-3.5 text-severity-fatal" /> Fatal Issues
               </span>
@@ -1535,9 +1536,9 @@ export default function CockpitPage() {
               </div>
             </div>
 
-            <div className={`glass-card p-4 rounded-xl flex flex-col gap-1 cursor-pointer transition-all ${
+            <div className={`glass-card p-4 rounded-xl flex flex-col gap-1 cursor-pointer transition-all hover:border-orange-500/35 ${
               severityFilter === 'critical' ? 'glass-card-active border-severity-critical/50' : ''
-            }`} onClick={() => setSeverityFilter('critical')}>
+            }`} onClick={() => { setSeverityFilter('critical'); setActiveSummaryModal('critical'); }}>
               <span className="text-[10px] text-slate-400 uppercase tracking-widest font-semibold flex items-center gap-1.5">
                 <AlertOctagon className="w-3.5 h-3.5 text-severity-critical" /> Critical
               </span>
@@ -1547,9 +1548,9 @@ export default function CockpitPage() {
               </div>
             </div>
 
-            <div className={`glass-card p-4 rounded-xl flex flex-col gap-1 cursor-pointer transition-all ${
+            <div className={`glass-card p-4 rounded-xl flex flex-col gap-1 cursor-pointer transition-all hover:border-amber-500/35 ${
               severityFilter === 'warning' ? 'glass-card-active border-severity-warning/50' : ''
-            }`} onClick={() => setSeverityFilter('warning')}>
+            }`} onClick={() => { setSeverityFilter('warning'); setActiveSummaryModal('warning'); }}>
               <span className="text-[10px] text-slate-400 uppercase tracking-widest font-semibold flex items-center gap-1.5">
                 <AlertTriangle className="w-3.5 h-3.5 text-severity-warning" /> Warnings
               </span>
@@ -1559,9 +1560,9 @@ export default function CockpitPage() {
               </div>
             </div>
 
-            <div className={`glass-card p-4 rounded-xl flex flex-col gap-1 cursor-pointer transition-all ${
+            <div className={`glass-card p-4 rounded-xl flex flex-col gap-1 cursor-pointer transition-all hover:border-blue-500/35 ${
               severityFilter === 'info' ? 'glass-card-active border-severity-info/50' : ''
-            }`} onClick={() => setSeverityFilter('info')}>
+            }`} onClick={() => { setSeverityFilter('info'); setActiveSummaryModal('info'); }}>
               <span className="text-[10px] text-slate-400 uppercase tracking-widest font-semibold flex items-center gap-1.5">
                 <Info className="w-3.5 h-3.5 text-severity-info" /> Informational
               </span>
@@ -3618,6 +3619,110 @@ export default function CockpitPage() {
               </div>
             </div>
 
+          </div>
+        </div>
+      )}
+
+      {activeSummaryModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 animate-fade-in">
+          <div className="absolute inset-0" onClick={() => setActiveSummaryModal(null)}></div>
+          <div className="glass-card bg-[#0b0f19]/95 border border-white/10 rounded-2xl shadow-2xl w-full max-w-4xl max-h-[85vh] flex flex-col overflow-hidden relative z-10">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between p-5 border-b border-white/5 bg-slate-950/40">
+              <div className="flex items-center gap-2.5">
+                <Brain className="w-5 h-5 text-violet-400 animate-pulse" />
+                <div>
+                  <h3 className="text-sm font-bold uppercase tracking-wider text-slate-100">
+                    Detalhes dos Alertas: {activeSummaryModal === 'total' ? 'Todos os Alertas Ativos' : activeSummaryModal.toUpperCase()}
+                  </h3>
+                  <p className="text-[10px] text-slate-400 uppercase tracking-widest mt-0.5">
+                    Ações imediatas e triagem rápida de infraestrutura
+                  </p>
+                </div>
+              </div>
+              <button 
+                onClick={() => setActiveSummaryModal(null)}
+                className="text-slate-400 hover:text-white transition-all bg-white/5 hover:bg-white/10 px-3 py-1.5 rounded-lg cursor-pointer text-[10px] uppercase tracking-wider font-extrabold"
+              >
+                Fechar
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="flex-1 overflow-y-auto p-5 flex flex-col gap-3">
+              {alerts.filter(a => {
+                if (activeSummaryModal === 'total') return a.status !== 'resolved';
+                return a.severity === activeSummaryModal && a.status !== 'resolved';
+              }).length === 0 ? (
+                <div className="text-center py-12 text-slate-500 italic text-xs">
+                  Nenhum alerta ativo cadastrado com esta severidade.
+                </div>
+              ) : (
+                alerts.filter(a => {
+                  if (activeSummaryModal === 'total') return a.status !== 'resolved';
+                  return a.severity === activeSummaryModal && a.status !== 'resolved';
+                }).map(alert => (
+                  <div key={alert.id} className="p-4 rounded-xl bg-white/[0.02] border border-white/5 flex items-center justify-between gap-4 hover:bg-white/[0.04] transition-all">
+                    <div className="flex items-start gap-3 flex-1 min-w-0">
+                      <span className={`px-2 py-0.5 rounded text-[8px] font-extrabold uppercase tracking-wider ${
+                        alert.severity === 'fatal' ? 'bg-rose-500/10 text-rose-400 border border-rose-500/25' :
+                        alert.severity === 'critical' ? 'bg-orange-500/10 text-orange-400 border border-orange-500/25' :
+                        alert.severity === 'warning' ? 'bg-amber-500/10 text-amber-400 border border-amber-500/25' :
+                        'bg-blue-500/10 text-blue-400 border border-blue-500/25'
+                      }`}>
+                        {alert.severity}
+                      </span>
+                      <div className="flex flex-col gap-1 min-w-0">
+                        <span className="text-xs font-bold text-slate-200 truncate">{alert.summary}</span>
+                        <div className="flex items-center gap-3 text-[10px] text-slate-400 uppercase font-semibold">
+                          <span>Dispositivo: <strong className="text-slate-300 font-mono">{alert.ai_analysis?.host || 'N/A'}</strong></span>
+                          <span>•</span>
+                          <span>Evento: <strong className="text-slate-300 font-mono">{alert.event_type}</strong></span>
+                          <span>•</span>
+                          <span>Horário: <strong className="text-slate-300">{new Date(alert.created_at).toLocaleString()}</strong></span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <span className={`px-2 py-0.5 rounded text-[8px] font-extrabold uppercase tracking-widest ${
+                        alert.status === 'triggered' ? 'bg-rose-500/10 text-rose-400 animate-pulse' :
+                        alert.status === 'acknowledged' ? 'bg-amber-500/10 text-amber-400' :
+                        'bg-emerald-500/10 text-emerald-400'
+                      }`}>
+                        {alert.status}
+                      </span>
+
+                      {alert.status === 'triggered' && (
+                        <button
+                          onClick={() => handleUpdateStatus(alert.id, 'acknowledged')}
+                          className="bg-amber-600/20 hover:bg-amber-600/35 border border-amber-500/30 text-amber-300 px-2.5 py-1 rounded text-[10px] font-bold transition-all cursor-pointer uppercase tracking-wider"
+                        >
+                          Acknowledge
+                        </button>
+                      )}
+
+                      <button
+                        onClick={() => handleUpdateStatus(alert.id, 'resolved')}
+                        className="bg-emerald-600/20 hover:bg-emerald-600/35 border border-emerald-500/30 text-emerald-300 px-2.5 py-1 rounded text-[10px] font-bold transition-all cursor-pointer uppercase tracking-wider"
+                      >
+                        Resolve
+                      </button>
+
+                      <button
+                        onClick={() => {
+                          setSelectedAlert(alert);
+                          setActiveSummaryModal(null);
+                        }}
+                        className="bg-violet-600/20 hover:bg-violet-600/35 border border-violet-500/30 text-violet-300 px-2.5 py-1 rounded text-[10px] font-bold transition-all cursor-pointer uppercase tracking-wider"
+                      >
+                        Inspecionar
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
           </div>
         </div>
       )}
