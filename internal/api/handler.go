@@ -559,6 +559,21 @@ func HandleSLADebug(pgPool *pgxpool.Pool) http.HandlerFunc {
 		result["pip_list_out"] = out.String()
 		result["pip_list_err_out"] = stderr.String()
 
+		out.Reset()
+		stderr.Reset()
+
+		cmd3 := exec.Command("python", "./workers/sla_report_generator.py",
+			"--tenant", "e1b7c123-1234-4321-abcd-123456789abc",
+			"--name", "Debug Company",
+			"--output", "./test_sla_debug.pdf")
+		cmd3.Stdout = &out
+		cmd3.Stderr = &stderr
+		err3 := cmd3.Run()
+
+		result["run_script_err"] = fmt.Sprintf("%v", err3)
+		result["run_script_out"] = out.String()
+		result["run_script_err_out"] = stderr.String()
+
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(result)
 	}
