@@ -1509,7 +1509,7 @@ export default function CockpitPage() {
       ) : (
         <header className="h-16 shrink-0 flex items-center justify-between px-6 border-b border-white/5 bg-surface/50 backdrop-blur-md sticky top-0 z-50">
         <div className="flex items-center gap-3">
-          <div className="relative flex items-center justify-center h-8 w-28 overflow-hidden rounded-lg bg-white/5 p-1 border border-white/10">
+          <div className="relative flex items-center justify-center h-11 w-36 overflow-hidden rounded-lg bg-white/5 p-1 border border-white/10">
             <img 
               src={
                 selectedTenantIds.length === 1 && tenants.find(t => t.id === selectedTenantIds[0])?.logo_url
@@ -1670,37 +1670,30 @@ export default function CockpitPage() {
             <span>Modo TV</span>
           </button>
 
-          {/* Connection Status Badge */}
-          <div className={`flex items-center gap-2 px-3 py-1 rounded-full text-xs font-semibold border ${
-            connStatus === 'connected' 
-              ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' 
-              : connStatus === 'connecting'
-                ? 'bg-amber-500/10 border-amber-500/30 text-amber-400'
-                : 'bg-rose-500/10 border-rose-500/30 text-rose-400'
-          }`}>
-            {connStatus === 'connected' ? (
-              <>
-                <Wifi className="w-3.5 h-3.5" />
-                <span>CONNECTED</span>
-              </>
-            ) : connStatus === 'connecting' ? (
-              <>
-                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                <span>CONNECTING</span>
-              </>
-            ) : (
-              <>
-                <WifiOff className="w-3.5 h-3.5" />
-                <span>DISCONNECTED</span>
-              </>
-            )}
-          </div>
-
           {/* User Profile and Logout */}
-          <div className="flex items-center gap-3 px-3 py-1 rounded-lg bg-white/5 border border-white/5 ml-2">
+          <div className="flex items-center gap-3 px-3 py-1.5 rounded-lg bg-white/5 border border-white/5 ml-2">
             <div className="flex flex-col text-right">
               <span className="text-[10px] text-white font-bold leading-none">{user?.name}</span>
-              <span className="text-[8px] text-slate-400 uppercase tracking-widest font-semibold">{user?.role}</span>
+              <div className="flex items-center gap-1.5 justify-end mt-0.5">
+                <span className="text-[8px] text-slate-400 uppercase tracking-widest font-semibold">{user?.role}</span>
+                <span className="text-[8px] text-slate-500">•</span>
+                <span className={`text-[8px] font-bold uppercase tracking-wider flex items-center gap-1 ${
+                  connStatus === 'connected' 
+                    ? 'text-emerald-400' 
+                    : connStatus === 'connecting'
+                      ? 'text-amber-400'
+                      : 'text-rose-400'
+                }`}>
+                  <span className={`w-1 h-1 rounded-full ${
+                    connStatus === 'connected' 
+                      ? 'bg-emerald-400 animate-pulse' 
+                      : connStatus === 'connecting'
+                        ? 'bg-amber-400 animate-pulse'
+                        : 'bg-rose-400'
+                  }`} />
+                  {connStatus === 'connected' ? 'On' : connStatus === 'connecting' ? '...' : 'Off'}
+                </span>
+              </div>
             </div>
             <button
               onClick={handleLogout}
