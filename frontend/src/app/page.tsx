@@ -2869,12 +2869,12 @@ export default function CockpitPage() {
                               <div className="flex flex-col gap-0.5">
                                 <span className="font-bold text-slate-200">{item.name}</span>
                                 <span className="text-[9px] font-mono text-cyan-400 select-all leading-none mt-1">
-                                  {`${API_BASE_URL}/api/v1/ingest/${selectedIntegrationTool}?token=${selectedTenant.id}`}
+                                  {`${API_BASE_URL}/api/v1/webhook/${selectedIntegrationTool}/${selectedTenant.id}`}
                                 </span>
                               </div>
                               <div className="flex items-center gap-2 shrink-0 ml-4">
                                 <button
-                                  onClick={() => handleCopyWebhookUrl(`${API_BASE_URL}/api/v1/ingest/${selectedIntegrationTool}?token=${selectedTenant.id}`)}
+                                  onClick={() => handleCopyWebhookUrl(`${API_BASE_URL}/api/v1/webhook/${selectedIntegrationTool}/${selectedTenant.id}`)}
                                   className="p-1.5 rounded bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white transition-all"
                                   title="Copiar URL de Ingestão"
                                 >
@@ -2931,45 +2931,97 @@ export default function CockpitPage() {
                       </form>
                     )}
 
-                    <div className="flex flex-col gap-3 p-4 rounded-xl bg-slate-900/40 border border-white/5 text-xs text-slate-300 leading-relaxed font-sans">
-                      <h5 className="font-bold text-slate-200 uppercase tracking-wider text-[10px]">Como configurar na sua ferramenta:</h5>
+                    <div className="flex flex-col gap-4 p-4 rounded-xl bg-slate-900/40 border border-white/5 text-xs text-slate-300 leading-relaxed font-sans">
+                      <h5 className="font-bold text-slate-200 uppercase tracking-wider text-[10px] border-b border-white/5 pb-2">Manual de Integração & Boas Práticas (Data Normalization)</h5>
                       
                       {selectedIntegrationTool === 'uptimekuma' && (
-                        <p>No seu painel do <b>Uptime Kuma</b>, vá em <i>Configurações &gt; Notificações &gt; Adicionar Notificação</i>. Defina o tipo de notificação como <b>Webhook</b>, cole a URL acima no campo <b>Post URL</b> e salve. O Uptime Kuma enviará notificações automáticas de Down/Up.</p>
+                        <div className="flex flex-col gap-3">
+                          <p>O <b>Uptime Kuma</b> realiza monitoramento de disponibilidade HTTP/TCP. Para conectar a este Tenant:</p>
+                          <div className="flex flex-col gap-1.5 pl-3 border-l-2 border-cyan-500/50">
+                            <span>1. No painel do Uptime Kuma, navegue em <b>Configurações &gt; Notificações &gt; Adicionar Notificação</b>.</span>
+                            <span>2. Escolha o tipo como <b>Webhook</b>.</span>
+                            <span>3. No campo <b>Post URL</b>, cole a URL de Ingestão correspondente ao Tenant acima.</span>
+                            <span>4. Salve e teste. O status <i>Down</i> gerará alertas <b>CRITICAL</b>, e o <i>Up</i> resolverá o chamado no Cockpit.</span>
+                          </div>
+                          <div className="p-2.5 rounded bg-white/[0.02] border border-white/5 text-[10px]">
+                            <span className="font-bold text-slate-400 block mb-1">Mapeamento & Normalização:</span>
+                            <p>O conector extrai `heartbeat.status` (0 = Down, 1 = Up) e mapeia para a severidade correspondente, normalizando a mensagem de erro para evitar alarmes duplicados e garantir a correspondência de ativos no banco.</p>
+                          </div>
+                        </div>
                       )}
                       
                       {selectedIntegrationTool === 'zabbix' && (
-                        <p>No <b>Zabbix</b>, vá em <i>Administration &gt; Media Types</i> e crie um novo tipo de mídia como <b>Webhook</b>. Defina os parâmetros padrão (como `EventID`, `Host`, `Severity`, `AlertMessage`) e insira a URL acima na requisição HTTP POST.</p>
+                        <div className="flex flex-col gap-3">
+                          <p>O <b>Zabbix Monitor</b> utiliza Webhooks em Javascript para despachar payloads JSON ricos em incidentes:</p>
+                          <div className="flex flex-col gap-1.5 pl-3 border-l-2 border-rose-500/50">
+                            <span>1. Vá em <b>Administration &gt; Media Types</b> e crie uma mídia com tipo <b>Webhook</b>.</span>
+                            <span>2. Insira parâmetros essenciais: <b>event_id</b>, <b>event_name</b>, <b>host_name</b>, <b>severity</b> e <b>event_value</b>.</span>
+                            <span>3. Defina a URL de envio apontando para a URL de Webhook do Tenant acima.</span>
+                            <span>4. Habilite o envio e configure ações de trigger para despachar alertas à fila da IT Fácil.</span>
+                          </div>
+                          <div className="p-2.5 rounded bg-white/[0.02] border border-white/5 text-[10px]">
+                            <span className="font-bold text-slate-400 block mb-1">Mapeamento & Normalização:</span>
+                            <p>As severidades do Zabbix (Warning, Average, High, Disaster) são automaticamente normalizadas para a escala universal (Warning, Critical, Fatal). O campo `host_name` é associado ao ativo físico de forma persistente.</p>
+                          </div>
+                        </div>
                       )}
 
                       {selectedIntegrationTool === 'prometheus' && (
-                        <div className="flex flex-col gap-2">
-                          <p>No seu arquivo de configuração do <b>Alertmanager</b> (`alertmanager.yml`), defina um receiver de webhook apontando para a nossa URL:</p>
+                        <div className="flex flex-col gap-3">
+                          <p>O <b>Prometheus Alertmanager</b> unifica o roteamento de regras e disparo de webhooks:</p>
+                          <div className="flex flex-col gap-1.5 pl-3 border-l-2 border-purple-500/50">
+                            <span>1. Abra o arquivo de configuração do Alertmanager (geralmente <code>alertmanager.yml</code>).</span>
+                            <span>2. Crie ou configure um receiver apontando para o conector de Webhook deste Tenant:</span>
+                          </div>
                           <pre className="bg-[#03060f] p-3 rounded-lg font-mono text-[10px] text-slate-400 overflow-x-auto leading-relaxed border border-white/5">
 {`receivers:
-  - name: 'noc-soc-webhook'
+  - name: 'itfacil-tenant-prometheus'
     webhook_configs:
-      - url: '${API_BASE_URL}/api/v1/ingest/prometheus?token=${selectedTenant.id}'`}
+      - url: '${API_BASE_URL}/api/v1/webhook/prometheus/${selectedTenant.id}'`}
                           </pre>
+                          <div className="p-2.5 rounded bg-white/[0.02] border border-white/5 text-[10px]">
+                            <span className="font-bold text-slate-400 block mb-1">Mapeamento & Normalização:</span>
+                            <p>O mapeador itera sobre o array de alertas recebidos, extraindo `labels.alertname` como tipo de evento e normalizando severidades do Prometheus (ex: `critical` ou `page` tornam-se `critical` e `fatal` na base da IT Fácil).</p>
+                          </div>
                         </div>
                       )}
 
                       {selectedIntegrationTool === 'wazuh' && (
-                        <div className="flex flex-col gap-2">
-                          <p>No arquivo `/var/ossec/etc/ossec.conf` do seu <b>Wazuh Manager</b>, registre um bloco de integração HTTP:</p>
+                        <div className="flex flex-col gap-3">
+                          <p>O <b>Wazuh SIEM</b> envia logs de auditoria e segurança em formato JSON estruturado:</p>
+                          <div className="flex flex-col gap-1.5 pl-3 border-l-2 border-blue-500/50">
+                            <span>1. Acesse o arquivo de configuração do seu Wazuh Manager (<code>/var/ossec/etc/ossec.conf</code>).</span>
+                            <span>2. Defina uma diretiva <code>&lt;integration&gt;</code> configurando o hook correspondente ao Tenant:</span>
+                          </div>
                           <pre className="bg-[#03060f] p-3 rounded-lg font-mono text-[10px] text-slate-400 overflow-x-auto leading-relaxed border border-white/5">
 {`<integration>
   <name>custom-webhook</name>
-  <hook_url>${API_BASE_URL}/api/v1/ingest/wazuh?token=${selectedTenant.id}</hook_url>
+  <hook_url>${API_BASE_URL}/api/v1/webhook/wazuh/${selectedTenant.id}</hook_url>
   <alert_format>json</alert_format>
   <level>7</level>
 </integration>`}
                           </pre>
+                          <div className="p-2.5 rounded bg-white/[0.02] border border-white/5 text-[10px]">
+                            <span className="font-bold text-slate-400 block mb-1">Mapeamento & Normalização:</span>
+                            <p>O conector de segurança analisa a severidade com base nos níveis de regras do Wazuh (Rules Level). Níveis de 4 a 7 tornam-se `warning`; de 8 a 11 tornam-se `critical`; de 12 a 15 tornam-se `fatal`, preenchendo as táticas MITRE automaticamente.</p>
+                          </div>
                         </div>
                       )}
 
                       {selectedIntegrationTool === 'grafana' && (
-                        <p>No <b>Grafana</b>, vá em <i>Alerting &gt; Contact Points &gt; New Contact Point</i>. Escolha o tipo <b>Webhook</b>, insira a URL acima no campo de URL e salve. O Grafana enviará notificações completas de alerta.</p>
+                        <div className="flex flex-col gap-3">
+                          <p>O <b>Grafana Alerts</b> envia payloads de alerta unificados com dados de painéis e métricas:</p>
+                          <div className="flex flex-col gap-1.5 pl-3 border-l-2 border-violet-500/50">
+                            <span>1. Vá em <b>Alerting &gt; Contact Points &gt; New Contact Point</b>.</span>
+                            <span>2. Escolha o tipo de mídia como <b>Webhook</b>.</span>
+                            <span>3. Insira a URL do respectivo Tenant acima no campo de URL e salve.</span>
+                            <span>4. A IT Fácil receberá o payload JSON e fará o de-bounce inteligente para remover ruídos.</span>
+                          </div>
+                          <div className="p-2.5 rounded bg-white/[0.02] border border-white/5 text-[10px]">
+                            <span className="font-bold text-slate-400 block mb-1">Mapeamento & Normalização:</span>
+                            <p>As métricas e gráficos anexados ao alerta são interpretados para mapear o dispositivo afetado de forma unívoca, descartando informações ruidosas e reduzindo o tempo médio de mitigação (MTTR).</p>
+                          </div>
+                        </div>
                       )}
                     </div>
                   </div>
@@ -3058,6 +3110,43 @@ export default function CockpitPage() {
                         {saveStatus.message}
                       </div>
                     )}
+                    <div className="flex flex-col gap-3 p-4 rounded-xl bg-slate-900/40 border border-white/5 text-xs text-slate-300 leading-relaxed font-sans mt-3">
+                      <h5 className="font-bold text-slate-200 uppercase tracking-wider text-[10px] border-b border-white/5 pb-2">Como Funciona a Integração Pull & Credenciais:</h5>
+                      
+                      {selectedIntegrationTool === 'sentinel' && (
+                        <div className="flex flex-col gap-2">
+                          <p>O conector do <b>Microsoft Sentinel</b> atua via busca ativa (Polling API) consultando logs e incidentes de segurança no Azure Log Analytics:</p>
+                          <div className="flex flex-col gap-1.5 pl-3 border-l-2 border-cyan-500/50">
+                            <span>1. Registre um aplicativo (App Registration) no seu Azure Active Directory (Microsoft Entra ID).</span>
+                            <span>2. Atribua a função de **Log Analytics Reader** ou similar a este aplicativo.</span>
+                            <span>3. Salve as chaves obtidas (Client ID, Client Secret, Tenant ID e Subscription ID) separadamente neste cofre.</span>
+                            <span>4. O coletor rodará a cada 5 minutos buscando incidentes e normalizando as ameaças na fila do SOC da IT Fácil.</span>
+                          </div>
+                        </div>
+                      )}
+
+                      {selectedIntegrationTool === 'loki' && (
+                        <div className="flex flex-col gap-2">
+                          <p>A integração com o <b>Grafana Loki</b> permite coletar logs brutos em tempo real e processar inteligência AIOps:</p>
+                          <div className="flex flex-col gap-1.5 pl-3 border-l-2 border-orange-500/50">
+                            <span>1. Insira a URL base de acesso à API do seu servidor Loki (ex: <code>https://loki.empresa.com.br</code>).</span>
+                            <span>2. Forneça o Usuário e Senha de autenticação básica (Basic Auth) se configurado.</span>
+                            <span>3. A IT Fácil buscará ativamente exceções de logs e normalizará strings de erro em eventos unificados.</span>
+                          </div>
+                        </div>
+                      )}
+
+                      {selectedIntegrationTool === 'ssh' && (
+                        <div className="flex flex-col gap-2">
+                          <p>As chaves de acesso <b>SSH Runbook</b> habilitam os scripts automatizados de auto-cura (NOC) e contenção (SOC):</p>
+                          <div className="flex flex-col gap-1.5 pl-3 border-l-2 border-violet-500/50">
+                            <span>1. Adicione a chave privada SSH (no formato PEM clássico) utilizada para autenticação sem senha nos ativos.</span>
+                            <span>2. Preencha o Usuário de conexão correspondente (ex: <code>sre_runner</code> ou <code>soc_agent</code>).</span>
+                            <span>3. Estes dados são encriptados localmente e trafegados exclusivamente via túnel SSH criptografado para executar comandos como reinicialização de IIS ou contenção de hosts via EDR/Firewall periférico.</span>
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   </form>
                 ) : selectedIntegrationTool === 'users_admin' ? (
                   // 4. Admin Users Form
