@@ -99,59 +99,13 @@ func main() {
 		log.Fatalf("Fatal: Database migration failed: %v", err)
 	}
 
-	// 1.6 Seed Default Verified Admin Users (SRE Best Practice)
+	// 1.6 One-time database cleanup of seeded users (SRE compliance)
 	{
-		var defaultTenantID uuid.UUID
-		var defaultTenantName = "ITFácil NOC"
-		
-		// Find first tenant or create one
-		errTenant := pgPool.QueryRow(ctx, "SELECT id FROM tenants LIMIT 1").Scan(&defaultTenantID)
-		if errTenant != nil {
-			defaultTenantID = uuid.New()
-			_, errCreateTenant := pgPool.Exec(ctx, "INSERT INTO tenants (id, name, slug, status) VALUES ($1, $2, 'itfacil-noc', 'active')", defaultTenantID, defaultTenantName)
-			if errCreateTenant != nil {
-				log.Printf("[DB SEED] Failed to create default tenant: %v", errCreateTenant)
-			} else {
-				log.Printf("[DB SEED] Created default tenant '%s' (%s)", defaultTenantName, defaultTenantID)
-			}
-		}
-
-		emailsToSeed := []string{
-			"admin@itfacil.com.br",
-			"cevsouza@hotmail.com",
-			"cadu.souza@itfacilservicos.com.br",
-			"felipe.gomes@itfacilservicos.com.br",
-		}
-
-		for _, email := range emailsToSeed {
-			var userExists bool
-			errCheck := pgPool.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM users WHERE email = $1)", email).Scan(&userExists)
-			if errCheck == nil && !userExists {
-				log.Printf("[DB SEED] Seeding user '%s'...", email)
-				hashedPwd, errHash := bcrypt.GenerateFromPassword([]byte("admin123"), bcrypt.DefaultCost)
-				if errHash == nil {
-					var seededUserID uuid.UUID
-					insertQuery := `
-						INSERT INTO users (email, name, password_hash, is_verified, global_role)
-						VALUES ($1, $2, $3, true, 'admin')
-						RETURNING id
-					`
-					nameParts := strings.Split(email, "@")
-					userName := nameParts[0]
-					errInsert := pgPool.QueryRow(ctx, insertQuery, email, userName, string(hashedPwd)).Scan(&seededUserID)
-					if errInsert != nil {
-						log.Printf("[DB SEED] Failed to seed user '%s': %v", email, errInsert)
-					} else {
-						// Bind user to default tenant
-						_, errBind := pgPool.Exec(ctx, "INSERT INTO tenant_users (tenant_id, user_id, role) VALUES ($1, $2, 'admin') ON CONFLICT DO NOTHING", defaultTenantID, seededUserID)
-						if errBind != nil {
-							log.Printf("[DB SEED] Failed to bind user '%s' to default tenant: %v", email, errBind)
-						} else {
-							log.Printf("[DB SEED] User '%s' seeded successfully with password 'admin123' and bound to default tenant", email)
-						}
-					}
-				}
-			}
+		res, err := pgPool.Exec(ctx, "DELETE FROM users WHERE email IN ('admin@itfacil.com.br', 'cevsouza@hotmail.com', 'cadu.souza@itfacilservicos.com.br', 'felipe.gomes@itfacilservicos.com.br')")
+		if err != nil {
+			log.Printf("[DB CLEANUP] Failed to execute cleanup: %v", err)
+		} else {
+			log.Printf("[DB CLEANUP] Successfully deleted %d users", res.RowsAffected())
 		}
 	}
 

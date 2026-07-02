@@ -97,6 +97,7 @@ func HandleRegister(pgPool *pgxpool.Pool) http.HandlerFunc {
 			"cadu.souza@itfacilservicos.com.br",
 			"felipe.gomes@itfacilservicos.com.br",
 			"cevsouza@hotmail.com",
+			"admin@itfacil.com.br",
 		}
 		for _, adminEmail := range adminEmails {
 			if req.Email == adminEmail {
