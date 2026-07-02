@@ -530,34 +530,34 @@ func HandleDownloadSLAReport(pgPool *pgxpool.Pool, jwtSecret []byte) http.Handle
 	}
 }
 
-// HandleSLADebug runs diagnostic commands on python/pip environment
+// HandleSLADebug runs diagnostic database and environment checks
 func HandleSLADebug(pgPool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var out bytes.Buffer
-		var stderr bytes.Buffer
+		ctx := r.Context()
 
-		cmd := exec.Command("python", "--version")
-		cmd.Stdout = &out
-		cmd.Stderr = &stderr
-		err := cmd.Run()
-
-		result := map[string]interface{}{
-			"python_version_err":     fmt.Sprintf("%v", err),
-			"python_version_out":     out.String(),
-			"python_version_err_out": stderr.String(),
+		type UserInfo struct {
+			Email      string `json:"email"`
+			Name       string `json:"name"`
+			GlobalRole string `json:"global_role"`
+			IsVerified bool   `json:"is_verified"`
 		}
 
-		out.Reset()
-		stderr.Reset()
+		users := make([]UserInfo, 0)
+		rows, err := pgPool.Query(ctx, "SELECT email, name, global_role, is_verified FROM users ORDER BY email")
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var u UserInfo
+				if errScan := rows.Scan(&u.Email, &u.Name, &u.GlobalRole, &u.IsVerified); errScan == nil {
+					users = append(users, u)
+				}
+			}
+		}
 
-		cmd2 := exec.Command("pip", "list")
-		cmd2.Stdout = &out
-		cmd2.Stderr = &stderr
-		err2 := cmd2.Run()
-
-		result["pip_list_err"] = fmt.Sprintf("%v", err2)
-		result["pip_list_out"] = out.String()
-		result["pip_list_err_out"] = stderr.String()
+		result := map[string]interface{}{
+			"db_query_err": fmt.Sprintf("%v", err),
+			"users":        users,
+		}
 
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(result)
