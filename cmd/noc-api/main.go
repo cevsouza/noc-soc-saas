@@ -97,44 +97,6 @@ func main() {
 		log.Fatalf("Fatal: Database migration failed: %v", err)
 	}
 
-	// 1.6 Run background one-time database cleanup of seeded users (SRE best practice)
-	go func() {
-		// Wait 15 seconds for the server to successfully bind and start serving requests
-		time.Sleep(15 * time.Second)
-		log.Println("[DB CLEANUP] Running background one-time cleanup...")
-		
-		cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), 20*time.Second)
-		defer cancelCleanup()
-		
-		// Remove bindings first due to foreign keys
-		_, errBind := pgPool.Exec(cleanupCtx, `
-			DELETE FROM tenant_users WHERE user_id IN (
-				SELECT id FROM users WHERE email IN (
-					'admin@itfacil.com.br',
-					'cevsouza@hotmail.com',
-					'cadu.souza@itfacilservicos.com.br',
-					'felipe.gomes@itfacilservicos.com.br'
-				)
-			)
-		`)
-		if errBind != nil {
-			log.Printf("[DB CLEANUP] Background tenant_users cleanup failed: %v", errBind)
-		}
-
-		res, err := pgPool.Exec(cleanupCtx, `
-			DELETE FROM users WHERE email IN (
-				'admin@itfacil.com.br',
-				'cevsouza@hotmail.com',
-				'cadu.souza@itfacilservicos.com.br',
-				'felipe.gomes@itfacilservicos.com.br'
-			)
-		`)
-		if err != nil {
-			log.Printf("[DB CLEANUP] Background users cleanup failed: %v", err)
-		} else {
-			log.Printf("[DB CLEANUP] Background cleanup completed. Deleted %d users.", res.RowsAffected())
-		}
-	}()
 
 	// 2. Load Redis Connection (Support direct REDIS_URL or fallback to parameters)
 	var redisClient *redis.Client
