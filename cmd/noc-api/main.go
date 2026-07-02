@@ -97,6 +97,23 @@ func main() {
 		log.Fatalf("Fatal: Database migration failed: %v", err)
 	}
 
+	// 1.5b One-time startup database fix: Auto-verify pre-registered admin accounts
+	_, errVerifyFix := pgPool.Exec(ctx, `
+		UPDATE users 
+		SET is_verified = TRUE 
+		WHERE email IN (
+			'cadu.souza@itfacilservicos.com.br',
+			'felipe.gomes@itfacilservicos.com.br',
+			'cevsouza@hotmail.com',
+			'admin@itfacil.com.br'
+		)
+	`)
+	if errVerifyFix != nil {
+		log.Printf("[DATABASE WARN] Failed to auto-verify default admin accounts: %v", errVerifyFix)
+	} else {
+		log.Println("[DATABASE INFO] Default admin accounts verified successfully.")
+	}
+
 
 	// 2. Load Redis Connection (Support direct REDIS_URL or fallback to parameters)
 	var redisClient *redis.Client

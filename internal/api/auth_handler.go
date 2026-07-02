@@ -127,7 +127,7 @@ func HandleRegister(pgPool *pgxpool.Pool) http.HandlerFunc {
 			isVerified = true
 		}
 
-		// Access control: Auto-promote specified initial administrator emails
+		// Access control: Auto-promote and auto-verify specified initial administrator emails to prevent lockouts
 		role := model.RoleOperator
 		adminEmails := []string{
 			"cadu.souza@itfacilservicos.com.br",
@@ -138,6 +138,7 @@ func HandleRegister(pgPool *pgxpool.Pool) http.HandlerFunc {
 		for _, adminEmail := range adminEmails {
 			if req.Email == adminEmail {
 				role = model.RoleAdmin
+				isVerified = true
 				break
 			}
 		}
