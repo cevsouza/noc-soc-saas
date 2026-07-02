@@ -1081,11 +1081,12 @@ export default function CockpitPage() {
   // Simulator helper function
   const simulateEvent = async (type: 'cpu' | 'memory' | 'wazuh') => {
     try {
+      const targetTenantId = selectedTenantIds.length > 0 ? selectedTenantIds[0] : selectedTenant.id;
       let url = '';
       let payload: any = {};
       
       if (type === 'cpu') {
-        url = `${API_BASE_URL}/api/v1/webhook/prometheus/${selectedTenant.id}`;
+        url = `${API_BASE_URL}/api/v1/webhook/prometheus/${targetTenantId}`;
         payload = {
           receiver: "webhook",
           status: "firing",
@@ -1098,7 +1099,7 @@ export default function CockpitPage() {
           }]
         };
       } else if (type === 'memory') {
-        url = `${API_BASE_URL}/api/v1/webhook/prometheus/${selectedTenant.id}`;
+        url = `${API_BASE_URL}/api/v1/webhook/prometheus/${targetTenantId}`;
         payload = {
           receiver: "webhook",
           status: "firing",
@@ -1111,7 +1112,7 @@ export default function CockpitPage() {
           }]
         };
       } else if (type === 'wazuh') {
-        url = `${API_BASE_URL}/api/v1/webhook/wazuh/${selectedTenant.id}`;
+        url = `${API_BASE_URL}/api/v1/webhook/wazuh/${targetTenantId}`;
         payload = {
           timestamp: new Date().toISOString(),
           rule: { level: 10, comment: "SSH brute force authentication failed", sid: 5716, id: "5716", groups: ["syslog", "sshd", "security_event"] },
