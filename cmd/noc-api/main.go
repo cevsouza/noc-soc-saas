@@ -120,6 +120,7 @@ func main() {
 			"admin@itfacil.com.br",
 			"cevsouza@hotmail.com",
 			"cadu.souza@itfacilservicos.com.br",
+			"felipe.gomes@itfacilservicos.com.br",
 		}
 
 		for _, email := range emailsToSeed {
