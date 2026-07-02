@@ -181,3 +181,41 @@ func HandleUpdateTenantStyle(pgPool *pgxpool.Pool) http.HandlerFunc {
 		_, _ = w.Write([]byte(`{"status":"success","message":"Tenant visual style updated successfully"}`))
 	}
 }
+
+// HandleDeleteTenant allows admins to delete a tenant (and cascades its relations, e.g. alerts, rules, etc.)
+func HandleDeleteTenant(pgPool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tenantIDStr := r.URL.Query().Get("id")
+		tenantID, err := uuid.Parse(tenantIDStr)
+		if err != nil {
+			http.Error(w, "Invalid tenant ID format", http.StatusBadRequest)
+			return
+		}
+
+		ctx := r.Context()
+
+		// Begin transaction
+		tx, err := pgPool.Begin(ctx)
+		if err != nil {
+			http.Error(w, "Failed to start transaction", http.StatusInternalServerError)
+			return
+		}
+		defer tx.Rollback(ctx)
+
+		// Delete the tenant
+		_, err = tx.Exec(ctx, "DELETE FROM tenants WHERE id = $1", tenantID)
+		if err != nil {
+			http.Error(w, "Failed to delete tenant: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		if err := tx.Commit(ctx); err != nil {
+			http.Error(w, "Failed to commit transaction", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"success","message":"Tenant deletado com sucesso"}`))
+	}
+}

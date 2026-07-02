@@ -417,3 +417,87 @@ func HandleAdminCreateUser(pgPool *pgxpool.Pool) http.HandlerFunc {
 		_, _ = w.Write([]byte(`{"message":"Usuário cadastrado com sucesso pelo administrador. E-mail de verificação enviado."}`))
 	}
 }
+
+type UserListResponse struct {
+	ID         uuid.UUID      `json:"id"`
+	Email      string         `json:"email"`
+	Name       string         `json:"name"`
+	GlobalRole model.UserRole `json:"global_role"`
+	IsVerified bool           `json:"is_verified"`
+	CreatedAt  time.Time      `json:"created_at"`
+}
+
+// HandleGetUsers returns all registered users in the platform (Admin only)
+func HandleGetUsers(pgPool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+		rows, err := pgPool.Query(ctx, "SELECT id, email, name, global_role, is_verified, created_at FROM users ORDER BY email")
+		if err != nil {
+			http.Error(w, "Failed to query users", http.StatusInternalServerError)
+			return
+		}
+		defer rows.Close()
+
+		list := make([]UserListResponse, 0)
+		for rows.Next() {
+			var u UserListResponse
+			if err := rows.Scan(&u.ID, &u.Email, &u.Name, &u.GlobalRole, &u.IsVerified, &u.CreatedAt); err != nil {
+				http.Error(w, "Failed to scan user details", http.StatusInternalServerError)
+				return
+			}
+			list = append(list, u)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(list)
+	}
+}
+
+// HandleDeleteUser deletes a user from the platform (Admin only)
+func HandleDeleteUser(pgPool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userIDStr := r.URL.Query().Get("id")
+		userID, err := uuid.Parse(userIDStr)
+		if err != nil {
+			http.Error(w, "Invalid user ID format", http.StatusBadRequest)
+			return
+		}
+
+		ctx := r.Context()
+		claims, ok := middleware.ClaimsFromContext(ctx)
+		if ok && claims.UserID == userID {
+			http.Error(w, "Conflict: Cannot delete your own active session user", http.StatusConflict)
+			return
+		}
+
+		tx, err := pgPool.Begin(ctx)
+		if err != nil {
+			http.Error(w, "Failed to start transaction", http.StatusInternalServerError)
+			return
+		}
+		defer tx.Rollback(ctx)
+
+		// Delete from tenant_users mapping first
+		_, err = tx.Exec(ctx, "DELETE FROM tenant_users WHERE user_id = $1", userID)
+		if err != nil {
+			http.Error(w, "Failed to delete user associations: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		// Delete from main users table
+		_, err = tx.Exec(ctx, "DELETE FROM users WHERE id = $1", userID)
+		if err != nil {
+			http.Error(w, "Failed to delete user: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		if err := tx.Commit(ctx); err != nil {
+			http.Error(w, "Failed to commit transaction", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"success","message":"Usuário excluído com sucesso"}`))
+	}
+}

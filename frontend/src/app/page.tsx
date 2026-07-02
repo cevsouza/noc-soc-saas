@@ -190,6 +190,8 @@ export default function CockpitPage() {
   // Integrations Modal States
   const [showIntegrationsModal, setShowIntegrationsModal] = useState(false);
   const [showActiveUsersModal, setShowActiveUsersModal] = useState(false);
+  const [adminUsers, setAdminUsers] = useState<any[]>([]);
+  const [isLoadingAdminUsers, setIsLoadingAdminUsers] = useState(false);
   const [activeUsers, setActiveUsers] = useState<any[]>([]);
   const [isLoadingActiveUsers, setIsLoadingActiveUsers] = useState(false);
   const [selectedIntegrationTool, setSelectedIntegrationTool] = useState('uptimekuma');
@@ -325,6 +327,74 @@ export default function CockpitPage() {
       return () => clearInterval(interval);
     }
   }, [showActiveUsersModal, token]);
+
+  const fetchAdminUsers = async () => {
+    if (!token || user?.role !== 'admin') return;
+    setIsLoadingAdminUsers(true);
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/v1/admin/users`, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setAdminUsers(data);
+      }
+    } catch (err) {
+      console.error("Falha ao buscar usuários:", err);
+    } finally {
+      setIsLoadingAdminUsers(false);
+    }
+  };
+
+  const handleDeleteUser = async (id: string) => {
+    if (!token) return;
+    if (!confirm('Deseja excluir este usuário do NOC permanentemente?')) return;
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/v1/admin/users?id=${id}`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      if (response.ok) {
+        fetchAdminUsers();
+      } else {
+        const msg = await response.text();
+        alert(msg || 'Falha ao excluir usuário.');
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleDeleteTenant = async (id: string) => {
+    if (!token) return;
+    if (!confirm('ATENÇÃO: A exclusão do tenant removerá todos os alertas, regras e conectores associados permanentemente! Deseja continuar?')) return;
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/v1/tenants?id=${id}`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      if (response.ok) {
+        await fetchTenants();
+        setSelectedAdminTenant(null);
+      } else {
+        alert('Falha ao excluir tenant.');
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  useEffect(() => {
+    if (selectedIntegrationTool === 'users_admin') {
+      fetchAdminUsers();
+    }
+  }, [selectedIntegrationTool, token]);
 
   const handleCreateIntegrationSetting = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -582,6 +652,7 @@ export default function CockpitPage() {
         setAdminUserEmail('');
         setAdminUserPassword('');
         setAdminUserName('');
+        fetchAdminUsers();
       } else {
         const msg = await response.text();
         setAdminUserStatus({ status: 'error', message: msg || 'Falha ao cadastrar usuário.' });
@@ -3318,78 +3389,141 @@ export default function CockpitPage() {
                       <p>Como administrador do NOC, você pode cadastrar e gerenciar perfis de novos colaboradores. Escolha se o nível de privilégio será **Admin** (acesso irrestrito), **Operator** (gerenciamento e SLA) ou **Viewer** (somente visualização).</p>
                     </div>
 
-                    <form onSubmit={handleAdminCreateUser} className="flex flex-col gap-4 max-w-md">
-                      <div className="flex flex-col gap-1.5">
-                        <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Nome Completo</label>
-                        <input
-                          type="text"
-                          required
-                          value={adminUserName}
-                          onChange={(e) => setAdminUserName(e.target.value)}
-                          placeholder="Ex: Carlos Silva"
-                          className="bg-[#0b0f19] border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-violet-500 transition-all placeholder:text-slate-600"
-                        />
-                      </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      {/* Left: Create Form */}
+                      <form onSubmit={handleAdminCreateUser} className="flex flex-col gap-4">
+                        <div className="flex flex-col gap-1.5">
+                          <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Nome Completo</label>
+                          <input
+                            type="text"
+                            required
+                            value={adminUserName}
+                            onChange={(e) => setAdminUserName(e.target.value)}
+                            placeholder="Ex: Carlos Silva"
+                            className="bg-[#0b0f19] border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-violet-500 transition-all placeholder:text-slate-600"
+                          />
+                        </div>
 
-                      <div className="flex flex-col gap-1.5">
-                        <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Endereço de E-mail</label>
-                        <input
-                          type="email"
-                          required
-                          value={adminUserEmail}
-                          onChange={(e) => setAdminUserEmail(e.target.value)}
-                          placeholder="usuario@empresa.com"
-                          className="bg-[#0b0f19] border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-violet-500 transition-all placeholder:text-slate-600"
-                        />
-                      </div>
+                        <div className="flex flex-col gap-1.5">
+                          <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Endereço de E-mail</label>
+                          <input
+                            type="email"
+                            required
+                            value={adminUserEmail}
+                            onChange={(e) => setAdminUserEmail(e.target.value)}
+                            placeholder="usuario@empresa.com"
+                            className="bg-[#0b0f19] border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-violet-500 transition-all placeholder:text-slate-600"
+                          />
+                        </div>
 
-                      <div className="flex flex-col gap-1.5">
-                        <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Senha Provisória</label>
-                        <input
-                          type="password"
-                          required
-                          value={adminUserPassword}
-                          onChange={(e) => setAdminUserPassword(e.target.value)}
-                          placeholder="Mínimo de 6 caracteres"
-                          className="bg-[#0b0f19] border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-violet-500 transition-all placeholder:text-slate-600"
-                        />
-                      </div>
+                        <div className="flex flex-col gap-1.5">
+                          <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Senha Provisória</label>
+                          <input
+                            type="password"
+                            required
+                            value={adminUserPassword}
+                            onChange={(e) => setAdminUserPassword(e.target.value)}
+                            placeholder="Mínimo de 6 caracteres"
+                            className="bg-[#0b0f19] border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-violet-500 transition-all placeholder:text-slate-600"
+                          />
+                        </div>
 
-                      <div className="flex flex-col gap-1.5">
-                        <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Nível de Permissão (Role)</label>
-                        <select
-                          value={adminUserRole}
-                          onChange={(e) => setAdminUserRole(e.target.value)}
-                          className="bg-[#0b0f19] border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-violet-500 transition-all"
+                        <div className="flex flex-col gap-1.5">
+                          <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Nível de Permissão (Role)</label>
+                          <select
+                            value={adminUserRole}
+                            onChange={(e) => setAdminUserRole(e.target.value)}
+                            className="bg-[#0b0f19] border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-violet-500 transition-all"
+                          >
+                            <option value="operator">Operator (Operador - Acesso de Leitura/Ação)</option>
+                            <option value="admin">Admin (Administrador - Acesso Completo/Cofre/Usuários)</option>
+                            <option value="viewer">Viewer (Visualizador - Apenas Leitura de Painéis)</option>
+                          </select>
+                        </div>
+
+                        <button
+                          type="submit"
+                          disabled={adminUserStatus.status === 'saving'}
+                          className="bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white font-bold text-xs py-3 px-4 rounded-lg transition-all shadow-md shadow-violet-950/30 flex items-center justify-center gap-2 cursor-pointer"
                         >
-                          <option value="operator">Operator (Operador - Acesso de Leitura/Ação)</option>
-                          <option value="admin">Admin (Administrador - Acesso Completo/Cofre/Usuários)</option>
-                          <option value="viewer">Viewer (Visualizador - Apenas Leitura de Painéis)</option>
-                        </select>
+                          {adminUserStatus.status === 'saving' && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+                          Cadastrar Novo Usuário
+                        </button>
+
+                        {adminUserStatus.status === 'success' && (
+                          <div className="p-3 bg-emerald-950/20 border border-emerald-500/20 text-emerald-400 text-xs rounded-lg font-sans">
+                            {adminUserStatus.message}
+                          </div>
+                        )}
+                        {adminUserStatus.status === 'error' && (
+                          <div className="p-3 bg-rose-950/20 border border-rose-500/20 text-rose-400 text-xs rounded-lg font-sans">
+                            {adminUserStatus.message}
+                          </div>
+                        )}
+                      </form>
+
+                      {/* Right: Active Users List */}
+                      <div className="flex flex-col gap-4 border-l border-white/5 pl-6">
+                        <div className="flex items-center justify-between">
+                          <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400 block">
+                            Usuários Ativos no Sistema (RBAC)
+                          </label>
+                          <button
+                            onClick={fetchAdminUsers}
+                            disabled={isLoadingAdminUsers}
+                            className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-white/5 hover:bg-white/10 border border-white/10 text-[9px] text-slate-300 font-medium transition-all"
+                          >
+                            <RefreshCw className={`w-2.5 h-2.5 ${isLoadingAdminUsers ? 'animate-spin' : ''}`} />
+                            <span>Atualizar</span>
+                          </button>
+                        </div>
+                        
+                        {isLoadingAdminUsers ? (
+                          <div className="flex flex-col items-center justify-center py-12 gap-2 text-slate-400 text-xs">
+                            <RefreshCw className="w-6 h-6 animate-spin text-violet-400" />
+                            <span>Carregando usuários...</span>
+                          </div>
+                        ) : adminUsers.length === 0 ? (
+                          <span className="text-[10px] text-amber-500 font-medium">Nenhum usuário cadastrado.</span>
+                        ) : (
+                          <div className="flex flex-col gap-2 max-h-[300px] overflow-y-auto pr-1">
+                            {adminUsers.map(u => {
+                              const isSelf = u.email === user?.email;
+                              return (
+                                <div key={u.id} className="p-3 rounded-lg bg-black/40 border border-white/5 flex items-center justify-between text-xs hover:border-white/10 transition-all">
+                                  <div className="flex flex-col gap-0.5 min-w-0 mr-2">
+                                    <div className="flex items-center gap-1.5 flex-wrap">
+                                      <span className="font-bold text-slate-200 truncate">{u.name}</span>
+                                      <span className={`px-1 rounded text-[8px] font-extrabold uppercase tracking-wider leading-normal ${
+                                        u.global_role === 'admin' 
+                                          ? 'bg-violet-500/20 text-violet-400 border border-violet-500/10' 
+                                          : u.global_role === 'operator' 
+                                            ? 'bg-blue-500/20 text-blue-400 border border-blue-500/10'
+                                            : 'bg-slate-500/20 text-slate-400 border border-slate-500/10'
+                                      }`}>
+                                        {u.global_role}
+                                      </span>
+                                    </div>
+                                    <span className="text-[10px] text-slate-400 font-mono select-all truncate">{u.email}</span>
+                                  </div>
+                                  <button
+                                    onClick={() => handleDeleteUser(u.id)}
+                                    disabled={isSelf}
+                                    className={`text-[9px] px-2.5 py-1 rounded transition-all font-bold cursor-pointer shrink-0 ${
+                                      isSelf 
+                                        ? 'text-slate-600 bg-white/5 cursor-not-allowed border border-white/5' 
+                                        : 'text-rose-400 hover:text-rose-300 bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/10 hover:border-rose-500/20'
+                                    }`}
+                                  >
+                                    Excluir
+                                  </button>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
                       </div>
-
-
-
-                      <button
-                        type="submit"
-                        disabled={adminUserStatus.status === 'saving'}
-                        className="bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white font-bold text-xs py-3 px-4 rounded-lg transition-all shadow-md shadow-violet-950/30 flex items-center justify-center gap-2"
-                      >
-                        {adminUserStatus.status === 'saving' && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
-                        Cadastrar Novo Usuário
-                      </button>
-
-                      {adminUserStatus.status === 'success' && (
-                        <div className="p-3 bg-emerald-950/20 border border-emerald-500/20 text-emerald-400 text-xs rounded-lg font-sans">
-                          {adminUserStatus.message}
-                        </div>
-                      )}
-                      {adminUserStatus.status === 'error' && (
-                        <div className="p-3 bg-rose-950/20 border border-rose-500/20 text-rose-400 text-xs rounded-lg font-sans">
-                          {adminUserStatus.message}
-                        </div>
-                      )}
-                    </form>
+                    </div>
                   </div>
                 ) : selectedIntegrationTool === 'tenants_admin' ? (
                   // 5. Admin Tenants Form
@@ -3445,14 +3579,25 @@ export default function CockpitPage() {
                               <div
                                 key={t.id}
                                 onClick={() => setSelectedAdminTenant(t)}
-                                className={`p-2.5 rounded-lg border transition-all cursor-pointer flex flex-col gap-0.5 select-none ${
+                                className={`p-2.5 rounded-lg border transition-all cursor-pointer flex items-center justify-between select-none ${
                                   selectedAdminTenant?.id === t.id
                                     ? 'bg-violet-600/10 border-violet-500/50 text-white'
                                     : 'bg-white/5 border-white/5 text-slate-400 hover:bg-white/[0.07] hover:text-slate-300'
                                 }`}
                               >
-                                <span className="text-xs font-bold">{t.name}</span>
-                                <span className="text-[8px] font-mono select-all truncate">{t.id}</span>
+                                <div className="flex flex-col gap-0.5 min-w-0 mr-2">
+                                  <span className="text-xs font-bold truncate">{t.name}</span>
+                                  <span className="text-[8px] font-mono select-all truncate">{t.id}</span>
+                                </div>
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleDeleteTenant(t.id);
+                                  }}
+                                  className="text-[9px] text-rose-400 hover:text-rose-300 bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/10 px-2 py-1 rounded transition-all font-bold cursor-pointer shrink-0"
+                                >
+                                  Excluir
+                                </button>
                               </div>
                             ))}
                           </div>

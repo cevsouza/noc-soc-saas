@@ -397,7 +397,27 @@ func main() {
 			api.HandleAdminCreateUser(pgPool),
 		),
 	)
-	mux.Handle("/api/v1/admin/users", protectedAdminUsers)
+	protectedGetAdminUsers := middleware.JWTAuth(jwtSecret)(
+		middleware.RequireRole(model.RoleAdmin)(
+			api.HandleGetUsers(pgPool),
+		),
+	)
+	protectedDeleteAdminUsers := middleware.JWTAuth(jwtSecret)(
+		middleware.RequireRole(model.RoleAdmin)(
+			api.HandleDeleteUser(pgPool),
+		),
+	)
+	mux.Handle("/api/v1/admin/users", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			protectedAdminUsers.ServeHTTP(w, r)
+		} else if r.Method == http.MethodGet {
+			protectedGetAdminUsers.ServeHTTP(w, r)
+		} else if r.Method == http.MethodDelete {
+			protectedDeleteAdminUsers.ServeHTTP(w, r)
+		} else {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	}))
 
 	// SLA PDF Report Download Endpoint (Resolves auth token via URL query parameter for browser compatibility)
 	mux.Handle("/api/v1/reports/sla", api.HandleDownloadSLAReport(pgPool, jwtSecret))
@@ -419,11 +439,18 @@ func main() {
 			api.HandleCreateTenant(pgPool),
 		),
 	)
+	protectedDeleteTenant := middleware.JWTAuth(jwtSecret)(
+		middleware.RequireRole(model.RoleAdmin)(
+			api.HandleDeleteTenant(pgPool),
+		),
+	)
 	mux.Handle("/api/v1/tenants", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
 			protectedPostTenants.ServeHTTP(w, r)
 		} else if r.Method == http.MethodGet {
 			protectedGetTenants.ServeHTTP(w, r)
+		} else if r.Method == http.MethodDelete {
+			protectedDeleteTenant.ServeHTTP(w, r)
 		} else {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		}
