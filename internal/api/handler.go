@@ -536,28 +536,24 @@ func HandleSLADebug(pgPool *pgxpool.Pool) http.HandlerFunc {
 		var out bytes.Buffer
 		var stderr bytes.Buffer
 
-		cmd := exec.Command("python", "--version")
-		cmd.Stdout = &out
-		cmd.Stderr = &stderr
-		err := cmd.Run()
+		result := map[string]interface{}{}
 
-		result := map[string]interface{}{
-			"python_version_err":     fmt.Sprintf("%v", err),
-			"python_version_out":     out.String(),
-			"python_version_err_out": stderr.String(),
+		tenantID := r.URL.Query().Get("tenant_id")
+		if tenantID == "" {
+			tenantID = "e1b7c123-1234-4321-abcd-123456789abc"
 		}
 
-		out.Reset()
-		stderr.Reset()
+		cmd3 := exec.Command("python", "./workers/sla_report_generator.py",
+			"--tenant", tenantID,
+			"--name", "Debug Company",
+			"--output", "./test_sla_debug.pdf")
+		cmd3.Stdout = &out
+		cmd3.Stderr = &stderr
+		err3 := cmd3.Run()
 
-		cmd2 := exec.Command("pip", "list")
-		cmd2.Stdout = &out
-		cmd2.Stderr = &stderr
-		err2 := cmd2.Run()
-
-		result["pip_list_err"] = fmt.Sprintf("%v", err2)
-		result["pip_list_out"] = out.String()
-		result["pip_list_err_out"] = stderr.String()
+		result["run_script_err"] = fmt.Sprintf("%v", err3)
+		result["run_script_out"] = out.String()
+		result["run_script_err_out"] = stderr.String()
 
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(result)
