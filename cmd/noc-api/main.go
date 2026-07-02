@@ -77,11 +77,20 @@ func main() {
 	}
 	defer pgPool.Close()
 
-	// Verify DB Connection
-	if err := pgPool.Ping(ctx); err != nil {
-		log.Fatalf("Fatal: Failed to ping PostgreSQL database: %v", err)
+	// Verify DB Connection with robust retry loop (SRE resilience pattern)
+	var dbPingErr error
+	for attempt := 1; attempt <= 10; attempt++ {
+		log.Printf("Verifying PostgreSQL connection (attempt %d/10)...", attempt)
+		if dbPingErr = pgPool.Ping(ctx); dbPingErr == nil {
+			break
+		}
+		log.Printf("PostgreSQL ping failed (retrying in 3s): %v", dbPingErr)
+		time.Sleep(3 * time.Second)
 	}
-	log.Println("PostgreSQL Connection Pool initialized successfully.")
+	if dbPingErr != nil {
+		log.Fatalf("Fatal: Failed to ping PostgreSQL database after 10 attempts: %v", dbPingErr)
+	}
+	log.Println("PostgreSQL Connection Pool verified successfully.")
 
 	// 1.5 Run Schema Migrations (Embedded SQL up scripts)
 	if err := db.RunMigrations(ctx, pgPool); err != nil {
@@ -139,11 +148,20 @@ func main() {
 	}
 	defer redisClient.Close()
 
-	// Verify Redis Connection
-	if err := redisClient.Ping(ctx).Err(); err != nil {
-		log.Fatalf("Fatal: Failed to ping Redis server: %v", err)
+	// Verify Redis Connection with robust retry loop (SRE resilience pattern)
+	var redisPingErr error
+	for attempt := 1; attempt <= 10; attempt++ {
+		log.Printf("Verifying Redis connection (attempt %d/10)...", attempt)
+		if redisPingErr = redisClient.Ping(ctx).Err(); redisPingErr == nil {
+			break
+		}
+		log.Printf("Redis ping failed (retrying in 3s): %v", redisPingErr)
+		time.Sleep(3 * time.Second)
 	}
-	log.Println("Redis Client initialized successfully.")
+	if redisPingErr != nil {
+		log.Fatalf("Fatal: Failed to ping Redis server after 10 attempts: %v", redisPingErr)
+	}
+	log.Println("Redis Client verified successfully.")
 
 	serverPort := getEnv("PORT", getEnv("SERVER_PORT", "8080"))
 	numWorkers, _ := strconv.Atoi(getEnv("WORKER_POOL_SIZE", "10"))
