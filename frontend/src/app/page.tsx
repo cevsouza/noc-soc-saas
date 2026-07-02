@@ -1321,7 +1321,7 @@ export default function CockpitPage() {
 
         <div className="glass-card w-full max-w-md border border-white/10 rounded-2xl shadow-2xl p-8 relative z-10 bg-slate-900/60 backdrop-blur-md">
           <div className="flex flex-col items-center gap-2 mb-8 text-center">
-            <div className="relative flex items-center justify-center h-12 w-36 overflow-hidden rounded-xl bg-white/5 p-1.5 border border-white/10 mb-2">
+            <div className="relative flex items-center justify-center h-16 w-52 overflow-hidden rounded-xl bg-white/5 p-2 border border-white/10 mb-2">
               <img 
                 src="https://lirp.cdn-website.com/2cf4cfdc/dms3rep/multi/opt/IT+Facil+-+logo+-+alta-47c0885e-158w.png" 
                 alt="ITFácil Logo" 
