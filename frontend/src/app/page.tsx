@@ -113,10 +113,24 @@ const SlaCountdown = ({ alert }: { alert: Alert }) => {
   );
 };
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
+let API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
+
+// Dynamic production fallback resolution in case of missing build-time environment variables
+if (typeof window !== 'undefined') {
+  const hostname = window.location.hostname;
+  if (hostname.includes('railway.app') && API_BASE_URL.includes('localhost')) {
+    API_BASE_URL = 'https://noc-soc-saas-production.up.railway.app';
+  }
+}
 
 const getWSUrl = (token: string, tenantIds: string[]) => {
-  const base = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
+  let base = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
+  if (typeof window !== 'undefined') {
+    const hostname = window.location.hostname;
+    if (hostname.includes('railway.app') && base.includes('localhost')) {
+      base = 'https://noc-soc-saas-production.up.railway.app';
+    }
+  }
   const host = base.replace(/^https?:\/\//, '');
   
   // Force secure WebSocket (wss) if API base is https OR if the frontend page itself is loaded over https
