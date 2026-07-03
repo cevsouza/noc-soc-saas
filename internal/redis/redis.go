@@ -31,11 +31,5 @@ func NewRedisClient(ctx context.Context, cfg Config) (*redis.Client, error) {
 		MinIdleConns: 10,
 	})
 
-	// Verify connection
-	if err := client.Ping(ctx).Err(); err != nil {
-		client.Close()
-		return nil, fmt.Errorf("failed to ping Redis: %w", err)
-	}
-
 	return client, nil
 }

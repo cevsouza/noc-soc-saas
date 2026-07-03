@@ -20,6 +20,7 @@ type Client struct {
 	Name        string
 	Role        string
 	ConnectedAt time.Time
+	once        sync.Once
 }
 
 // Hub orchestrates WebSocket client connections grouped by Tenant ID in a thread-safe manner.
@@ -139,6 +140,8 @@ func (h *Hub) BroadcastToTenant(tenantID uuid.UUID, message []byte) {
 }
 
 func (h *Hub) ForceDisconnect(client *Client) {
-	h.unregister <- client
-	client.Conn.Close()
+	client.once.Do(func() {
+		h.unregister <- client
+		client.Conn.Close()
+	})
 }
