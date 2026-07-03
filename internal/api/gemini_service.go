@@ -7,7 +7,13 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"time"
 )
+
+var geminiHttpClient = &http.Client{
+	Timeout: 10 * time.Second,
+}
+
 
 type GeminiRequest struct {
 	Contents          []Content          `json:"contents"`
@@ -73,7 +79,7 @@ func DiagnoseIncident(ctx context.Context, title, device, payload string) (strin
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := geminiHttpClient.Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -130,7 +136,7 @@ func ChatWithIncident(ctx context.Context, title, device, payload, history, prom
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := geminiHttpClient.Do(req)
 	if err != nil {
 		return "", err
 	}
