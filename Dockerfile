@@ -7,7 +7,7 @@ WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN go build -ldflags="-w -s" -o out ./cmd/noc-api
+RUN CGO_ENABLED=0 go build -ldflags="-w -s" -o out ./cmd/noc-api
 
 # 2. Production container containing Go runtime and Python SRE runbooks
 FROM python:3.11-alpine
