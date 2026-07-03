@@ -112,6 +112,42 @@ const SlaCountdown = ({ alert }: { alert: Alert }) => {
     </span>
   );
 };
+// SRE Global Resilient Fetch Wrapper (Monkey-patching window.fetch with retries and backoff)
+if (typeof window !== 'undefined' && !(window as any).__fetchPatched) {
+  (window as any).__fetchPatched = true;
+  const originalFetch = window.fetch;
+  window.fetch = async function (input, init) {
+    let retries = 2;
+    let delay = 500;
+    
+    async function attemptFetch(currentRetry: number): Promise<Response> {
+      try {
+        const response = await originalFetch(input, init);
+        // Automatically retry on transient server errors (502, 503, 504)
+        if (!response.ok && [502, 503, 504].includes(response.status) && currentRetry > 0) {
+          console.warn(`[SRE FETCH] Received status ${response.status} from ${String(input)}. Retrying in ${delay}ms... (${currentRetry} attempts left)`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+          delay *= 2;
+          return attemptFetch(currentRetry - 1);
+        }
+        return response;
+      } catch (err) {
+        // Automatically retry on network failures (like ERR_CONNECTION_REFUSED or CORS glitches)
+        if (currentRetry > 0) {
+          console.warn(`[SRE FETCH] Network error on ${String(input)}. Retrying in ${delay}ms... (${currentRetry} attempts left):`, err);
+          await new Promise(resolve => setTimeout(resolve, delay));
+          delay *= 2;
+          return attemptFetch(currentRetry - 1);
+        }
+        console.error(`[SRE FETCH] Fatal network error on ${String(input)}:`, err);
+        throw err;
+      }
+    }
+    
+    return attemptFetch(retries);
+  };
+}
+
 
 let API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
 
@@ -154,6 +190,7 @@ export default function CockpitPage() {
   const [authTenant, setAuthTenant] = useState('e1b7c123-1234-4321-abcd-123456789abc');
   const [publicTenants, setPublicTenants] = useState<any[]>([]);
   const [authStatus, setAuthStatus] = useState<{ status: 'idle' | 'loading' | 'success' | 'error', message?: string }>({ status: 'idle' });
+  const [apiHealth, setApiHealth] = useState<'checking' | 'online' | 'offline'>('checking');
 
   // Password Visibility & Confirmation States
   const [showLoginPassword, setShowLoginPassword] = useState(false);
@@ -252,6 +289,37 @@ export default function CockpitPage() {
     warning: alerts.filter(a => a.severity === 'warning' && a.status !== 'resolved' && a.status !== 'suppressed').length,
     info: alerts.filter(a => a.severity === 'info' && a.status !== 'resolved' && a.status !== 'suppressed').length,
   };
+
+  // API Connection Health Check Loop
+  useEffect(() => {
+    let active = true;
+    const checkApiHealth = async () => {
+      const controller = new AbortController();
+      const id = setTimeout(() => controller.abort(), 4000);
+      try {
+        const response = await fetch(`${API_BASE_URL}/`, { method: 'GET', signal: controller.signal });
+        clearTimeout(id);
+        if (response.ok && active) {
+          setApiHealth('online');
+        } else if (active) {
+          setApiHealth('offline');
+        }
+      } catch (err) {
+        clearTimeout(id);
+        if (active) {
+          setApiHealth('offline');
+        }
+      }
+    };
+
+    checkApiHealth();
+    const interval = setInterval(checkApiHealth, 20000); // Check every 20 seconds
+
+    return () => {
+      active = false;
+      clearInterval(interval);
+    };
+  }, []);
 
   // Mount effect to load session cache
   useEffect(() => {
@@ -1346,6 +1414,12 @@ export default function CockpitPage() {
             </div>
             <h1 className="text-xl font-bold uppercase tracking-wider text-white">ITFácil NOC</h1>
             <p className="text-xs text-slate-400">Painel SRE Multi-tenant de Gerenciamento & Auto-cura</p>
+            {apiHealth === 'offline' && (
+              <div className="mt-4 px-3 py-1.5 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-400 text-[10px] flex items-center gap-1.5 animate-pulse">
+                <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                <span>API do NOC indisponível ou em manutenção.</span>
+              </div>
+            )}
           </div>
 
           {typeof window !== 'undefined' && window.location.search.includes('verified=true') && (
@@ -1504,6 +1578,12 @@ export default function CockpitPage() {
 
   return (
     <div className="min-h-screen bg-background text-slate-100 flex flex-col font-sans select-none">
+      {apiHealth === 'offline' && (
+        <div className="bg-rose-500/10 border-b border-rose-500/20 text-rose-400 py-1.5 px-4 text-center text-xs flex items-center justify-center gap-2 relative z-[100] animate-pulse">
+          <AlertTriangle className="w-4 h-4 shrink-0" />
+          <span>Conectividade instável com o servidor central da ITFácil. Algumas ações podem falhar. Tentando restabelecer conexão...</span>
+        </div>
+      )}
       
       {/* 1. Header (Navbar Glass) */}
       {isWallboardMode ? (
