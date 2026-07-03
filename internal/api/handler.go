@@ -292,6 +292,8 @@ func HandlePrometheusIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) htt
 
 		var payload AlertmanagerPayload
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			errMsg := fmt.Sprintf("Bad Request: Invalid Alertmanager JSON payload: %v", err)
+			redisClient.Set(r.Context(), fmt.Sprintf("webhook:error:%s:%s", tenantID.String(), "prometheus"), errMsg, 24*time.Hour)
 			http.Error(w, "Bad Request: Invalid Alertmanager JSON payload", http.StatusBadRequest)
 			return
 		}
@@ -323,6 +325,10 @@ func HandlePrometheusIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) htt
 				return
 			}
 		}
+
+		// Register heartbeat in Redis and clear any previous errors
+		redisClient.Set(r.Context(), fmt.Sprintf("heartbeat:connector:%s:%s", tenantID.String(), "prometheus"), time.Now().Unix(), 24*time.Hour)
+		redisClient.Del(r.Context(), fmt.Sprintf("webhook:error:%s:%s", tenantID.String(), "prometheus"))
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
@@ -824,6 +830,8 @@ func HandleUptimeKumaIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) htt
 
 		var payload UptimeKumaPayload
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			errMsg := fmt.Sprintf("Bad Request: Invalid Uptime Kuma JSON payload: %v", err)
+			redisClient.Set(r.Context(), fmt.Sprintf("webhook:error:%s:%s", tenantID.String(), "uptimekuma"), errMsg, 24*time.Hour)
 			http.Error(w, "Bad Request: Invalid Uptime Kuma JSON payload", http.StatusBadRequest)
 			return
 		}
@@ -841,6 +849,10 @@ func HandleUptimeKumaIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) htt
 			http.Error(w, "Internal Server Error: Failed to queue incident", http.StatusInternalServerError)
 			return
 		}
+
+		// Register heartbeat in Redis and clear any previous errors
+		redisClient.Set(r.Context(), fmt.Sprintf("heartbeat:connector:%s:%s", tenantID.String(), "uptimekuma"), time.Now().Unix(), 24*time.Hour)
+		redisClient.Del(r.Context(), fmt.Sprintf("webhook:error:%s:%s", tenantID.String(), "uptimekuma"))
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
@@ -943,6 +955,8 @@ func HandleZabbixIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) http.Ha
 
 		var payload ZabbixPayload
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			errMsg := fmt.Sprintf("Bad Request: Invalid Zabbix JSON payload: %v", err)
+			redisClient.Set(r.Context(), fmt.Sprintf("webhook:error:%s:%s", tenantID.String(), "zabbix"), errMsg, 24*time.Hour)
 			http.Error(w, "Bad Request: Invalid Zabbix JSON payload", http.StatusBadRequest)
 			return
 		}
@@ -960,6 +974,10 @@ func HandleZabbixIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) http.Ha
 			http.Error(w, "Internal Server Error: Failed to queue Zabbix alert", http.StatusInternalServerError)
 			return
 		}
+
+		// Register heartbeat in Redis and clear any previous errors
+		redisClient.Set(r.Context(), fmt.Sprintf("heartbeat:connector:%s:%s", tenantID.String(), "zabbix"), time.Now().Unix(), 24*time.Hour)
+		redisClient.Del(r.Context(), fmt.Sprintf("webhook:error:%s:%s", tenantID.String(), "zabbix"))
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
