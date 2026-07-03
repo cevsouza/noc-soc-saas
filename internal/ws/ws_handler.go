@@ -192,27 +192,40 @@ func ServeWS(hub *Hub, pgPool *pgxpool.Pool, jwtSecret []byte) http.HandlerFunc 
 // This SRE pattern consumes exactly ONE Redis connection regardless of the number of active clients.
 func StartGlobalPubSubMultiplexer(ctx context.Context, redisClient *redis.Client, hub *Hub) {
 	const globPattern = "noc:pubsub:tenant:*"
-	pubsub := redisClient.PSubscribe(ctx, globPattern)
-	defer pubsub.Close()
-
-	log.Printf("SRE Pub/Sub Multiplexer active: listening on pattern '%s'", globPattern)
-	ch := pubsub.Channel()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case msg := <-ch:
-			// msg.Channel is "noc:pubsub:tenant:<tenant_uuid>"
-			const prefix = "noc:pubsub:tenant:"
-			if len(msg.Channel) > len(prefix) {
-				tenantIDStr := msg.Channel[len(prefix):]
-				tenantID, err := uuid.Parse(tenantIDStr)
-				if err == nil {
-					// Safely multicast to WebSocket clients in this tenant
-					hub.BroadcastToTenant(tenantID, []byte(msg.Payload))
+		default:
+			log.Printf("SRE Pub/Sub Multiplexer active: subscribing to pattern '%s'...", globPattern)
+			pubsub := redisClient.PSubscribe(ctx, globPattern)
+			ch := pubsub.Channel()
+
+			func() {
+				defer pubsub.Close()
+				for {
+					select {
+					case <-ctx.Done():
+						return
+					case msg, ok := <-ch:
+						if !ok || msg == nil {
+							log.Printf("[Pub/Sub Warn] Redis Pub/Sub channel closed or nil. Reconnecting in 5s...")
+							time.Sleep(5 * time.Second)
+							return
+						}
+
+						const prefix = "noc:pubsub:tenant:"
+						if len(msg.Channel) > len(prefix) {
+							tenantIDStr := msg.Channel[len(prefix):]
+							tenantID, err := uuid.Parse(tenantIDStr)
+							if err == nil {
+								hub.BroadcastToTenant(tenantID, []byte(msg.Payload))
+							}
+						}
+					}
 				}
-			}
+			}()
 		}
 	}
 }
