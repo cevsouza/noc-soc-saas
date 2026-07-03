@@ -27,7 +27,7 @@ import (
 )
 
 func main() {
-	log.Println("Initializing NOC SaaS Core Engine...")
+	log.Println("Initializing NOC SaaS Core Engine (Resilience Mode Active)...")
 
 	jwtSecret := []byte(os.Getenv("JWT_SECRET"))
 	if len(jwtSecret) == 0 {
