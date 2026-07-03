@@ -332,6 +332,10 @@ func HandleLogin(pgPool *pgxpool.Pool, jwtSecret []byte) http.HandlerFunc {
 			tenantRoleStr = globalRole
 		}
 
+		if globalRole == string(model.RoleAdmin) {
+			tenantRoleStr = string(model.RoleAdmin)
+		}
+
 		// Issue JWT signed token
 		claims := &middleware.JWTClaims{
 			UserID:   userID,

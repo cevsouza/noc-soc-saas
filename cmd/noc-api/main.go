@@ -137,7 +137,7 @@ func main() {
 			defer cancelFix()
 			_, errVerifyFix := pgPool.Exec(fixCtx, `
 				UPDATE users 
-				SET is_verified = TRUE 
+				SET is_verified = TRUE, global_role = 'admin' 
 				WHERE email IN (
 					'cadu.souza@itfacilservicos.com.br',
 					'felipe.gomes@itfacilservicos.com.br',
