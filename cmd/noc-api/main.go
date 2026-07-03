@@ -48,12 +48,12 @@ func main() {
 		if err != nil {
 			log.Fatalf("Fatal: Failed to parse DATABASE_URL: %v", err)
 		}
-		// Optimize pool settings for SRE performance
-		poolCfg.MaxConns = 50
-		poolCfg.MinConns = 10
-		poolCfg.MaxConnIdleTime = 15 * time.Minute
-		poolCfg.MaxConnLifetime = 1 * time.Hour
-		poolCfg.HealthCheckPeriod = 1 * time.Minute
+		// Optimize pool settings for Railway resource constraints
+		poolCfg.MaxConns = 8
+		poolCfg.MinConns = 2
+		poolCfg.MaxConnIdleTime = 5 * time.Minute
+		poolCfg.MaxConnLifetime = 30 * time.Minute
+		poolCfg.HealthCheckPeriod = 30 * time.Second
 
 		pgPool, err = pgxpool.NewWithConfig(ctx, poolCfg)
 		if err != nil {
