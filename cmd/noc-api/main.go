@@ -88,13 +88,18 @@ func main() {
 		time.Sleep(3 * time.Second)
 	}
 	if dbPingErr != nil {
-		log.Fatalf("Fatal: Failed to ping PostgreSQL database after 10 attempts: %v", dbPingErr)
+		log.Printf("[DATABASE WARN] Failed to ping PostgreSQL database after 10 attempts: %v. Continuing boot sequence...", dbPingErr)
+	} else {
+		log.Println("PostgreSQL Connection Pool verified successfully.")
 	}
-	log.Println("PostgreSQL Connection Pool verified successfully.")
 
 	// 1.5 Run Schema Migrations (Embedded SQL up scripts)
-	if err := db.RunMigrations(ctx, pgPool); err != nil {
-		log.Fatalf("Fatal: Database migration failed: %v", err)
+	if dbPingErr == nil {
+		if err := db.RunMigrations(ctx, pgPool); err != nil {
+			log.Printf("[DATABASE WARN] Database migration failed: %v. Continuing boot...", err)
+		}
+	} else {
+		log.Println("[DATABASE WARN] Skipping schema migrations on boot because database is not reachable.")
 	}
 
 	// 1.5b One-time startup database fix: Auto-verify pre-registered admin accounts (Run in background with a delay to avoid port bind deadlocks during rolling deploys)
@@ -168,9 +173,10 @@ func main() {
 		time.Sleep(3 * time.Second)
 	}
 	if redisPingErr != nil {
-		log.Fatalf("Fatal: Failed to ping Redis server after 10 attempts: %v", redisPingErr)
+		log.Printf("[REDIS WARN] Failed to ping Redis server after 10 attempts: %v. Continuing boot sequence...", redisPingErr)
+	} else {
+		log.Println("Redis Client verified successfully.")
 	}
-	log.Println("Redis Client verified successfully.")
 
 	serverPort := getEnv("PORT", getEnv("SERVER_PORT", "8080"))
 	numWorkers, _ := strconv.Atoi(getEnv("WORKER_POOL_SIZE", "10"))
