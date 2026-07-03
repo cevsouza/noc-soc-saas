@@ -217,6 +217,9 @@ func (wp *WorkerPool) createNewAlert(ctx context.Context, tx pgx.Tx, event model
 	}
 
 	// Set starting occurrences
+	if newAlert.Payload == nil {
+		newAlert.Payload = make(map[string]interface{})
+	}
 	newAlert.Payload["occurrences"] = 1.0
 
 	// Fetch host logs on demand from Loki if severity is warning/critical/fatal
