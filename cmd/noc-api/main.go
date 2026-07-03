@@ -77,57 +77,6 @@ func main() {
 	}
 	defer pgPool.Close()
 
-	// Verify DB Connection with robust retry loop (SRE resilience pattern)
-	var dbPingErr error
-	for attempt := 1; attempt <= 10; attempt++ {
-		log.Printf("Verifying PostgreSQL connection (attempt %d/10)...", attempt)
-		if dbPingErr = pgPool.Ping(ctx); dbPingErr == nil {
-			break
-		}
-		log.Printf("PostgreSQL ping failed (retrying in 3s): %v", dbPingErr)
-		time.Sleep(3 * time.Second)
-	}
-	if dbPingErr != nil {
-		log.Printf("[DATABASE WARN] Failed to ping PostgreSQL database after 10 attempts: %v. Continuing boot sequence...", dbPingErr)
-	} else {
-		log.Println("PostgreSQL Connection Pool verified successfully.")
-	}
-
-	// 1.5 Run Schema Migrations (Embedded SQL up scripts)
-	if dbPingErr == nil {
-		if err := db.RunMigrations(ctx, pgPool); err != nil {
-			log.Printf("[DATABASE WARN] Database migration failed: %v. Continuing boot...", err)
-		}
-	} else {
-		log.Println("[DATABASE WARN] Skipping schema migrations on boot because database is not reachable.")
-	}
-
-	// 1.5b One-time startup database fix: Auto-verify pre-registered admin accounts (Run in background with a delay to avoid port bind deadlocks during rolling deploys)
-	go func() {
-		time.Sleep(15 * time.Second)
-		log.Println("[DATABASE INFO] Running background default admin accounts verification fix...")
-		
-		fixCtx, cancelFix := context.WithTimeout(context.Background(), 20*time.Second)
-		defer cancelFix()
-		
-		_, errVerifyFix := pgPool.Exec(fixCtx, `
-			UPDATE users 
-			SET is_verified = TRUE 
-			WHERE email IN (
-				'cadu.souza@itfacilservicos.com.br',
-				'felipe.gomes@itfacilservicos.com.br',
-				'cevsouza@hotmail.com',
-				'admin@itfacil.com.br'
-			)
-		`);
-		if errVerifyFix != nil {
-			log.Printf("[DATABASE WARN] Failed to auto-verify default admin accounts: %v", errVerifyFix)
-		} else {
-			log.Println("[DATABASE INFO] Default admin accounts verified successfully in background.")
-		}
-	}()
-
-
 	// 2. Load Redis Connection (Support direct REDIS_URL or fallback to parameters)
 	var redisClient *redis.Client
 	redisURL := getEnv("REDIS_URL", "")
@@ -162,21 +111,63 @@ func main() {
 	}
 	defer redisClient.Close()
 
-	// Verify Redis Connection with robust retry loop (SRE resilience pattern)
-	var redisPingErr error
-	for attempt := 1; attempt <= 10; attempt++ {
-		log.Printf("Verifying Redis connection (attempt %d/10)...", attempt)
-		if redisPingErr = redisClient.Ping(ctx).Err(); redisPingErr == nil {
-			break
+	// Verify database and redis connectivity asynchronously in background to avoid port bind timeouts (SRE non-blocking boot)
+	go func() {
+		// A. Verify DB Connection in background
+		var dbPingErr error
+		for attempt := 1; attempt <= 10; attempt++ {
+			log.Printf("Verifying PostgreSQL connection (attempt %d/10)...", attempt)
+			if dbPingErr = pgPool.Ping(context.Background()); dbPingErr == nil {
+				break
+			}
+			log.Printf("PostgreSQL ping failed (retrying in 3s): %v", dbPingErr)
+			time.Sleep(3 * time.Second)
 		}
-		log.Printf("Redis ping failed (retrying in 3s): %v", redisPingErr)
-		time.Sleep(3 * time.Second)
-	}
-	if redisPingErr != nil {
-		log.Printf("[REDIS WARN] Failed to ping Redis server after 10 attempts: %v. Continuing boot sequence...", redisPingErr)
-	} else {
-		log.Println("Redis Client verified successfully.")
-	}
+		if dbPingErr != nil {
+			log.Printf("[DATABASE WARN] Failed to ping PostgreSQL database after 10 attempts: %v. Database operations will degrade.", dbPingErr)
+		} else {
+			log.Println("PostgreSQL Connection Pool verified successfully.")
+			// Run migrations
+			if err := db.RunMigrations(context.Background(), pgPool); err != nil {
+				log.Printf("[DATABASE WARN] Database migration failed: %v", err)
+			}
+			// One-time startup database fix
+			log.Println("[DATABASE INFO] Running background default admin accounts verification fix...")
+			fixCtx, cancelFix := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancelFix()
+			_, errVerifyFix := pgPool.Exec(fixCtx, `
+				UPDATE users 
+				SET is_verified = TRUE 
+				WHERE email IN (
+					'cadu.souza@itfacilservicos.com.br',
+					'felipe.gomes@itfacilservicos.com.br',
+					'cevsouza@hotmail.com',
+					'admin@itfacil.com.br'
+				)
+			`)
+			if errVerifyFix != nil {
+				log.Printf("[DATABASE WARN] Failed to auto-verify default admin accounts: %v", errVerifyFix)
+			} else {
+				log.Println("[DATABASE INFO] Default admin accounts verified successfully in background.")
+			}
+		}
+
+		// B. Verify Redis Connection in background
+		var redisPingErr error
+		for attempt := 1; attempt <= 10; attempt++ {
+			log.Printf("Verifying Redis connection (attempt %d/10)...", attempt)
+			if redisPingErr = redisClient.Ping(context.Background()).Err(); redisPingErr == nil {
+				break
+			}
+			log.Printf("Redis ping failed (retrying in 3s): %v", redisPingErr)
+			time.Sleep(3 * time.Second)
+		}
+		if redisPingErr != nil {
+			log.Printf("[REDIS WARN] Failed to ping Redis server after 10 attempts: %v. Queue operations will degrade.", redisPingErr)
+		} else {
+			log.Println("Redis Client verified successfully.")
+		}
+	}()
 
 	serverPort := getEnv("PORT", getEnv("SERVER_PORT", "8080"))
 	numWorkers, _ := strconv.Atoi(getEnv("WORKER_POOL_SIZE", "10"))
