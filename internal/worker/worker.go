@@ -359,7 +359,6 @@ func (wp *WorkerPool) triggerSOARPlaybooks(ctx context.Context, alert *model.Ale
 			`
 			secRows, err := wp.pgPool.Query(ctxBg, secretQuery, alert.TenantID, hostKey, userKey, passKey, privKey)
 			if err == nil {
-				defer secRows.Close()
 				for secRows.Next() {
 					var k, val string
 					if err := secRows.Scan(&k, &val); err == nil {
@@ -374,6 +373,7 @@ func (wp *WorkerPool) triggerSOARPlaybooks(ctx context.Context, alert *model.Ale
 						}
 					}
 				}
+				secRows.Close()
 			}
 
 			if sshHost == "" || sshUser == "" {
