@@ -854,6 +854,37 @@ export default function CockpitPage() {
     }
   };
 
+  // Load alerts history via HTTP (fail-safe fallback)
+  const loadAlertsHistory = async () => {
+    if (!token || selectedTenantIds.length === 0) return;
+    try {
+      const allFetchedAlerts: Alert[] = [];
+      for (const tenantId of selectedTenantIds) {
+        const response = await fetch(`${API_BASE_URL}/api/v1/alerts?tenant_id=${tenantId}`, {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        });
+        if (response.ok) {
+          const data = await response.json();
+          if (Array.isArray(data)) {
+            allFetchedAlerts.push(...data);
+          }
+        }
+      }
+      
+      const uniqueAlertsMap = new Map<string, Alert>();
+      allFetchedAlerts.forEach(a => uniqueAlertsMap.set(a.id, a));
+      const sortedAlerts = Array.from(uniqueAlertsMap.values()).sort(
+        (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      );
+      
+      setAlerts(sortedAlerts);
+    } catch (err) {
+      console.error("Falha ao carregar histórico de alertas:", err);
+    }
+  };
+
   // Connect to Go WebSocket Server
   const connectWebSocket = () => {
     if (!token) return;
@@ -871,6 +902,7 @@ export default function CockpitPage() {
     socket.onopen = () => {
       setConnStatus('connected');
       console.log(`WebSocket connected to tenants: ${selectedTenantIds.join(', ')}`);
+      loadAlertsHistory();
     };
 
     socket.onmessage = (event) => {
@@ -921,6 +953,7 @@ export default function CockpitPage() {
     if (!token) return;
     setAlerts([]); // Clear previous tenant alerts on switch
     setSelectedAlert(null);
+    loadAlertsHistory();
     connectWebSocket();
 
     return () => {

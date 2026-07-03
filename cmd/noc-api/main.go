@@ -473,6 +473,11 @@ func main() {
 		}
 	}))
 
+	// Alerts list endpoint
+	alertRepo := repository.NewPostgresAlertRepository()
+	protectedListAlerts := middleware.JWTAuth(jwtSecret)(api.HandleListAlerts(pgPool, alertRepo))
+	mux.Handle("/api/v1/alerts", protectedListAlerts)
+
 	// Incident action endpoints (Acknowledge and Resolve)
 	protectedAcknowledgeIncident := middleware.JWTAuth(jwtSecret)(api.HandleAcknowledgeIncident(pgPool))
 	protectedResolveIncident := middleware.JWTAuth(jwtSecret)(api.HandleResolveIncident(pgPool))

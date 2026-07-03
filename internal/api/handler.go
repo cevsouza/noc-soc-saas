@@ -1140,4 +1140,36 @@ func HandleGetActiveUsers(hub *ws.Hub) http.HandlerFunc {
 	}
 }
 
+// HandleListAlerts returns the last 100 alerts for a tenant.
+func HandleListAlerts(pgPool *pgxpool.Pool, alertRepo repository.AlertRepository) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tenantID, ok := resolveTenantID(r)
+		if !ok {
+			http.Error(w, "Unauthorized: Tenant context not found", http.StatusUnauthorized)
+			return
+		}
+		ctx := db.WithTenantID(r.Context(), tenantID)
+
+		var alerts []*model.Alert
+		err := db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
+			var err error
+			alerts, err = alertRepo.List(ctx, tx, 100, 0)
+			return err
+		})
+		if err != nil {
+			log.Printf("[API Error] Failed to list alerts: %v", err)
+			http.Error(w, "Internal Server Error: failed to load alerts", http.StatusInternalServerError)
+			return
+		}
+
+		if alerts == nil {
+			alerts = []*model.Alert{}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(alerts)
+	}
+}
+
+
 
