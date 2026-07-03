@@ -139,14 +139,18 @@ func HandleGenericWebhook(pgPool *pgxpool.Pool, redisClient *redis.Client) http.
 			mac.Write(bodyBytes)
 			expected := hex.EncodeToString(mac.Sum(nil))
 			if !hmac.Equal([]byte(expected), []byte(xSignature)) {
-				http.Error(w, "Unauthorized: HMAC signature verification failed", http.StatusUnauthorized)
+				errMsg := "Unauthorized: HMAC signature verification failed"
+				redisClient.Set(r.Context(), fmt.Sprintf("webhook:error:%s:%s", tenantID.String(), integrationType), errMsg, 24*time.Hour)
+				http.Error(w, errMsg, http.StatusUnauthorized)
 				return
 			}
 		}
 
 		var payload map[string]interface{}
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-			http.Error(w, "Bad Request: Invalid JSON body", http.StatusBadRequest)
+			errMsg := fmt.Sprintf("Bad Request: Invalid JSON body: %v", err)
+			redisClient.Set(r.Context(), fmt.Sprintf("webhook:error:%s:%s", tenantID.String(), integrationType), errMsg, 24*time.Hour)
+			http.Error(w, errMsg, http.StatusBadRequest)
 			return
 		}
 
@@ -162,9 +166,10 @@ func HandleGenericWebhook(pgPool *pgxpool.Pool, redisClient *redis.Client) http.
 			return
 		}
 
-		// Register heartbeat in Redis
+		// Register heartbeat in Redis and clear any previous errors
 		ctx := r.Context()
 		redisClient.Set(ctx, fmt.Sprintf("heartbeat:connector:%s:%s", tenantID.String(), integrationType), time.Now().Unix(), 24*time.Hour)
+		redisClient.Del(ctx, fmt.Sprintf("webhook:error:%s:%s", tenantID.String(), integrationType))
 
 		// Push to alerts.raw queue
 		err = redisClient.LPush(ctx, AlertsRawQueueKey, rawMsgBytes).Err()
@@ -1168,6 +1173,38 @@ func HandleListAlerts(pgPool *pgxpool.Pool, alertRepo repository.AlertRepository
 
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(alerts)
+	}
+}
+
+// HandleCleanupAlerts deletes all mock/test alerts from the database.
+func HandleCleanupAlerts(pgPool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		ctx := r.Context()
+		query := `
+			DELETE FROM alerts 
+			WHERE host IN ('watchdog', 'azure-sentinel-vm', 'web-server-99', 'simulado') 
+			   OR summary LIKE '%Mock%' 
+			   OR summary LIKE '%Simulado%' 
+			   OR summary LIKE '%teste%'
+		`
+		
+		res, err := pgPool.Exec(ctx, query)
+		if err != nil {
+			log.Printf("[API Error] Failed to cleanup mock alerts: %v", err)
+			http.Error(w, "Failed to cleanup mock alerts", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"status":        "success",
+			"rows_affected": res.RowsAffected(),
+		})
 	}
 }
 

@@ -464,10 +464,20 @@ func main() {
 		}
 	}))
 
+	protectedGetIntegrationStatus := middleware.JWTAuth(jwtSecret)(api.HandleGetIntegrationStatus(pgPool, redisClient))
+	mux.Handle("/api/v1/integrations/status", protectedGetIntegrationStatus)
+
 	// Alerts list endpoint
 	alertRepo := repository.NewPostgresAlertRepository()
 	protectedListAlerts := middleware.JWTAuth(jwtSecret)(api.HandleListAlerts(pgPool, alertRepo))
 	mux.Handle("/api/v1/alerts", protectedListAlerts)
+
+	protectedCleanupAlerts := middleware.JWTAuth(jwtSecret)(
+		middleware.RequireRole(model.RoleAdmin)(
+			api.HandleCleanupAlerts(pgPool),
+		),
+	)
+	mux.Handle("/api/v1/alerts/cleanup", protectedCleanupAlerts)
 
 	// Incident action endpoints (Acknowledge and Resolve)
 	protectedAcknowledgeIncident := middleware.JWTAuth(jwtSecret)(api.HandleAcknowledgeIncident(pgPool))

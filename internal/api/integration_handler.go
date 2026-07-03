@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"noc-api/internal/db"
 	"noc-api/internal/middleware"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/redis/go-redis/v9"
 )
 
 type IntegrationResponse struct {
@@ -217,5 +219,61 @@ func HandleDeleteIntegration(pgPool *pgxpool.Pool) http.HandlerFunc {
 		}
 
 		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// HandleGetIntegrationStatus checks connectivity status (heartbeat and errors) in Redis
+func HandleGetIntegrationStatus(pgPool *pgxpool.Pool, redisClient *redis.Client) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+		
+		tenantIDStr := r.URL.Query().Get("tenant_id")
+		integrationType := r.URL.Query().Get("type")
+		
+		if tenantIDStr == "" || integrationType == "" {
+			http.Error(w, "Bad Request: tenant_id and type are required parameters", http.StatusBadRequest)
+			return
+		}
+		
+		tenantID, err := uuid.Parse(tenantIDStr)
+		if err != nil {
+			http.Error(w, "Bad Request: Invalid tenant ID", http.StatusBadRequest)
+			return
+		}
+		
+		// 1. Get heartbeat
+		heartbeatKey := "heartbeat:connector:" + tenantID.String() + ":" + integrationType
+		lastSeenStr, err := redisClient.Get(ctx, heartbeatKey).Result()
+		
+		var lastSeen int64
+		hasHeartbeat := false
+		if err == nil && lastSeenStr != "" {
+			_, _ = fmt.Sscanf(lastSeenStr, "%d", &lastSeen)
+			hasHeartbeat = true
+		}
+		
+		// 2. Get latest error log
+		errorKey := "webhook:error:" + tenantID.String() + ":" + integrationType
+		lastError, _ := redisClient.Get(ctx, errorKey).Result()
+		
+		status := "inactive"
+		if hasHeartbeat {
+			timeElapsed := time.Now().Unix() - lastSeen
+			if timeElapsed < 120 {
+				status = "active"
+			} else {
+				status = "offline"
+			}
+		}
+		
+		response := map[string]interface{}{
+			"status":      status,
+			"last_seen":   lastSeen,
+			"last_error":  lastError,
+			"has_error":   lastError != "",
+		}
+		
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(response)
 	}
 }

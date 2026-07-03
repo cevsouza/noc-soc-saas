@@ -33,7 +33,8 @@ import {
   Settings,
   Users,
   Eye,
-  EyeOff
+  EyeOff,
+  Trash2
 } from 'lucide-react';
 
 interface Alert {
@@ -277,6 +278,8 @@ export default function CockpitPage() {
   const [adminIntegrationName, setAdminIntegrationName] = useState('');
   const [adminIntegrations, setAdminIntegrations] = useState<any[]>([]);
   const [adminIntegrationStatus, setAdminIntegrationStatus] = useState<{ status: 'idle' | 'saving' | 'success' | 'error', message?: string }>({ status: 'idle' });
+  const [validationResult, setValidationResult] = useState<any>(null);
+  const [isValidating, setIsValidating] = useState(false);
 
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -885,6 +888,53 @@ export default function CockpitPage() {
     }
   };
 
+  const handleCleanupMockAlerts = async () => {
+    if (!token) return;
+    if (!confirm("Tem certeza que deseja deletar todos os alertas mock/teste do sistema?")) return;
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/v1/alerts/cleanup`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        alert(`Limpeza concluída com sucesso! Alertas mock removidos: ${data.rows_affected}`);
+        loadAlertsHistory();
+      } else {
+        alert("Falha ao limpar alertas mock.");
+      }
+    } catch (err) {
+      console.error(err);
+      alert("Erro na requisição de limpeza.");
+    }
+  };
+
+  const handleValidateIntegration = async (type: string) => {
+    if (!token) return;
+    setIsValidating(true);
+    setValidationResult(null);
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/v1/integrations/status?tenant_id=${selectedTenant.id}&type=${type}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setValidationResult(data);
+      } else {
+        setValidationResult({ status: 'error', last_error: 'Falha ao buscar status de conectividade.' });
+      }
+    } catch (err) {
+      console.error(err);
+      setValidationResult({ status: 'error', last_error: 'Erro de rede ao conectar à API de validação.' });
+    } finally {
+      setIsValidating(false);
+    }
+  };
+
   // Connect to Go WebSocket Server
   const connectWebSocket = () => {
     if (!token) return;
@@ -1328,7 +1378,8 @@ export default function CockpitPage() {
                           a.event_type.toLowerCase().includes(searchTerm.toLowerCase()) ||
                           (a.ai_analysis?.source || '').toLowerCase().includes(searchTerm.toLowerCase());
     const matchesSeverity = severityFilter === 'all' || a.severity === severityFilter;
-    return matchesSearch && matchesSeverity;
+    const matchesTenant = selectedTenantIds.includes(a.tenant_id);
+    return matchesSearch && matchesSeverity && matchesTenant;
   });
 
   // Simulator helper function
@@ -2118,7 +2169,7 @@ export default function CockpitPage() {
           </div>
 
           {/* Search and Filters */}
-          <div className="flex gap-4">
+          <div className="flex gap-4 items-center">
             <div className="flex-1 relative">
               <Search className="absolute left-3.5 top-2.5 w-4.5 h-4.5 text-slate-500" />
               <input 
@@ -2129,6 +2180,15 @@ export default function CockpitPage() {
                 className="w-full bg-surface/40 hover:bg-surface/60 focus:bg-surface/80 border border-white/5 rounded-xl pl-11 pr-4 py-2.5 text-sm focus:outline-none focus:border-violet-500/50 text-slate-200 transition-all placeholder:text-slate-500"
               />
             </div>
+            {user?.role === 'admin' && (
+              <button
+                onClick={handleCleanupMockAlerts}
+                className="px-4 py-2.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 hover:text-rose-300 border border-rose-500/25 transition-all text-xs font-bold flex items-center gap-2 cursor-pointer shrink-0"
+              >
+                <Trash2 className="w-4 h-4" />
+                Limpar Alertas Mock
+              </button>
+            )}
           </div>
 
           {/* Focus Mode Banner */}
@@ -3399,7 +3459,7 @@ export default function CockpitPage() {
                       )}
                       
                       {selectedIntegrationTool === 'zabbix' && (
-                        <div className="flex flex-col gap-3">
+                        <div className="flex flex-col gap-4">
                           <p>O <b>Zabbix Monitor</b> utiliza Webhooks em Javascript para despachar payloads JSON ricos em incidentes:</p>
                           <div className="flex flex-col gap-1.5 pl-3 border-l-2 border-rose-500/50">
                             <span>1. Vá em <b>Administration &gt; Media Types</b> e crie uma mídia com tipo <b>Webhook</b>.</span>
@@ -3407,6 +3467,54 @@ export default function CockpitPage() {
                             <span>3. Defina a URL de envio apontando para a URL de Webhook do Tenant acima.</span>
                             <span>4. Habilite o envio e configure ações de trigger para despachar alertas à fila da IT Fácil.</span>
                           </div>
+                          
+                          <div className="p-3 rounded-lg bg-surface/30 border border-white/5 flex flex-col gap-2.5">
+                            <div className="flex items-center justify-between">
+                              <span className="text-[10px] uppercase font-bold tracking-wider text-slate-400">
+                                Validação de Comunicação
+                              </span>
+                              <button
+                                onClick={() => handleValidateIntegration('zabbix')}
+                                disabled={isValidating}
+                                className="px-2.5 py-1 rounded bg-rose-500/10 hover:bg-rose-500/20 disabled:bg-white/5 text-rose-400 disabled:text-slate-500 border border-rose-500/25 disabled:border-transparent transition-all text-[10px] font-bold cursor-pointer"
+                              >
+                                {isValidating ? 'Validando...' : 'Testar Conexão / Logs'}
+                              </button>
+                            </div>
+
+                            {validationResult && (
+                              <div className="flex flex-col gap-2 font-sans text-xs">
+                                <div className="flex items-center gap-1.5">
+                                  <span className="text-slate-400">Status do Conector:</span>
+                                  {validationResult.status === 'active' ? (
+                                    <span className="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-bold uppercase text-[9px]">Ativo (Online)</span>
+                                  ) : validationResult.status === 'offline' ? (
+                                    <span className="px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 font-bold uppercase text-[9px]">Offline (Sem Telemetria)</span>
+                                  ) : (
+                                    <span className="px-1.5 py-0.5 rounded bg-slate-500/10 text-slate-400 border border-slate-500/20 font-bold uppercase text-[9px]">Inativo (Sem Sinal)</span>
+                                  )}
+                                </div>
+                                {validationResult.last_seen > 0 && (
+                                  <div className="text-[10px] text-slate-500 leading-none">
+                                    Último sinal recebido: {new Date(validationResult.last_seen * 1000).toLocaleString('pt-BR')}
+                                  </div>
+                                )}
+                                <div className="flex flex-col gap-1 mt-1">
+                                  <span className="text-slate-400 font-semibold">Verbose / Logs de Erro do Webhook:</span>
+                                  {validationResult.last_error ? (
+                                    <pre className="p-2.5 rounded bg-red-950/15 border border-red-500/20 text-[10px] text-red-400 font-mono overflow-x-auto max-h-[100px] whitespace-pre-wrap leading-tight">
+                                      {validationResult.last_error}
+                                    </pre>
+                                  ) : (
+                                    <p className="text-[10px] text-emerald-400 font-semibold bg-emerald-500/5 p-2 rounded border border-emerald-500/15">
+                                      ✓ Nenhuma falha pendente. Integração operando de forma limpa.
+                                    </p>
+                                  )}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+
                           <div className="p-2.5 rounded bg-white/[0.02] border border-white/5 text-[10px]">
                             <span className="font-bold text-slate-400 block mb-1">Mapeamento & Normalização:</span>
                             <p>As severidades do Zabbix (Warning, Average, High, Disaster) são automaticamente normalizadas para a escala universal (Warning, Critical, Fatal). O campo `host_name` é associado ao ativo físico de forma persistente.</p>
