@@ -286,11 +286,11 @@ export default function CockpitPage() {
 
   // Stats computation
   const stats = {
-    total: alerts.length,
-    fatal: alerts.filter(a => a.severity === 'fatal' && a.status !== 'resolved' && a.status !== 'suppressed').length,
-    critical: alerts.filter(a => a.severity === 'critical' && a.status !== 'resolved' && a.status !== 'suppressed').length,
-    warning: alerts.filter(a => a.severity === 'warning' && a.status !== 'resolved' && a.status !== 'suppressed').length,
-    info: alerts.filter(a => a.severity === 'info' && a.status !== 'resolved' && a.status !== 'suppressed').length,
+    total: alerts.filter(a => selectedTenantIds.includes(a.tenant_id) && a.status !== 'resolved' && a.status !== 'suppressed').length,
+    fatal: alerts.filter(a => selectedTenantIds.includes(a.tenant_id) && a.severity === 'fatal' && a.status !== 'resolved' && a.status !== 'suppressed').length,
+    critical: alerts.filter(a => selectedTenantIds.includes(a.tenant_id) && a.severity === 'critical' && a.status !== 'resolved' && a.status !== 'suppressed').length,
+    warning: alerts.filter(a => selectedTenantIds.includes(a.tenant_id) && a.severity === 'warning' && a.status !== 'resolved' && a.status !== 'suppressed').length,
+    info: alerts.filter(a => selectedTenantIds.includes(a.tenant_id) && a.severity === 'info' && a.status !== 'resolved' && a.status !== 'suppressed').length,
   };
 
   // API Connection Health Check Loop
@@ -4430,16 +4430,18 @@ export default function CockpitPage() {
             {/* Modal Body */}
             <div className="flex-1 overflow-y-auto p-5 flex flex-col gap-3">
               {alerts.filter(a => {
-                if (activeSummaryModal === 'total') return a.status !== 'resolved';
-                return a.severity === activeSummaryModal && a.status !== 'resolved';
+                if (!selectedTenantIds.includes(a.tenant_id)) return false;
+                if (activeSummaryModal === 'total') return a.status !== 'resolved' && a.status !== 'suppressed';
+                return a.severity === activeSummaryModal && a.status !== 'resolved' && a.status !== 'suppressed';
               }).length === 0 ? (
                 <div className="text-center py-12 text-slate-500 italic text-xs">
                   Nenhum alerta ativo cadastrado com esta severidade.
                 </div>
               ) : (
                 alerts.filter(a => {
-                  if (activeSummaryModal === 'total') return a.status !== 'resolved';
-                  return a.severity === activeSummaryModal && a.status !== 'resolved';
+                  if (!selectedTenantIds.includes(a.tenant_id)) return false;
+                  if (activeSummaryModal === 'total') return a.status !== 'resolved' && a.status !== 'suppressed';
+                  return a.severity === activeSummaryModal && a.status !== 'resolved' && a.status !== 'suppressed';
                 }).map(alert => (
                   <div key={alert.id} className="p-4 rounded-xl bg-white/[0.02] border border-white/5 flex items-center justify-between gap-4 hover:bg-white/[0.04] transition-all">
                     <div className="flex items-start gap-3 flex-1 min-w-0">
