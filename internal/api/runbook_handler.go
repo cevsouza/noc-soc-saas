@@ -333,3 +333,50 @@ func HandleGetRunbookAuditLogs(pgPool *pgxpool.Pool) http.HandlerFunc {
 		_ = json.NewEncoder(w).Encode(list)
 	}
 }
+
+// HandleDeleteRunbook removes a runbook configuration.
+func HandleDeleteRunbook(pgPool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tenantID, ok := resolveTenantID(r)
+		if !ok {
+			http.Error(w, "Unauthorized: Tenant context not found", http.StatusUnauthorized)
+			return
+		}
+		ctx := db.WithTenantID(r.Context(), tenantID)
+
+		idStr := r.URL.Query().Get("id")
+		if idStr == "" {
+			http.Error(w, "Missing runbook ID parameter", http.StatusBadRequest)
+			return
+		}
+
+		runbookID, err := uuid.Parse(idStr)
+		if err != nil {
+			http.Error(w, "Invalid ID format", http.StatusBadRequest)
+			return
+		}
+
+		err = db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
+			res, err := tx.Exec(ctx, "DELETE FROM tenant_runbooks WHERE id = $1 AND tenant_id = $2", runbookID, tenantID)
+			if err != nil {
+				return err
+			}
+			if res.RowsAffected() == 0 {
+				return pgx.ErrNoRows
+			}
+			return nil
+		})
+
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				http.Error(w, "Runbook not found or unauthorized", http.StatusNotFound)
+			} else {
+				http.Error(w, "Failed to delete runbook", http.StatusInternalServerError)
+			}
+			return
+		}
+
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+

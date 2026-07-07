@@ -496,6 +496,11 @@ func main() {
 			api.HandleCreateRunbook(pgPool),
 		),
 	)
+	protectedDeleteRunbooks := middleware.JWTAuth(jwtSecret)(
+		middleware.RequireRole(model.RoleAdmin)(
+			api.HandleDeleteRunbook(pgPool),
+		),
+	)
 	protectedExecuteRunbook := middleware.JWTAuth(jwtSecret)(api.HandleExecuteRunbook(pgPool))
 
 	mux.Handle("/api/v1/runbooks", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -503,6 +508,8 @@ func main() {
 			protectedGetRunbooks.ServeHTTP(w, r)
 		} else if r.Method == http.MethodPost {
 			protectedPostRunbooks.ServeHTTP(w, r)
+		} else if r.Method == http.MethodDelete {
+			protectedDeleteRunbooks.ServeHTTP(w, r)
 		} else {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		}

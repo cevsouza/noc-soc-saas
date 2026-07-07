@@ -244,6 +244,13 @@ export default function CockpitPage() {
   const [isLoadingVaultSecrets, setIsLoadingVaultSecrets] = useState(false);
   const [runbookAudits, setRunbookAudits] = useState<any[]>([]);
   const [isLoadingRunbookAudits, setIsLoadingRunbookAudits] = useState(false);
+  const [settingsPlaybooks, setSettingsPlaybooks] = useState<any[]>([]);
+  const [isLoadingSettingsPlaybooks, setIsLoadingSettingsPlaybooks] = useState(false);
+  const [playbookName, setPlaybookName] = useState('');
+  const [playbookTrigger, setPlaybookTrigger] = useState('');
+  const [playbookScript, setPlaybookScript] = useState('');
+  const [playbookVaultKey, setPlaybookVaultKey] = useState('ssh');
+  const [playbookStatus, setPlaybookStatus] = useState<{ status: 'idle' | 'saving' | 'success' | 'error', message?: string }>({ status: 'idle' });
   const [simulatorNotification, setSimulatorNotification] = useState<string | null>(null);
   const [activeSummaryModal, setActiveSummaryModal] = useState<'total' | 'fatal' | 'critical' | 'warning' | 'info' | null>(null);
   
@@ -1285,6 +1292,86 @@ export default function CockpitPage() {
     };
     fetchRunbookAudits();
   }, [selectedTenant, selectedIntegrationTool, token]);
+
+  // Fetch playbooks for SRE Settings administration
+  const fetchPlaybooksAdmin = async () => {
+    if (!token || !selectedTenant) return;
+    setIsLoadingSettingsPlaybooks(true);
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/v1/runbooks?tenant_id=${selectedTenant.id}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setSettingsPlaybooks(data || []);
+      }
+    } catch (err) {
+      console.error("Failed to fetch settings playbooks:", err);
+    } finally {
+      setIsLoadingSettingsPlaybooks(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!token || !selectedTenant || selectedIntegrationTool !== 'playbooks_admin') return;
+    fetchPlaybooksAdmin();
+  }, [selectedTenant, selectedIntegrationTool, token]);
+
+  const handleCreatePlaybook = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!token || !selectedTenant) return;
+    setPlaybookStatus({ status: 'saving' });
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/v1/runbooks?tenant_id=${selectedTenant.id}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          name: playbookName,
+          trigger_rule: playbookTrigger,
+          script: playbookScript,
+          vault_key_host: playbookVaultKey
+        })
+      });
+      if (res.ok) {
+        setPlaybookStatus({ status: 'success', message: 'Playbook criado com sucesso!' });
+        setPlaybookName('');
+        setPlaybookTrigger('');
+        setPlaybookScript('');
+        fetchPlaybooksAdmin();
+      } else {
+        const txt = await res.text();
+        setPlaybookStatus({ status: 'error', message: txt || 'Falha ao criar playbook.' });
+      }
+    } catch (err) {
+      setPlaybookStatus({ status: 'error', message: 'Erro ao conectar ao backend.' });
+    }
+  };
+
+  const handleDeletePlaybook = async (id: string) => {
+    if (!token || !selectedTenant) return;
+    if (!confirm('Deseja realmente excluir este playbook de auto-cura?')) return;
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/v1/runbooks?tenant_id=${selectedTenant.id}&id=${id}`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      if (res.ok) {
+        fetchPlaybooksAdmin();
+      } else {
+        const txt = await res.text();
+        alert('Falha ao excluir playbook: ' + txt);
+      }
+    } catch (err) {
+      alert('Erro ao excluir playbook: ' + err);
+    }
+  };
 
   // Fetch runbooks when selected alert changes
   useEffect(() => {
@@ -2538,6 +2625,20 @@ export default function CockpitPage() {
                   <span>Métricas & SLA</span>
                 </button>
 
+                <span className="text-[9px] font-bold text-slate-500 uppercase tracking-widest px-2.5 py-2 mt-4">Auto-Healing</span>
+                <button
+                  onClick={() => {
+                    setSelectedIntegrationTool('playbooks_admin');
+                    setValidationResult(null);
+                  }}
+                  className={`w-full px-3 py-2 rounded-lg text-left text-xs font-bold transition-all flex items-center gap-2 ${
+                    selectedIntegrationTool === 'playbooks_admin' ? 'bg-white/5 text-white border-l-2 border-cyan-400' : 'text-slate-400 hover:bg-white/[0.02] hover:text-slate-200'
+                  }`}
+                >
+                  <Cpu className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>Playbooks de Auto-Cura</span>
+                </button>
+
                 {user?.role === 'admin' && (
                   <>
                     <span className="text-[9px] font-bold text-slate-500 uppercase tracking-widest px-2.5 py-2 mt-4">Administração NOC</span>
@@ -3138,6 +3239,191 @@ export default function CockpitPage() {
                         </form>
                       ) : null}
                     </div>
+                ) : selectedIntegrationTool === 'playbooks_admin' ? (
+                  <div className="flex flex-col gap-4 font-sans animate-fadeIn">
+                    <div className="flex flex-col gap-3 p-4 rounded-xl bg-cyan-950/10 border border-cyan-500/20 text-xs text-slate-300 leading-relaxed font-sans mb-2">
+                      <div className="flex items-center gap-1.5 text-cyan-400 font-extrabold uppercase text-[10px]">
+                        <Cpu className="w-3.5 h-3.5" /> Automação SOAR & Auto-Healing
+                      </div>
+                      <p>Adicione e gerencie scripts SSH para remediação automatizada de incidentes. Quando um novo alerta chega e bate com o padrão da <b>Regra de Trigger</b>, o playbook associado pode ser executado para auto-cura.</p>
+                    </div>
+
+                    <div className="grid grid-cols-1 xl:grid-cols-2 gap-8">
+                      {/* Left side: Create Playbook */}
+                      {user?.role === 'admin' ? (
+                        <form onSubmit={handleCreatePlaybook} className="flex flex-col gap-4 bg-white/[0.01] p-5 rounded-xl border border-white/5 animate-fadeIn">
+                          <h5 className="text-xs font-bold uppercase tracking-wider text-slate-200 border-b border-white/5 pb-2">Cadastrar Novo Playbook</h5>
+                          
+                          <div className="flex flex-col gap-2.5">
+                            <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Carregar Template Padrão</label>
+                            <select
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                if (val === 'dos') {
+                                  setPlaybookName('Bloqueio DoS Automático');
+                                  setPlaybookTrigger('(?i)DoS|Brute Force|Attack');
+                                  setPlaybookScript('sudo iptables -A INPUT -s $ALERT_SOURCE_IP -j DROP');
+                                } else if (val === 'service') {
+                                  setPlaybookName('Reinicialização de Serviço');
+                                  setPlaybookTrigger('(?i)nginx|web service down');
+                                  setPlaybookScript('sudo systemctl restart nginx');
+                                } else if (val === 'cleanup') {
+                                  setPlaybookName('Limpeza de Disco');
+                                  setPlaybookTrigger('(?i)disk space|full');
+                                  setPlaybookScript('sudo journalctl --vacuum-time=1d && sudo rm -rf /tmp/* && docker system prune -af');
+                                } else if (val === 'diagnose') {
+                                  setPlaybookName('Coleta Diagnóstica SSH');
+                                  setPlaybookTrigger('(?i)high load|cpu usage');
+                                  setPlaybookScript('echo "=== TOP CPU ===" && ps -eo pid,cmd,%cpu --sort=-%cpu | head -n 5');
+                                }
+                              }}
+                              className="bg-[#0b0f19] border border-white/10 rounded-lg p-2 text-xs text-white focus:outline-none focus:border-violet-500"
+                            >
+                              <option value="">Selecione um template para preencher...</option>
+                              <option value="dos">🛡️ Remediação DoS (Bloqueio de IP)</option>
+                              <option value="service">🔄 Restart de Serviço Systemd</option>
+                              <option value="cleanup">🧹 Limpeza de Disco / Log Rotation</option>
+                              <option value="diagnose">📋 Coleta de Diagnóstico Remoto</option>
+                            </select>
+                          </div>
+
+                          <div className="flex flex-col gap-1.5">
+                            <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Nome do Playbook</label>
+                            <input
+                              type="text"
+                              required
+                              value={playbookName}
+                              onChange={(e) => setPlaybookName(e.target.value)}
+                              placeholder="Ex: Restart Nginx"
+                              className="bg-[#0b0f19] border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-violet-500"
+                            />
+                          </div>
+
+                          <div className="flex flex-col gap-1.5">
+                            <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Regra de Trigger (Expressão Regular)</label>
+                            <input
+                              type="text"
+                              required
+                              value={playbookTrigger}
+                              onChange={(e) => setPlaybookTrigger(e.target.value)}
+                              placeholder="Regex para acionar (Ex: (?i)nginx|down)"
+                              className="bg-[#0b0f19] border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-violet-500 font-mono"
+                            />
+                          </div>
+
+                          <div className="flex flex-col gap-1.5">
+                            <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Chave Credencial do Host (Cofre)</label>
+                            <input
+                              type="text"
+                              required
+                              value={playbookVaultKey}
+                              onChange={(e) => setPlaybookVaultKey(e.target.value)}
+                              placeholder="Ex: ssh"
+                              className="bg-[#0b0f19] border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-violet-500 font-mono"
+                            />
+                          </div>
+
+                          <div className="flex flex-col gap-1.5">
+                            <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Script / Comandos SSH</label>
+                            <textarea
+                              required
+                              rows={5}
+                              value={playbookScript}
+                              onChange={(e) => setPlaybookScript(e.target.value)}
+                              placeholder="Digite os comandos Bash a serem disparados no servidor..."
+                              className="bg-[#0b0f19] border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-violet-500 font-mono"
+                            />
+                          </div>
+
+                          <button
+                            type="submit"
+                            disabled={playbookStatus.status === 'saving'}
+                            className="bg-[#8b5cf6] hover:bg-violet-500 text-slate-950 font-bold text-xs py-3 px-4 rounded-lg transition-all shadow-md shadow-violet-950/30 flex items-center justify-center gap-2 cursor-pointer w-full"
+                          >
+                            {playbookStatus.status === 'saving' && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+                            Salvar Playbook no Banco
+                          </button>
+
+                          {playbookStatus.status === 'success' && (
+                            <div className="p-2.5 bg-emerald-950/20 border border-emerald-500/20 text-emerald-400 text-xs rounded-lg">
+                              {playbookStatus.message}
+                            </div>
+                          )}
+                          {playbookStatus.status === 'error' && (
+                            <div className="p-2.5 bg-rose-950/20 border border-rose-500/20 text-rose-400 text-xs rounded-lg">
+                              {playbookStatus.message}
+                            </div>
+                          )}
+                        </form>
+                      ) : (
+                        <div className="p-5 rounded-xl border border-white/5 bg-white/[0.01] text-xs text-slate-400 flex items-center justify-center text-center">
+                          Apenas usuários administradores (role admin) podem criar e alterar playbooks de auto-cura SSH.
+                        </div>
+                      )}
+
+                      {/* Right side: List Playbooks */}
+                      <div className="flex flex-col gap-4 animate-fadeIn">
+                        <div className="flex items-center justify-between border-b border-white/5 pb-2">
+                          <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400 block font-sans">
+                            Playbooks Ativos ({selectedTenant.name})
+                          </label>
+                          <button
+                            onClick={fetchPlaybooksAdmin}
+                            disabled={isLoadingSettingsPlaybooks}
+                            className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-white/5 hover:bg-white/10 border border-white/10 text-[9px] text-slate-300 font-medium transition-all cursor-pointer"
+                          >
+                            <RefreshCw className={`w-2.5 h-2.5 ${isLoadingSettingsPlaybooks ? 'animate-spin' : ''}`} />
+                            <span>Atualizar</span>
+                          </button>
+                        </div>
+
+                        {isLoadingSettingsPlaybooks ? (
+                          <div className="flex flex-col items-center justify-center py-16 gap-2 text-slate-400 text-xs">
+                            <RefreshCw className="w-6 h-6 animate-spin text-cyan-400" />
+                            <span>Carregando playbooks...</span>
+                          </div>
+                        ) : settingsPlaybooks.length === 0 ? (
+                          <div className="text-xs text-slate-500 italic text-center py-10">
+                            Nenhum playbook de auto-cura cadastrado para este tenant.
+                          </div>
+                        ) : (
+                          <div className="flex flex-col gap-3 max-h-[500px] overflow-y-auto pr-1">
+                            {settingsPlaybooks.map(p => (
+                              <div
+                                key={p.id}
+                                className="p-4 rounded-xl border bg-black/40 border-white/5 text-slate-300 flex flex-col gap-3 hover:border-white/10 transition-all font-sans"
+                              >
+                                <div className="flex justify-between items-start">
+                                  <div className="flex flex-col gap-1 min-w-0 mr-3">
+                                    <span className="text-xs font-bold text-slate-200">{p.name}</span>
+                                    <span className="text-[9px] font-mono text-cyan-400 truncate">Trigger: {p.trigger_rule}</span>
+                                  </div>
+                                  {user?.role === 'admin' && (
+                                    <button
+                                      onClick={() => handleDeletePlaybook(p.id)}
+                                      className="text-[9px] text-rose-400 hover:text-rose-300 bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/10 hover:border-rose-500/20 px-2 py-1 rounded transition-all font-bold cursor-pointer shrink-0"
+                                    >
+                                      Excluir
+                                    </button>
+                                  )}
+                                </div>
+
+                                <div className="flex flex-col gap-1 font-mono text-[10px]">
+                                  <span className="text-slate-500 font-sans font-bold">Script / Comandos:</span>
+                                  <pre className="p-2 rounded bg-black/60 text-slate-300 overflow-x-auto whitespace-pre-wrap">{p.script}</pre>
+                                </div>
+
+                                <div className="flex items-center justify-between text-[9px] text-slate-500 font-bold uppercase tracking-wider border-t border-white/5 pt-2">
+                                  <span>Cofre: <strong className="text-slate-300 font-mono">{p.vault_key_host}</strong></span>
+                                  <span>Criado: <strong className="text-slate-300">{new Date(p.created_at).toLocaleDateString()}</strong></span>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
                 ) : selectedIntegrationTool === 'users_admin' ? (
                   // 4. Admin Users Form
                   <div className="flex flex-col gap-4">
