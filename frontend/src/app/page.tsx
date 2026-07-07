@@ -1309,24 +1309,29 @@ export default function CockpitPage() {
   const handleUpdateStatus = async (alertId: string, newStatus: Alert['status']) => {
     // 1. Update local state immediately for a responsive UI
     setAlerts(prevAlerts => {
-      const updated = prevAlerts.map(a => {
+      return prevAlerts.map(a => {
         if (a.id === alertId) {
-          const updatedAlert: Alert = {
+          return {
             ...a,
             status: newStatus,
             resolved_at: newStatus === 'resolved' ? new Date().toISOString() : undefined,
             acknowledged_at: newStatus === 'acknowledged' ? new Date().toISOString() : a.acknowledged_at,
             updated_at: new Date().toISOString()
           };
-          if (selectedAlert && selectedAlert.id === alertId) {
-            setSelectedAlert(updatedAlert);
-          }
-          return updatedAlert;
         }
         return a;
       });
-      return updated;
     });
+
+    if (selectedAlert && selectedAlert.id === alertId) {
+      setSelectedAlert(prev => prev ? {
+        ...prev,
+        status: newStatus,
+        resolved_at: newStatus === 'resolved' ? new Date().toISOString() : undefined,
+        acknowledged_at: newStatus === 'acknowledged' ? new Date().toISOString() : prev.acknowledged_at,
+        updated_at: new Date().toISOString()
+      } : null);
+    }
 
     // 2. Fetch API to sync DB
     const endpoint = newStatus === 'acknowledged' ? '/api/v1/incidents/acknowledge' : '/api/v1/incidents/resolve';
@@ -1334,7 +1339,7 @@ export default function CockpitPage() {
     if (!alertItem) return;
 
     try {
-      const res = await fetch(`${API_BASE_URL}${endpoint}`, {
+      const res = await fetch(`${API_BASE_URL}${endpoint}?tenant_id=${alertItem.tenant_id}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1385,7 +1390,8 @@ export default function CockpitPage() {
                           (a.ai_analysis?.source || '').toLowerCase().includes(searchTerm.toLowerCase());
     const matchesSeverity = severityFilter === 'all' || a.severity === severityFilter;
     const matchesTenant = selectedTenantIds.includes(a.tenant_id);
-    return matchesSearch && matchesSeverity && matchesTenant;
+    const isActive = a.status !== 'resolved' && a.status !== 'suppressed';
+    return matchesSearch && matchesSeverity && matchesTenant && isActive;
   });
 
   // Simulator helper function
@@ -4552,6 +4558,7 @@ export default function CockpitPage() {
                       <button
                         onClick={() => {
                           setSelectedAlert(alert);
+                          setCockpitTab('alerts');
                           setActiveSummaryModal(null);
                         }}
                         className="bg-violet-600/20 hover:bg-violet-600/35 border border-violet-500/30 text-violet-300 px-2.5 py-1 rounded text-[10px] font-bold transition-all cursor-pointer uppercase tracking-wider"
