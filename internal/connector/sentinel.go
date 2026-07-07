@@ -11,7 +11,6 @@ import (
 	"sync"
 	"time"
 
-	"noc-api/internal/api"
 	"noc-api/internal/db"
 	"noc-api/internal/model"
 	"noc-api/internal/repository"
@@ -284,7 +283,7 @@ func (c *SentinelConnector) syncTenantSentinel(ctx context.Context, tenant model
 		}
 
 		bytes, _ := json.Marshal(incident)
-		_ = c.redisClient.LPush(ctx, api.AlertsQueueKey, bytes).Err()
+		_ = c.redisClient.LPush(ctx, "noc:queue:alerts", bytes).Err()
 	}
 
 	// Register heartbeat in Redis and clear any previous errors
@@ -350,10 +349,36 @@ func (c *SentinelConnector) runMockSync(ctx context.Context, tenant model.Tenant
 	}
 
 	bytes, _ := json.Marshal(incident)
-	_ = c.redisClient.LPush(ctx, api.AlertsQueueKey, bytes).Err()
+	_ = c.redisClient.LPush(ctx, "noc:queue:alerts", bytes).Err()
 	log.Printf("[Sentinel Mock Connector] Mock incident pushed to queue: %s", incidentID)
 
 	// Register heartbeat in Redis and clear any previous errors
 	c.redisClient.Set(ctx, fmt.Sprintf("heartbeat:connector:%s:%s", tenant.ID.String(), "sentinel"), time.Now().Unix(), 24*time.Hour)
 	c.redisClient.Del(ctx, fmt.Sprintf("webhook:error:%s:%s", tenant.ID.String(), "sentinel"))
 }
+
+// TestConnection checks if Sentinel credentials are valid by requesting an OAuth token.
+func (c *SentinelConnector) TestConnection(ctx context.Context, tenantID uuid.UUID) error {
+	tenantCtx := db.WithTenantID(ctx, tenantID)
+	masterKey, err := security.GetMasterKey()
+	if err != nil {
+		return fmt.Errorf("master key not found: %w", err)
+	}
+
+	cfg, err := c.getSentinelConfig(tenantCtx, tenantID, masterKey)
+	if err != nil {
+		return fmt.Errorf("sentinel configuration not found in Vault: %w", err)
+	}
+
+	if cfg.ClientID == "mock_sentinel" || cfg.ClientID == "" {
+		return nil // Mock is always successful
+	}
+
+	_, err = c.getAzureAccessToken(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("sentinel OAuth connection test failed: %w", err)
+	}
+
+	return nil
+}
+

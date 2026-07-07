@@ -24,6 +24,8 @@ import {
   Copy,
   Check,
   ChevronDown,
+  ChevronLeft,
+  Palette,
   Target,
   Zap,
   Clock,
@@ -259,7 +261,7 @@ export default function CockpitPage() {
   const [isLoadingAdminUsers, setIsLoadingAdminUsers] = useState(false);
   const [activeUsers, setActiveUsers] = useState<any[]>([]);
   const [isLoadingActiveUsers, setIsLoadingActiveUsers] = useState(false);
-  const [selectedIntegrationTool, setSelectedIntegrationTool] = useState('uptimekuma');
+  const [selectedIntegrationTool, setSelectedIntegrationTool] = useState<string>('integrations_admin');
   const [copiedText, setCopiedText] = useState(false);
   
   // Vault secret storage states
@@ -280,6 +282,10 @@ export default function CockpitPage() {
   const [adminIntegrationStatus, setAdminIntegrationStatus] = useState<{ status: 'idle' | 'saving' | 'success' | 'error', message?: string }>({ status: 'idle' });
   const [validationResult, setValidationResult] = useState<any>(null);
   const [isValidating, setIsValidating] = useState(false);
+
+  // Unified Connectors Health Center States
+  const [connectorStatuses, setConnectorStatuses] = useState<Record<string, any>>({});
+  const [activeSubTool, setActiveSubTool] = useState<string | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -555,6 +561,12 @@ export default function CockpitPage() {
       fetchIntegrations();
     }
   }, [token, selectedTenant]);
+
+  useEffect(() => {
+    if (token && selectedTenant?.id && selectedIntegrationTool === 'integrations_admin') {
+      fetchAllConnectorStatuses(selectedTenant.id);
+    }
+  }, [token, selectedTenant?.id, selectedIntegrationTool]);
 
   const fetchAdminTenantIntegrations = async (tenantId: string) => {
     if (!token) return;
@@ -939,6 +951,28 @@ export default function CockpitPage() {
     } finally {
       setIsValidating(false);
     }
+  };
+
+  const fetchAllConnectorStatuses = async (tenantId: string) => {
+    if (!token || !tenantId) return;
+    const tools = ['uptimekuma', 'zabbix', 'prometheus', 'wazuh', 'grafana', 'sentinel', 'loki'];
+    const results: Record<string, any> = {};
+    await Promise.all(tools.map(async (tool) => {
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/v1/integrations/status?tenant_id=${tenantId}&type=${tool}`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (res.ok) {
+          results[tool] = await res.json();
+        } else {
+          results[tool] = { status: 'error', last_error: 'Falha ao conectar à API de status.' };
+        }
+      } catch (err) {
+        console.error(`Error fetching status for ${tool}:`, err);
+        results[tool] = { status: 'error', last_error: 'Erro de rede.' };
+      }
+    }));
+    setConnectorStatuses(results);
   };
 
   // Connect to Go WebSocket Server
@@ -1809,7 +1843,11 @@ export default function CockpitPage() {
           {/* Connections / Integrations Manager Trigger (Hidden for viewers) */}
           {user?.role !== 'viewer' && (
             <button
-              onClick={() => setShowIntegrationsModal(true)}
+              onClick={() => {
+                setCockpitTab('settings');
+                setSelectedIntegrationTool('integrations_admin');
+                setActiveSubTool(null);
+              }}
               className="flex items-center gap-2 px-3 py-1 rounded-lg bg-cyan-600/20 hover:bg-cyan-600/30 border border-cyan-500/35 text-cyan-300 text-xs font-bold transition-all uppercase tracking-wider"
             >
               <LinkIcon className="w-3.5 h-3.5" />
@@ -2192,15 +2230,6 @@ export default function CockpitPage() {
                 className="w-full bg-surface/40 hover:bg-surface/60 focus:bg-surface/80 border border-white/5 rounded-xl pl-11 pr-4 py-2.5 text-sm focus:outline-none focus:border-violet-500/50 text-slate-200 transition-all placeholder:text-slate-500"
               />
             </div>
-            {user?.role === 'admin' && (
-              <button
-                onClick={handleCleanupMockAlerts}
-                className="px-4 py-2.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 hover:text-rose-300 border border-rose-500/25 transition-all text-xs font-bold flex items-center gap-2 cursor-pointer shrink-0"
-              >
-                <Trash2 className="w-4 h-4" />
-                Limpar Alertas Mock
-              </button>
-            )}
           </div>
 
           {/* Focus Mode Banner */}
@@ -2461,109 +2490,1118 @@ export default function CockpitPage() {
               </div>
             </div>
           ) : (
-            // White-label Configuration Panel
-            <div className="glass-card rounded-xl overflow-hidden flex flex-col border border-white/5 p-6 bg-surface/30">
-              <div className="flex flex-col gap-1 border-b border-white/5 pb-4 mb-6">
-                <h4 className="text-sm font-extrabold text-slate-200 uppercase tracking-wider">Painel de Configuração de White-Label & Temas</h4>
-                <p className="text-[10px] text-slate-500 uppercase tracking-wider font-semibold">Customize a identidade visual do cockpit para seu inquilino (Parceria IT Fácil MSP)</p>
+            // Unified Settings & Administration Split-Pane
+            <div className="glass-card rounded-xl overflow-hidden flex flex-row border border-white/5 bg-surface/30 h-[700px] w-full">
+              {/* Settings Sidebar */}
+              <div className="w-[240px] bg-[#070b13]/80 border-r border-white/5 overflow-y-auto flex flex-col p-4 gap-1 select-none shrink-0">
+                <span className="text-[9px] font-bold text-slate-500 uppercase tracking-widest px-2.5 py-2">Integrações & Conectores</span>
+                
+                <button
+                  onClick={() => {
+                    setSelectedIntegrationTool('integrations_admin');
+                    setActiveSubTool(null);
+                    setValidationResult(null);
+                  }}
+                  className={`w-full px-3 py-2 rounded-lg text-left text-xs font-bold transition-all flex items-center gap-2 ${
+                    selectedIntegrationTool === 'integrations_admin' ? 'bg-white/5 text-white border-l-2 border-cyan-400' : 'text-slate-400 hover:bg-white/[0.02] hover:text-slate-200'
+                  }`}
+                >
+                  <Activity className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>Central de Conectores</span>
+                </button>
+
+                <span className="text-[9px] font-bold text-slate-500 uppercase tracking-widest px-2.5 py-2 mt-4">Personalização</span>
+                <button
+                  onClick={() => {
+                    setSelectedIntegrationTool('theme_config');
+                    setValidationResult(null);
+                  }}
+                  className={`w-full px-3 py-2 rounded-lg text-left text-xs font-bold transition-all flex items-center gap-2 ${
+                    selectedIntegrationTool === 'theme_config' ? 'bg-white/5 text-white border-l-2 border-cyan-400' : 'text-slate-400 hover:bg-white/[0.02] hover:text-slate-200'
+                  }`}
+                >
+                  <Palette className="w-3.5 h-3.5 text-purple-400" />
+                  <span>Identidade & White-Label</span>
+                </button>
+
+                <span className="text-[9px] font-bold text-slate-500 uppercase tracking-widest px-2.5 py-2 mt-4">Desempenho</span>
+                <button
+                  onClick={() => {
+                    setSelectedIntegrationTool('sla_report');
+                    setValidationResult(null);
+                  }}
+                  className={`w-full px-3 py-2 rounded-lg text-left text-xs font-bold transition-all flex items-center gap-2 ${
+                    selectedIntegrationTool === 'sla_report' ? 'bg-white/5 text-white border-l-2 border-cyan-400' : 'text-slate-400 hover:bg-white/[0.02] hover:text-slate-200'
+                  }`}
+                >
+                  <TrendingUp className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Métricas & SLA</span>
+                </button>
+
+                {user?.role === 'admin' && (
+                  <>
+                    <span className="text-[9px] font-bold text-slate-500 uppercase tracking-widest px-2.5 py-2 mt-4">Administração NOC</span>
+                    <button
+                      onClick={() => {
+                        setSelectedIntegrationTool('users_admin');
+                        setAdminUserStatus({ status: 'idle' });
+                        setValidationResult(null);
+                      }}
+                      className={`w-full px-3 py-2 rounded-lg text-left text-xs font-bold transition-all flex items-center gap-2 ${
+                        selectedIntegrationTool === 'users_admin' ? 'bg-white/5 text-white border-l-2 border-cyan-400' : 'text-slate-400 hover:bg-white/[0.02] hover:text-slate-200'
+                      }`}
+                    >
+                      <User className="w-3.5 h-3.5 text-violet-400" />
+                      <span>Usuários (RBAC)</span>
+                    </button>
+                    <button
+                      onClick={() => {
+                        setSelectedIntegrationTool('tenants_admin');
+                        setTenantCreateStatus({ status: 'idle' });
+                        setValidationResult(null);
+                      }}
+                      className={`w-full px-3 py-2 rounded-lg text-left text-xs font-bold transition-all flex items-center gap-2 ${
+                        selectedIntegrationTool === 'tenants_admin' ? 'bg-white/5 text-white border-l-2 border-cyan-400' : 'text-slate-400 hover:bg-white/[0.02] hover:text-slate-200'
+                      }`}
+                    >
+                      <Layers className="w-3.5 h-3.5 text-blue-400" />
+                      <span>Clientes & Tenants</span>
+                    </button>
+                    <button
+                      onClick={() => {
+                        setSelectedIntegrationTool('vault_admin');
+                        setValidationResult(null);
+                      }}
+                      className={`w-full px-3 py-2 rounded-lg text-left text-xs font-bold transition-all flex items-center gap-2 ${
+                        selectedIntegrationTool === 'vault_admin' ? 'bg-white/5 text-white border-l-2 border-cyan-400' : 'text-slate-400 hover:bg-white/[0.02] hover:text-slate-200'
+                      }`}
+                    >
+                      <Lock className="w-3.5 h-3.5 text-amber-400" />
+                      <span>Auditoria do Vault</span>
+                    </button>
+                    <button
+                      onClick={() => {
+                        setSelectedIntegrationTool('audit_admin');
+                        setValidationResult(null);
+                      }}
+                      className={`w-full px-3 py-2 rounded-lg text-left text-xs font-bold transition-all flex items-center gap-2 ${
+                        selectedIntegrationTool === 'audit_admin' ? 'bg-white/5 text-white border-l-2 border-cyan-400' : 'text-slate-400 hover:bg-white/[0.02] hover:text-slate-200'
+                      }`}
+                    >
+                      <Terminal className="w-3.5 h-3.5 text-slate-400" />
+                      <span>Logs de Comandos SSH</span>
+                    </button>
+                  </>
+                )}
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-8 text-xs text-slate-300">
-                <div className="flex flex-col gap-4">
-                  <div className="flex flex-col gap-2">
-                    <label className="font-bold text-slate-400 uppercase tracking-wider text-[9px]">URL do Logotipo customizado (SVG/PNG)</label>
-                    <input
-                      type="text"
-                      className="bg-slate-950 border border-white/10 rounded-lg p-3 text-xs text-white focus:outline-none focus:border-violet-500 font-mono"
-                      value={selectedTenant?.logo_url || ''}
-                      onChange={(e) => {
-                        if (selectedTenant) {
-                          const updated = [...tenants];
-                          const t = updated.find(x => x.id === selectedTenant.id);
-                          if (t) t.logo_url = e.target.value;
-                          setTenants(updated);
-                        }
-                      }}
-                      placeholder="https://exemplo.com/logo.png"
-                    />
-                  </div>
+              {/* Settings Right Panel Content */}
+              <div className="flex-1 p-6 overflow-y-auto flex flex-col gap-6 bg-[#080d16]">
+                {selectedIntegrationTool === 'theme_config' ? (
+                  // White-label Configuration Panel
+                  <div className="flex flex-col gap-4">
+                    <div className="flex flex-col gap-1 border-b border-white/5 pb-4 mb-2">
+                      <h4 className="text-sm font-extrabold text-slate-200 uppercase tracking-wider">Painel de Configuração de White-Label & Temas</h4>
+                      <p className="text-[10px] text-slate-500 uppercase tracking-wider font-semibold">Customize a identidade visual do cockpit para seu inquilino (Parceria IT Fácil MSP)</p>
+                    </div>
 
-                  <div className="flex flex-col gap-2">
-                    <label className="font-bold text-slate-400 uppercase tracking-wider text-[9px]">Cor Primária do Tema (Hexadecimal)</label>
-                    <div className="flex gap-3 items-center">
-                      <input
-                        type="color"
-                        className="bg-transparent border-0 w-10 h-10 cursor-pointer"
-                        value={selectedTenant?.primary_color || '#8b5cf6'}
-                        onChange={(e) => {
-                          if (selectedTenant) {
-                            const updated = [...tenants];
-                            const t = updated.find(x => x.id === selectedTenant.id);
-                            if (t) {
-                              t.primary_color = e.target.value;
-                              document.documentElement.style.setProperty('--primary-color', e.target.value);
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8 text-xs text-slate-300">
+                      <div className="flex flex-col gap-4">
+                        <div className="flex flex-col gap-2">
+                          <label className="font-bold text-slate-400 uppercase tracking-wider text-[9px]">URL do Logotipo customizado (SVG/PNG)</label>
+                          <input
+                            type="text"
+                            className="bg-slate-950 border border-white/10 rounded-lg p-3 text-xs text-white focus:outline-none focus:border-violet-500 font-mono"
+                            value={selectedTenant?.logo_url || ''}
+                            onChange={(e) => {
+                              if (selectedTenant) {
+                                const updated = [...tenants];
+                                const t = updated.find(x => x.id === selectedTenant.id);
+                                if (t) t.logo_url = e.target.value;
+                                setTenants(updated);
+                              }
+                            }}
+                            placeholder="https://exemplo.com/logo.png"
+                          />
+                        </div>
+
+                        <div className="flex flex-col gap-2">
+                          <label className="font-bold text-slate-400 uppercase tracking-wider text-[9px]">Cor Primária do Tema (Hexadecimal)</label>
+                          <div className="flex gap-3 items-center">
+                            <input
+                              type="color"
+                              className="bg-transparent border-0 w-10 h-10 cursor-pointer"
+                              value={selectedTenant?.primary_color || '#8b5cf6'}
+                              onChange={(e) => {
+                                if (selectedTenant) {
+                                  const updated = [...tenants];
+                                  const t = updated.find(x => x.id === selectedTenant.id);
+                                  if (t) {
+                                    t.primary_color = e.target.value;
+                                    document.documentElement.style.setProperty('--primary-color', e.target.value);
+                                  }
+                                  setTenants(updated);
+                                }
+                              }}
+                            />
+                            <input
+                              type="text"
+                              className="bg-slate-950 border border-white/10 rounded-lg p-3 text-xs text-white focus:outline-none focus:border-violet-500 font-mono w-28 text-center"
+                              value={selectedTenant?.primary_color || '#8b5cf6'}
+                              onChange={(e) => {
+                                if (selectedTenant) {
+                                  const updated = [...tenants];
+                                  const t = updated.find(x => x.id === selectedTenant.id);
+                                  if (t) {
+                                    t.primary_color = e.target.value;
+                                    document.documentElement.style.setProperty('--primary-color', e.target.value);
+                                  }
+                                  setTenants(updated);
+                                }
+                              }}
+                            />
+                          </div>
+                        </div>
+
+                        <button
+                          onClick={async () => {
+                            if (!selectedTenant || !token) return;
+                            try {
+                              const res = await fetch(`${API_BASE_URL}/api/v1/tenants/update_style`, {
+                                method: 'POST',
+                                headers: {
+                                  'Content-Type': 'application/json',
+                                  'Authorization': `Bearer ${token}`
+                                },
+                                body: JSON.stringify({
+                                  tenant_id: selectedTenant.id,
+                                  logo_url: selectedTenant.logo_url,
+                                  primary_color: selectedTenant.primary_color
+                                })
+                              });
+                              if (res.ok) {
+                                alert("Identidade visual White-Label atualizada com sucesso!");
+                              } else {
+                                const txt = await res.text();
+                                alert("Falha ao salvar: " + txt);
+                              }
+                            } catch (err) {
+                              alert("Erro ao conectar à API: " + err);
                             }
-                            setTenants(updated);
-                          }
-                        }}
-                      />
-                      <input
-                        type="text"
-                        className="bg-slate-950 border border-white/10 rounded-lg p-3 text-xs text-white focus:outline-none focus:border-violet-500 font-mono w-28 text-center"
-                        value={selectedTenant?.primary_color || '#8b5cf6'}
-                        onChange={(e) => {
-                          if (selectedTenant) {
-                            const updated = [...tenants];
-                            const t = updated.find(x => x.id === selectedTenant.id);
-                            if (t) {
-                              t.primary_color = e.target.value;
-                              document.documentElement.style.setProperty('--primary-color', e.target.value);
-                            }
-                            setTenants(updated);
-                          }
-                        }}
-                      />
+                          }}
+                          className="py-3 px-6 rounded-xl bg-violet-600 hover:bg-violet-500 text-slate-950 font-extrabold uppercase tracking-wider text-[10px] transition-all cursor-pointer w-fit"
+                        >
+                          Salvar Identidade Visual
+                        </button>
+                      </div>
+
+                      <div className="p-4 rounded-xl bg-slate-950/40 border border-white/5 flex flex-col gap-3 justify-center">
+                        <h5 className="font-extrabold uppercase text-[10px] text-violet-400">💡 Demonstração White-Label</h5>
+                        <p className="text-slate-400 leading-relaxed">
+                          Nossa plataforma permite a customização de cores, marcas e logos de forma isolada por domínio. Ao alterar o logotipo e cor acima, os estilos são gravados no banco de dados e aplicados em tempo de execução ao cabeçalho e menus sempre que este cliente estiver selecionado.
+                        </p>
+                      </div>
                     </div>
                   </div>
+                ) : selectedIntegrationTool === 'integrations_admin' ? (
+                  // Connectors Grid Panel
+                    <div className="flex flex-col gap-5">
+                      <div className="flex items-center justify-between border-b border-white/5 pb-4">
+                        <div className="flex flex-col gap-0.5">
+                          <h4 className="text-sm font-extrabold text-slate-200 uppercase tracking-wider">Central de Conectores & Integrações</h4>
+                          <p className="text-[10px] text-slate-500 uppercase tracking-wider font-semibold">Monitoramento de batimento (heartbeat) de telemetria em tempo real para o cliente: <strong className="text-violet-400">{selectedTenant.name}</strong></p>
+                        </div>
+                        <button
+                          onClick={() => fetchAllConnectorStatuses(selectedTenant.id)}
+                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-xs text-slate-300 font-bold transition-all cursor-pointer"
+                        >
+                          <RefreshCw className="w-3.5 h-3.5" />
+                          <span>Atualizar Status</span>
+                        </button>
+                      </div>
 
-                  <button
-                    onClick={async () => {
-                      if (!selectedTenant || !token) return;
-                      try {
-                        const res = await fetch(`${API_BASE_URL}/api/v1/tenants/update_style`, {
-                          method: 'POST',
-                          headers: {
-                            'Content-Type': 'application/json',
-                            'Authorization': `Bearer ${token}`
-                          },
-                          body: JSON.stringify({
-                            tenant_id: selectedTenant.id,
-                            logo_url: selectedTenant.logo_url,
-                            primary_color: selectedTenant.primary_color
-                          })
-                        });
-                        if (res.ok) {
-                          alert("Identidade visual White-Label atualizada com sucesso!");
-                        } else {
-                          const txt = await res.text();
-                          alert("Falha ao salvar: " + txt);
-                        }
-                      } catch (err) {
-                        alert("Erro ao conectar à API: " + err);
-                      }
-                    }}
-                    className="py-3 px-6 rounded-xl bg-violet-600 hover:bg-violet-500 text-slate-950 font-extrabold uppercase tracking-wider text-[10px] transition-all cursor-pointer w-fit"
-                  >
-                    Salvar Identidade Visual
-                  </button>
-                </div>
+                      {/* Client selector dropdown for admin */}
+                      {user?.role === 'admin' && (
+                        <div className="p-4 rounded-xl bg-white/[0.02] border border-white/5 flex flex-col md:flex-row items-center gap-4 justify-between">
+                          <div className="flex flex-col gap-1">
+                            <span className="text-xs font-bold text-slate-300">Alterar Cliente para Configuração:</span>
+                            <span className="text-[10px] text-slate-500">As chaves e webhooks abaixo serão relativos a este cliente.</span>
+                          </div>
+                          <select
+                            value={selectedTenant.id}
+                            onChange={(e) => {
+                              const t = tenants.find(x => x.id === e.target.value);
+                              if (t) {
+                                setSelectedTenant(t);
+                                let newIds = [t.id];
+                                setSelectedTenantIds(newIds);
+                              }
+                            }}
+                            className="bg-[#0b0f19] border border-white/10 rounded-lg p-2 text-xs text-white focus:outline-none focus:border-violet-500 w-64"
+                          >
+                            {tenants.map(t => (
+                              <option key={t.id} value={t.id}>{t.name}</option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
 
-                <div className="p-4 rounded-xl bg-slate-950/40 border border-white/5 flex flex-col gap-3 justify-center">
-                  <h5 className="font-extrabold uppercase text-[10px] text-violet-400">💡 Demonstração White-Label</h5>
-                  <p className="text-slate-400 leading-relaxed">
-                    Nossa plataforma permite a customização de cores, marcas e logos de forma isolada por domínio. Ao alterar o logotipo e cor acima, os estilos são gravados no banco de dados e aplicados em tempo de execução ao cabeçalho e menus sempre que este cliente estiver selecionado.
-                  </p>
-                </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
+                        {[
+                          { id: 'zabbix', name: 'Zabbix Monitor', method: 'Webhook (Push)', desc: 'Recepção de incidentes de infraestrutura, hosts e serviços.', color: 'border-rose-500/20' },
+                          { id: 'prometheus', name: 'Prometheus Alertmanager', method: 'Webhook (Push)', desc: 'Alertas de Kubernetes, contêineres e aplicações cloud-native.', color: 'border-purple-500/20' },
+                          { id: 'uptimekuma', name: 'Uptime Kuma', method: 'Webhook (Push)', desc: 'Notificações de queda de sites, portas TCP e ping ICMP.', color: 'border-emerald-500/20' },
+                          { id: 'wazuh', name: 'Wazuh SIEM', method: 'Webhook (Push)', desc: 'Eventos de segurança, auditoria e ameaças de endpoints.', color: 'border-blue-500/20' },
+                          { id: 'grafana', name: 'Grafana Webhook', method: 'Webhook (Push)', desc: 'Ingestão de triggers visuais baseados em painéis de métricas.', color: 'border-violet-500/20' },
+                          { id: 'sentinel', name: 'Microsoft Sentinel', method: 'API Polling (Pull)', desc: 'Varredura ativa de incidentes de segurança na nuvem do Azure.', color: 'border-cyan-500/20' },
+                          { id: 'loki', name: 'Grafana Loki', method: 'API Polling (Pull)', desc: 'Leitura de logs distribuídos com inteligência AIOps em tempo real.', color: 'border-orange-500/20' }
+                        ].map(tool => {
+                          const statusData = connectorStatuses[tool.id] || { status: 'inactive' };
+                          const isPush = tool.method.includes('Push');
+                          const activeConns = isPush 
+                            ? (integrations || []).filter(i => i.type === tool.id).length 
+                            : (connectorStatuses[tool.id]?.status === 'active' ? 1 : 0);
+
+                          return (
+                            <div 
+                              key={tool.id} 
+                              className={`glass-card p-5 rounded-xl border flex flex-col gap-4 hover:scale-[1.02] hover:border-white/10 active:scale-[0.98] transition-all bg-[#0d1220]/45 ${tool.color}`}
+                            >
+                              <div className="flex justify-between items-start">
+                                <div className="flex flex-col gap-0.5">
+                                  <span className="text-xs font-bold text-slate-100 uppercase tracking-wide">{tool.name}</span>
+                                  <span className="text-[9px] font-semibold text-slate-500 uppercase tracking-wider">{tool.method}</span>
+                                </div>
+
+                                {/* Status badge */}
+                                {statusData.status === 'active' ? (
+                                  <span className="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-bold uppercase text-[8px] tracking-wider">Ativo</span>
+                                ) : statusData.status === 'offline' ? (
+                                  <span className="px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 font-bold uppercase text-[8px] tracking-wider">Aviso</span>
+                                ) : statusData.status === 'error' ? (
+                                  <span className="px-1.5 py-0.5 rounded bg-rose-500/10 text-rose-400 border border-rose-500/20 font-bold uppercase text-[8px] tracking-wider">Falha</span>
+                                ) : (
+                                  <span className="px-1.5 py-0.5 rounded bg-slate-500/10 text-slate-505 border border-slate-500/20 font-bold uppercase text-[8px] tracking-wider">Inativo</span>
+                                )}
+                              </div>
+
+                              <p className="text-[10px] text-slate-400 leading-relaxed font-sans min-h-[30px]">{tool.desc}</p>
+
+                              <div className="flex items-center justify-between border-t border-white/5 pt-3.5 text-[9px] font-bold text-slate-500 uppercase tracking-wider">
+                                <span>Conexões: <strong className="text-slate-300">{activeConns}</strong></span>
+                                {statusData.last_seen > 0 && (
+                                  <span>Visto: <strong className="text-slate-300 font-mono">{new Date(statusData.last_seen * 1000).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</strong></span>
+                                )}
+                              </div>
+
+                              <button
+                                onClick={() => {
+                                  setSelectedIntegrationTool(tool.id);
+                                  setActiveSubTool(tool.id);
+                                  setSaveStatus({ status: 'idle' });
+                                  if (tool.id === 'sentinel') setVaultKey('sentinel_client_secret');
+                                  else if (tool.id === 'loki') setVaultKey('loki_password');
+                                  else if (tool.id === 'ssh') setVaultKey('ssh_private_key');
+                                  handleValidateIntegration(tool.id);
+                                }}
+                                className="w-full py-2 bg-white/5 hover:bg-cyan-500/15 hover:text-cyan-400 text-slate-300 font-extrabold uppercase tracking-widest text-[9px] rounded-lg transition-all border border-white/5 hover:border-cyan-500/30 cursor-pointer text-center"
+                              >
+                                Configurar Conector
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                ) : ['uptimekuma', 'zabbix', 'prometheus', 'wazuh', 'grafana', 'sentinel', 'loki'].includes(selectedIntegrationTool) ? (
+                    // Detail panel for a conector
+                    <div className="flex flex-col gap-4">
+                      {/* Back button */}
+                      <button
+                        onClick={() => {
+                          setSelectedIntegrationTool('integrations_admin');
+                          setValidationResult(null);
+                        }}
+                        className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-slate-400 hover:text-slate-200 transition-all cursor-pointer w-fit mb-2"
+                      >
+                        ← Voltar para a Central de Conectores
+                      </button>
+
+                      <div className="flex items-center gap-3 border-b border-white/5 pb-4 mb-2">
+                        <div className="w-10 h-10 rounded-lg bg-cyan-950/20 border border-cyan-500/20 flex items-center justify-center text-cyan-400">
+                          <HelpCircle className="w-6 h-6" />
+                        </div>
+                        <div>
+                          <h4 className="text-sm font-bold uppercase text-white tracking-wide">
+                            {selectedIntegrationTool === 'uptimekuma' && 'Configuração Uptime Kuma'}
+                            {selectedIntegrationTool === 'zabbix' && 'Configuração Zabbix Monitor'}
+                            {selectedIntegrationTool === 'prometheus' && 'Configuração Prometheus Alertmanager'}
+                            {selectedIntegrationTool === 'wazuh' && 'Configuração Wazuh SIEM'}
+                            {selectedIntegrationTool === 'grafana' && 'Configuração Grafana Alerts'}
+                            {selectedIntegrationTool === 'sentinel' && 'Configuração Microsoft Sentinel'}
+                            {selectedIntegrationTool === 'loki' && 'Configuração Grafana Loki'}
+                          </h4>
+                          <p className="text-[10px] text-slate-500 uppercase tracking-widest font-bold">
+                            {['uptimekuma', 'zabbix', 'prometheus', 'wazuh', 'grafana'].includes(selectedIntegrationTool) ? 'Método: Webhook (Push / Envio de Alertas)' : 'Método: API Polling (Pull / Busca Ativa de Chaves)'}
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Push webhook forms */}
+                      {['uptimekuma', 'zabbix', 'prometheus', 'wazuh', 'grafana'].includes(selectedIntegrationTool) ? (
+                        <div className="flex flex-col gap-4">
+                          {/* Active Integrations list */}
+                          <div className="flex flex-col gap-2.5">
+                            <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">
+                              Integrações Ativas ({selectedTenant.name})
+                            </label>
+                            
+                            {(integrations || []).filter(i => i.type === selectedIntegrationTool).length > 0 ? (
+                              <div className="flex flex-col gap-2 max-h-[150px] overflow-y-auto pr-1">
+                                {(integrations || []).filter(i => i.type === selectedIntegrationTool).map(item => (
+                                  <div key={item.id} className="p-3 rounded-lg bg-[#040811] border border-white/5 flex items-center justify-between font-sans text-xs">
+                                    <div className="flex flex-col gap-0.5">
+                                      <span className="font-bold text-slate-200">{item.name}</span>
+                                      <span className="text-[9px] font-mono text-cyan-400 select-all leading-none mt-1">
+                                        {`${API_BASE_URL}/api/v1/webhook/${selectedIntegrationTool}/${selectedTenant.id}`}
+                                      </span>
+                                    </div>
+                                    <div className="flex items-center gap-2 shrink-0 ml-4">
+                                      <button
+                                        onClick={() => handleCopyWebhookUrl(`${API_BASE_URL}/api/v1/webhook/${selectedIntegrationTool}/${selectedTenant.id}`)}
+                                        className="p-1.5 rounded bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white transition-all"
+                                        title="Copiar URL de Ingestão"
+                                      >
+                                        {copiedText ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                                      </button>
+                                      {user?.role === 'admin' && (
+                                        <button
+                                          onClick={() => handleDeleteIntegrationSetting(item.id)}
+                                          className="p-1.5 rounded bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 transition-all font-bold text-[10px]"
+                                          title="Desativar Integração"
+                                        >
+                                          Remover
+                                        </button>
+                                      )}
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <div className="p-3 rounded-lg bg-amber-950/10 border border-amber-500/10 text-amber-400 text-xs font-sans">
+                                Nenhuma integração deste tipo está ativa para o Tenant atual. Ative abaixo para liberar a recepção de alertas.
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Admin Integration Activation Form */}
+                          {user?.role === 'admin' && (
+                            <form onSubmit={handleCreateIntegrationSetting} className="p-4 rounded-xl bg-white/[0.02] border border-white/5 flex flex-col gap-3">
+                              <h5 className="text-[10px] font-bold uppercase tracking-wider text-slate-200">Ativar Nova Integração</h5>
+                              <div className="flex gap-2">
+                                <input
+                                  type="text"
+                                  required
+                                  value={integrationName}
+                                  onChange={(e) => setIntegrationName(e.target.value)}
+                                  placeholder="Nome identificador (Ex: Zabbix Produção)"
+                                  className="flex-1 bg-[#0b0f19] border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-violet-500 transition-all placeholder:text-slate-600"
+                                />
+                                <button
+                                  type="submit"
+                                  disabled={integrationStatus.status === 'saving'}
+                                  className="bg-cyan-600 hover:bg-cyan-500 text-slate-950 font-bold uppercase tracking-wider text-[10px] px-5 rounded-lg transition-all flex items-center gap-1.5 cursor-pointer shrink-0"
+                                >
+                                  {integrationStatus.status === 'saving' && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+                                  Ativar Ingestão
+                                </button>
+                              </div>
+                              {integrationStatus.status === 'success' && (
+                                <span className="text-[10px] text-emerald-400">{integrationStatus.message}</span>
+                              )}
+                              {integrationStatus.status === 'error' && (
+                                <span className="text-[10px] text-rose-400">{integrationStatus.message}</span>
+                              )}
+                            </form>
+                          )}
+
+                          {/* Unified Validation Box */}
+                          <div className="p-3 rounded-lg bg-surface/30 border border-white/5 flex flex-col gap-2.5 mt-2">
+                            <div className="flex items-center justify-between">
+                              <span className="text-[10px] uppercase font-bold tracking-wider text-slate-400">
+                                Validação de Comunicação / Logs de Entrada
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => handleValidateIntegration(selectedIntegrationTool)}
+                                disabled={isValidating}
+                                className="px-2.5 py-1 rounded bg-rose-500/10 hover:bg-rose-500/20 disabled:bg-white/5 text-rose-400 disabled:text-slate-500 border border-rose-500/25 disabled:border-transparent transition-all text-[10px] font-bold cursor-pointer"
+                              >
+                                {isValidating ? 'Validando...' : 'Testar Conexão / Logs'}
+                              </button>
+                            </div>
+
+                            {validationResult && (
+                              <div className="flex flex-col gap-2 font-sans text-xs">
+                                <div className="flex items-center gap-1.5">
+                                  <span className="text-slate-400">Status do Conector:</span>
+                                  {validationResult.status === 'active' ? (
+                                    <span className="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-bold uppercase text-[9px]">Ativo (Online)</span>
+                                  ) : validationResult.status === 'offline' ? (
+                                    <span className="px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 font-bold uppercase text-[9px]">Offline (Sem Telemetria)</span>
+                                  ) : (
+                                    <span className="px-1.5 py-0.5 rounded bg-slate-500/10 text-slate-400 border border-slate-500/20 font-bold uppercase text-[9px]">Inativo (Sem Sinal)</span>
+                                  )}
+                                </div>
+                                {validationResult.last_seen > 0 && (
+                                  <div className="text-[10px] text-slate-500 leading-none">
+                                    Último sinal recebido: {new Date(validationResult.last_seen * 1000).toLocaleString('pt-BR')}
+                                  </div>
+                                )}
+                                <div className="flex flex-col gap-1 mt-1">
+                                  <span className="text-slate-400 font-semibold">Verbose / Logs de Erro do Webhook:</span>
+                                  {validationResult.last_error ? (
+                                    <pre className="p-2.5 rounded bg-red-950/15 border border-red-500/20 text-[10px] text-red-400 font-mono overflow-x-auto max-h-[100px] whitespace-pre-wrap leading-tight">
+                                      {validationResult.last_error}
+                                    </pre>
+                                  ) : (
+                                    <p className="text-[10px] text-emerald-400 font-semibold bg-emerald-500/5 p-2 rounded border border-emerald-500/15">
+                                      ✓ Nenhuma falha pendente. Integração operando de forma limpa.
+                                    </p>
+                                  )}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      ) : ['sentinel', 'loki', 'ssh'].includes(selectedIntegrationTool) ? (
+                        // Secure Vault Pull Connectors Form
+                        <form onSubmit={handleSaveVaultSecret} className="flex flex-col gap-4">
+                          <div className="flex flex-col gap-3 p-4 rounded-xl bg-cyan-950/10 border border-cyan-500/20 text-xs text-slate-300 leading-relaxed font-sans mb-2">
+                            <div className="flex items-center gap-1.5 text-cyan-400 font-extrabold uppercase text-[10px]">
+                              <Lock className="w-3.5 h-3.5" /> Cofre Criptográfico RLS Seguro
+                            </div>
+                            <p>Estas credenciais são salvas e encriptadas usando algoritmos robustos de **AES-256-GCM** na tabela `tenant_vault`. Graças à segurança estrita por nível de linha (RLS) no PostgreSQL, estes segredos são 100% invisíveis a qualquer outro tenant.</p>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-4">
+                            <div className="flex flex-col gap-2">
+                              <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Identificador da Credencial (Key)</label>
+                              <select
+                                value={vaultKey}
+                                onChange={(e) => setVaultKey(e.target.value)}
+                                className="bg-surface border border-white/5 rounded-lg p-2.5 text-xs text-slate-200 focus:outline-none focus:border-cyan-500/50"
+                              >
+                                {selectedIntegrationTool === 'sentinel' && (
+                                  <>
+                                    <option value="sentinel_client_secret">Client Secret (Azure API)</option>
+                                    <option value="sentinel_client_id">Client ID (App Registration)</option>
+                                    <option value="sentinel_tenant_id">Tenant ID (Azure Directory)</option>
+                                    <option value="sentinel_subscription_id">Subscription ID</option>
+                                  </>
+                                )}
+                                {selectedIntegrationTool === 'loki' && (
+                                  <>
+                                    <option value="loki_url">Loki Server URL</option>
+                                    <option value="loki_username">Loki Username</option>
+                                    <option value="loki_password">Loki Password</option>
+                                  </>
+                                )}
+                                {selectedIntegrationTool === 'ssh' && (
+                                  <>
+                                    <option value="ssh_private_key">SSH Private Key (PEM format)</option>
+                                    <option value="ssh_username">SSH Username</option>
+                                    <option value="ssh_password">SSH Password (Fallback)</option>
+                                  </>
+                                )}
+                              </select>
+                            </div>
+
+                            <div className="flex flex-col gap-2">
+                              <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Valor da Credencial (Secret Value)</label>
+                              <input
+                                type="password"
+                                required
+                                value={vaultValue}
+                                placeholder="Digite ou cole o valor confidencial aqui..."
+                                onChange={(e) => setVaultValue(e.target.value)}
+                                className="bg-surface border border-white/5 rounded-lg p-2.5 text-xs text-slate-200 focus:outline-none focus:border-cyan-500/50 placeholder:text-slate-600"
+                              />
+                            </div>
+                          </div>
+
+                          <button
+                            type="submit"
+                            disabled={saveStatus.status === 'saving'}
+                            className="bg-cyan-600 hover:bg-cyan-500 disabled:bg-cyan-800 disabled:opacity-50 text-slate-950 font-bold uppercase tracking-wider text-xs py-2.5 rounded-lg flex items-center justify-center gap-2 transition-all mt-2 cursor-pointer"
+                          >
+                            {saveStatus.status === 'saving' ? (
+                              <>
+                                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                                <span>Criptografando e Salvando...</span>
+                              </>
+                            ) : (
+                              <>
+                                <Lock className="w-3.5 h-3.5" />
+                                <span>Salvar Segredo no Cofre do Banco</span>
+                              </>
+                            )}
+                          </button>
+
+                          {saveStatus.status === 'success' && (
+                            <div className="p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-semibold text-center">
+                              {saveStatus.message}
+                            </div>
+                          )}
+                          {saveStatus.status === 'error' && (
+                            <div className="p-3 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs font-semibold text-center">
+                              {saveStatus.message}
+                            </div>
+                          )}
+
+                          <div className="flex flex-col gap-3 p-4 rounded-xl bg-slate-900/40 border border-white/5 text-xs text-slate-300 leading-relaxed font-sans mt-3">
+                            <h5 className="font-bold text-slate-200 uppercase tracking-wider text-[10px] border-b border-white/5 pb-2">Instruções de Configuração e Uso:</h5>
+                            {selectedIntegrationTool === 'sentinel' && (
+                              <div className="flex flex-col gap-2">
+                                <p>O conector do <b>Microsoft Sentinel</b> atua via busca ativa (Polling API) consultando logs e incidentes de segurança no Azure Log Analytics:</p>
+                                <div className="flex flex-col gap-1.5 pl-3 border-l-2 border-cyan-500/50">
+                                  <span>1. Registre um aplicativo (App Registration) no seu Azure Active Directory (Microsoft Entra ID).</span>
+                                  <span>2. Atribua a função de **Log Analytics Reader** ou similar a este aplicativo.</span>
+                                  <span>3. Salve as chaves obtidas (Client ID, Client Secret, Tenant ID e Subscription ID) separadamente neste cofre.</span>
+                                  <span>4. O coletor rodará a cada 5 minutos buscando incidentes e normalizando as ameaças na fila do SOC da IT Fácil.</span>
+                                </div>
+                              </div>
+                            )}
+
+                            {selectedIntegrationTool === 'loki' && (
+                              <div className="flex flex-col gap-2">
+                                <p>A integração com o <b>Grafana Loki</b> permite coletar logs brutos em tempo real e processar inteligência AIOps:</p>
+                                <div className="flex flex-col gap-1.5 pl-3 border-l-2 border-orange-500/50">
+                                  <span>1. Insira a URL base de acesso à API do seu servidor Loki (ex: <code>https://loki.empresa.com.br</code>).</span>
+                                  <span>2. Forneça o Usuário e Senha de autenticação básica (Basic Auth) se configurado.</span>
+                                  <span>3. A IT Fácil buscará ativamente exceções de logs e normalizará strings de erro em eventos unificados.</span>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Unified Validation Box */}
+                          {['sentinel', 'loki'].includes(selectedIntegrationTool) && (
+                            <div className="p-3 rounded-lg bg-surface/30 border border-white/5 flex flex-col gap-2.5 mt-2">
+                              <div className="flex items-center justify-between">
+                                <span className="text-[10px] uppercase font-bold tracking-wider text-slate-400">
+                                  Validação de Comunicação / Teste de API
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => handleValidateIntegration(selectedIntegrationTool)}
+                                  disabled={isValidating}
+                                  className="px-2.5 py-1 rounded bg-rose-500/10 hover:bg-rose-500/20 disabled:bg-white/5 text-rose-400 disabled:text-slate-500 border border-rose-500/25 disabled:border-transparent transition-all text-[10px] font-bold cursor-pointer"
+                                >
+                                  {isValidating ? 'Validando...' : 'Testar Conexão / Logs'}
+                                </button>
+                              </div>
+
+                              {validationResult && (
+                                <div className="flex flex-col gap-2 font-sans text-xs font-sans">
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="text-slate-400">Status do Conector:</span>
+                                    {validationResult.status === 'active' ? (
+                                      <span className="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-bold uppercase text-[9px]">Ativo (Online)</span>
+                                    ) : validationResult.status === 'offline' ? (
+                                      <span className="px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 font-bold uppercase text-[9px]">Offline (Sem Telemetria)</span>
+                                    ) : (
+                                      <span className="px-1.5 py-0.5 rounded bg-slate-500/10 text-slate-400 border border-slate-500/20 font-bold uppercase text-[9px]">Inativo (Sem Sinal)</span>
+                                    )}
+                                  </div>
+                                  {validationResult.last_seen > 0 && (
+                                    <div className="text-[10px] text-slate-500 leading-none">
+                                      Último sinal recebido: {new Date(validationResult.last_seen * 1000).toLocaleString('pt-BR')}
+                                    </div>
+                                  )}
+                                  <div className="flex flex-col gap-1 mt-1 font-sans">
+                                    <span className="text-slate-400 font-semibold">Verbose / Logs de Erro:</span>
+                                    {validationResult.last_error ? (
+                                      <pre className="p-2.5 rounded bg-red-950/15 border border-red-500/20 text-[10px] text-red-400 font-mono overflow-x-auto max-h-[100px] whitespace-pre-wrap leading-tight">
+                                        {validationResult.last_error}
+                                      </pre>
+                                    ) : (
+                                      <p className="text-[10px] text-emerald-400 font-semibold bg-emerald-500/5 p-2 rounded border border-emerald-500/15">
+                                        ✓ Conexão bem-sucedida. Integração operando de forma limpa.
+                                      </p>
+                                    )}
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </form>
+                      ) : null}
+                    </div>
+                ) : selectedIntegrationTool === 'users_admin' ? (
+                  // 4. Admin Users Form
+                  <div className="flex flex-col gap-4">
+                    <div className="flex flex-col gap-3 p-4 rounded-xl bg-violet-950/10 border border-violet-500/20 text-xs text-slate-300 leading-relaxed font-sans mb-2">
+                      <div className="flex items-center gap-1.5 text-violet-400 font-extrabold uppercase text-[10px]">
+                        <User className="w-3.5 h-3.5" /> Painel de Controle de Usuários (RBAC)
+                      </div>
+                      <p>Como administrador do NOC, você pode cadastrar e gerenciar perfis de novos colaboradores. Escolha se o nível de privilégio será **Admin** (acesso irrestrito), **Operator** (gerenciamento e SLA) ou **Viewer** (somente visualização).</p>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      {/* Left: Create Form */}
+                      <form onSubmit={handleAdminCreateUser} className="flex flex-col gap-4 animate-fadeIn">
+                        <div className="flex flex-col gap-1.5">
+                          <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Nome Completo</label>
+                          <input
+                            type="text"
+                            required
+                            value={adminUserName}
+                            onChange={(e) => setAdminUserName(e.target.value)}
+                            placeholder="Ex: Carlos Silva"
+                            className="bg-[#0b0f19] border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-violet-500 transition-all placeholder:text-slate-600"
+                          />
+                        </div>
+
+                        <div className="flex flex-col gap-1.5">
+                          <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Endereço de E-mail</label>
+                          <input
+                            type="email"
+                            required
+                            value={adminUserEmail}
+                            onChange={(e) => setAdminUserEmail(e.target.value)}
+                            placeholder="usuario@empresa.com"
+                            className="bg-[#0b0f19] border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-violet-500 transition-all placeholder:text-slate-600"
+                          />
+                        </div>
+
+                        <div className="flex flex-col gap-1.5">
+                          <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Senha Provisória</label>
+                          <div className="relative flex items-center">
+                            <input
+                              type={showAdminUserPassword ? 'text' : 'password'}
+                              required
+                              value={adminUserPassword}
+                              onChange={(e) => setAdminUserPassword(e.target.value)}
+                              placeholder="Mínimo de 6 caracteres"
+                              className="w-full bg-[#0b0f19] border border-white/10 rounded-lg p-2.5 pr-10 text-xs text-white focus:outline-none focus:border-violet-500 transition-all placeholder:text-slate-600"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setShowAdminUserPassword(!showAdminUserPassword)}
+                              className="absolute right-3 text-slate-400 hover:text-white transition-all cursor-pointer"
+                            >
+                              {showAdminUserPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                            </button>
+                          </div>
+                        </div>
+
+                        <div className="flex flex-col gap-1.5">
+                          <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Nível de Permissão (Role)</label>
+                          <select
+                            value={adminUserRole}
+                            onChange={(e) => setAdminUserRole(e.target.value)}
+                            className="bg-[#0b0f19] border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-violet-500 transition-all"
+                          >
+                            <option value="operator">Operator (Operador - Acesso de Leitura/Ação)</option>
+                            <option value="admin">Admin (Administrador - Acesso Completo/Cofre/Usuários)</option>
+                            <option value="viewer">Viewer (Visualizador - Apenas Leitura de Painéis)</option>
+                          </select>
+                        </div>
+
+                        <button
+                          type="submit"
+                          disabled={adminUserStatus.status === 'saving'}
+                          className="bg-[#8b5cf6] hover:bg-violet-500 text-slate-950 font-bold text-xs py-3 px-4 rounded-lg transition-all shadow-md shadow-violet-950/30 flex items-center justify-center gap-2 cursor-pointer"
+                        >
+                          {adminUserStatus.status === 'saving' && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+                          Cadastrar Novo Usuário
+                        </button>
+
+                        {adminUserStatus.status === 'success' && (
+                          <div className="p-3 bg-emerald-950/20 border border-emerald-500/20 text-emerald-400 text-xs rounded-lg font-sans">
+                            {adminUserStatus.message}
+                          </div>
+                        )}
+                        {adminUserStatus.status === 'error' && (
+                          <div className="p-3 bg-rose-950/20 border border-rose-500/20 text-rose-400 text-xs rounded-lg font-sans">
+                            {adminUserStatus.message}
+                          </div>
+                        )}
+                      </form>
+
+                      {/* Right: Active Users List */}
+                      <div className="flex flex-col gap-4 border-l border-white/5 pl-6 animate-fadeIn">
+                        <div className="flex items-center justify-between">
+                          <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400 block">
+                            Usuários Ativos no Sistema (RBAC)
+                          </label>
+                          <button
+                            onClick={fetchAdminUsers}
+                            disabled={isLoadingAdminUsers}
+                            className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-white/5 hover:bg-white/10 border border-white/10 text-[9px] text-slate-300 font-medium transition-all cursor-pointer"
+                          >
+                            <RefreshCw className={`w-2.5 h-2.5 ${isLoadingAdminUsers ? 'animate-spin' : ''}`} />
+                            <span>Atualizar</span>
+                          </button>
+                        </div>
+                        
+                        {isLoadingAdminUsers ? (
+                          <div className="flex flex-col items-center justify-center py-12 gap-2 text-slate-400 text-xs font-sans">
+                            <RefreshCw className="w-6 h-6 animate-spin text-violet-400" />
+                            <span>Carregando usuários...</span>
+                          </div>
+                        ) : adminUsers.length === 0 ? (
+                          <span className="text-[10px] text-amber-500 font-medium">Nenhum usuário cadastrado.</span>
+                        ) : (
+                          <div className="flex flex-col gap-2 max-h-[300px] overflow-y-auto pr-1 font-sans">
+                            {adminUsers.map(u => {
+                              const isSelf = u.email === user?.email;
+                              return (
+                                <div key={u.id} className="p-3 rounded-lg bg-black/40 border border-white/5 flex items-center justify-between text-xs hover:border-white/10 transition-all font-sans">
+                                  <div className="flex flex-col gap-0.5 min-w-0 mr-2">
+                                    <div className="flex items-center gap-1.5 flex-wrap">
+                                      <span className="font-bold text-slate-200 truncate">{u.name}</span>
+                                      <span className={`px-1 rounded text-[8px] font-extrabold uppercase tracking-wider leading-normal ${
+                                        u.global_role === 'admin' 
+                                          ? 'bg-violet-500/20 text-violet-400 border border-violet-500/10' 
+                                          : u.global_role === 'operator' 
+                                            ? 'bg-blue-500/20 text-blue-400 border border-blue-500/10'
+                                            : 'bg-slate-500/20 text-slate-400 border border-slate-500/10'
+                                      }`}>
+                                        {u.global_role}
+                                      </span>
+                                    </div>
+                                    <span className="text-[10px] text-slate-400 font-mono select-all truncate">{u.email}</span>
+                                  </div>
+                                  <button
+                                    onClick={() => handleDeleteUser(u.id)}
+                                    disabled={isSelf}
+                                    className={`text-[9px] px-2.5 py-1 rounded transition-all font-bold cursor-pointer shrink-0 ${
+                                      isSelf 
+                                        ? 'text-slate-600 bg-white/5 cursor-not-allowed border border-white/5' 
+                                        : 'text-rose-400 hover:text-rose-300 bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/10 hover:border-rose-500/20'
+                                    }`}
+                                  >
+                                    Excluir
+                                  </button>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ) : selectedIntegrationTool === 'tenants_admin' ? (
+                  // 5. Admin Tenants Form (Clean unified version)
+                  <div className="flex flex-col gap-4 font-sans animate-fadeIn">
+                    <div className="flex flex-col gap-3 p-4 rounded-xl bg-violet-950/10 border border-violet-500/20 text-xs text-slate-300 leading-relaxed font-sans mb-2">
+                      <div className="flex items-center gap-1.5 text-violet-400 font-extrabold uppercase text-[10px]">
+                        <Layers className="w-3.5 h-3.5" /> Painel de Controle de Tenants (Multi-tenancy)
+                      </div>
+                      <p>Adicione novos Tenants para segmentação física de alertas. Ao cadastrar um novo tenant, ele passará a contar com isolamento completo de banco de dados e regras de segurança baseadas em RLS.</p>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                      <form onSubmit={handleCreateTenant} className="flex flex-col gap-4 animate-fadeIn">
+                        <div className="flex flex-col gap-1.5">
+                          <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Nome da Empresa / Tenant</label>
+                          <input
+                            type="text"
+                            required
+                            value={newTenantName}
+                            onChange={(e) => setNewTenantName(e.target.value)}
+                            placeholder="Ex: Banco Alfa S.A."
+                            className="bg-[#0b0f19] border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-violet-500 transition-all placeholder:text-slate-600"
+                          />
+                        </div>
+
+                        <button
+                          type="submit"
+                          disabled={tenantCreateStatus.status === 'saving'}
+                          className="bg-[#8b5cf6] hover:bg-violet-500 text-slate-950 font-bold text-xs py-3 px-4 rounded-lg transition-all shadow-md shadow-violet-950/30 flex items-center justify-center gap-2 cursor-pointer w-full"
+                        >
+                          {tenantCreateStatus.status === 'saving' && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+                          Cadastrar Novo Tenant
+                        </button>
+
+                        {tenantCreateStatus.status === 'success' && (
+                          <div className="p-2.5 bg-emerald-950/20 border border-emerald-500/20 text-emerald-400 text-xs rounded-lg font-sans">
+                            {tenantCreateStatus.message}
+                          </div>
+                        )}
+                        {tenantCreateStatus.status === 'error' && (
+                          <div className="p-2.5 bg-rose-950/20 border border-rose-500/20 text-rose-400 text-xs rounded-lg font-sans">
+                            {tenantCreateStatus.message}
+                          </div>
+                        )}
+                      </form>
+
+                      <div className="flex flex-col gap-3 animate-fadeIn">
+                        <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400 block font-sans">Tenants Ativos no Banco de Dados</label>
+                        <div className="flex flex-col gap-2.5 max-h-[350px] overflow-y-auto pr-1">
+                          {tenants.map(t => (
+                            <div
+                              key={t.id}
+                              className="p-3.5 rounded-lg border bg-black/40 border-white/5 text-slate-300 flex items-center justify-between transition-all"
+                            >
+                              <div className="flex flex-col gap-1 min-w-0 mr-3">
+                                <span className="text-xs font-bold text-slate-200 truncate">{t.name}</span>
+                                <span className="text-[9px] font-mono select-all text-slate-500 truncate">{t.id}</span>
+                              </div>
+                              <button
+                                onClick={() => handleDeleteTenant(t.id)}
+                                className="text-[9px] text-rose-400 hover:text-rose-300 bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/10 hover:border-rose-500/20 px-2.5 py-1.5 rounded transition-all font-bold cursor-pointer shrink-0"
+                              >
+                                Excluir
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ) : selectedIntegrationTool === 'vault_admin' ? (
+                  // Vault keys expiration & status inspector
+                  <div className="flex flex-col gap-4 font-sans animate-fadeIn">
+                    <div className="flex flex-col gap-3 p-4 rounded-xl bg-violet-950/10 border border-violet-500/20 text-xs text-slate-300 leading-relaxed font-sans mb-2">
+                      <div className="flex items-center gap-1.5 text-violet-400 font-extrabold uppercase text-[10px]">
+                        <Lock className="w-3.5 h-3.5" /> Auditoria Gerencial do Cofre (Vault)
+                      </div>
+                      <p>Lista de chaves criptográficas de API e SSH cadastradas para este tenant. Por motivos de segurança, os valores descriptografados originais não são enviados para o navegador.</p>
+                    </div>
+
+                    {isLoadingVaultSecrets ? (
+                      <div className="flex items-center justify-center py-12 gap-3 text-slate-400 text-xs font-sans">
+                        <RefreshCw className="w-5 h-5 animate-spin text-violet-400" />
+                        <span>Carregando auditoria de segredos...</span>
+                      </div>
+                    ) : vaultSecrets.length > 0 ? (
+                      <div className="flex flex-col gap-2.5">
+                        {vaultSecrets.map((s, idx) => (
+                          <div key={idx} className="p-3.5 rounded-xl bg-black/40 border border-white/5 flex items-center justify-between text-xs hover:border-white/10 transition-all font-sans">
+                            <div className="flex flex-col gap-1 font-sans">
+                              <span className="font-bold text-slate-200 font-mono text-xs">{s.secret_key}</span>
+                              <div className="flex items-center gap-2 text-[10px] text-slate-500">
+                                <span>Criado: {new Date(s.created_at).toLocaleString()}</span>
+                                <span>•</span>
+                                <span className="text-emerald-400 font-semibold">GCM-256 Encriptado</span>
+                              </div>
+                            </div>
+                            <span className="px-2 py-0.5 rounded bg-violet-500/10 text-violet-400 border border-violet-500/25 font-bold uppercase text-[9px]">Protegido</span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="p-6 rounded-xl bg-white/[0.01] border border-dashed border-white/5 text-center text-xs text-slate-500 py-10 font-sans">
+                        Nenhum segredo criptografado armazenado para o tenant atual.
+                      </div>
+                    )}
+                  </div>
+                ) : selectedIntegrationTool === 'audit_admin' ? (
+                  // SSH Commands Auditor
+                  <div className="flex flex-col gap-4 font-sans animate-fadeIn">
+                    <div className="flex flex-col gap-3 p-4 rounded-xl bg-violet-950/10 border border-violet-500/20 text-xs text-slate-300 leading-relaxed font-sans mb-2">
+                      <div className="flex items-center gap-1.5 text-violet-400 font-extrabold uppercase text-[10px]">
+                        <Terminal className="w-3.5 h-3.5" /> Auditoria de Scripts & Remediações SSH
+                      </div>
+                      <p>Visualização e auditoria completa de comandos remotos disparados via SOAR/Runbooks para resolução automática de incidentes (Auto-healing) ou contenção de ataques.</p>
+                    </div>
+
+                    {isLoadingRunbookAudits ? (
+                      <div className="flex items-center justify-center py-12 gap-3 text-slate-400 text-xs font-sans">
+                        <RefreshCw className="w-5 h-5 animate-spin text-violet-400" />
+                        <span>Carregando logs de auditoria...</span>
+                      </div>
+                    ) : runbookAudits.length > 0 ? (
+                      <div className="flex flex-col gap-4 max-h-[400px] overflow-y-auto pr-1">
+                        {runbookAudits.map((a, idx) => (
+                          <div key={idx} className="p-4 rounded-xl bg-black/40 border border-white/5 flex flex-col gap-3 hover:border-white/10 transition-all font-sans text-xs">
+                            <div className="flex justify-between items-center border-b border-white/5 pb-2 font-sans">
+                              <div className="flex flex-col gap-0.5">
+                                <span className="font-bold text-slate-200">Ação disparada por: <strong className="text-violet-400">{a.triggered_by}</strong></span>
+                                <span className="text-[10px] text-slate-500">{new Date(a.created_at).toLocaleString()}</span>
+                              </div>
+                              <span className="px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-bold uppercase text-[9px]">Sucesso</span>
+                            </div>
+                            
+                            <div className="flex flex-col gap-1 font-mono text-[10px]">
+                              <span className="text-slate-500 font-sans font-bold">Script Executado:</span>
+                              <pre className="p-2.5 rounded bg-black/60 text-slate-300 overflow-x-auto whitespace-pre-wrap">{a.script}</pre>
+                            </div>
+                            
+                            <div className="flex flex-col gap-1 font-mono text-[10px]">
+                              <span className="text-slate-500 font-sans font-bold">Console Output:</span>
+                              <pre className="p-2.5 rounded bg-black/80 text-emerald-400 overflow-x-auto max-h-36 overflow-y-auto whitespace-pre-wrap">{a.output}</pre>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="text-xs text-slate-500 italic text-center py-10">
+                        Nenhuma execução de remediação remota registrada para este cliente.
+                      </div>
+                    )}
+                  </div>
+                ) : selectedIntegrationTool === 'sla_report' ? (
+                  // Relatório Dual-Mode (NOC/SOC Compliance)
+                  <div className="flex flex-col gap-4 font-sans animate-fadeIn">
+                    <div className="flex flex-col gap-3 p-4 rounded-xl bg-emerald-950/10 border border-emerald-500/20 text-xs text-slate-300 leading-relaxed font-sans mb-2">
+                      <div className="flex items-center gap-1.5 text-emerald-400 font-extrabold uppercase text-[10px]">
+                        <TrendingUp className="w-3.5 h-3.5" /> Relatório Dual-Mode (NOC/SOC Compliance)
+                      </div>
+                      <p>Mude o modo de visualização entre a perspectiva de governança de negócios (C-Level) ou detalhamento de infraestrutura e cibersegurança (Analistas).</p>
+                      
+                      {/* Mode switcher */}
+                      <div className="flex bg-black/40 rounded-lg p-0.5 mt-1 border border-white/5 w-fit">
+                        <button
+                          onClick={() => setReportMode('executive')}
+                          className={`px-3 py-1 text-[10px] uppercase font-bold tracking-wide rounded-md transition-all cursor-pointer ${
+                            reportMode === 'executive'
+                              ? 'bg-emerald-500 text-slate-950'
+                              : 'text-slate-400 hover:text-slate-200'
+                          }`}
+                        >
+                          Modo Executivo (Business)
+                        </button>
+                        <button
+                          onClick={() => setReportMode('technical')}
+                          className={`px-3 py-1 text-[10px] uppercase font-bold tracking-wide rounded-md transition-all cursor-pointer ${
+                            reportMode === 'technical'
+                              ? 'bg-emerald-500 text-slate-950'
+                              : 'text-slate-400 hover:text-slate-200'
+                          }`}
+                        >
+                          Modo Técnico (SOC)
+                        </button>
+                      </div>
+                    </div>
+
+                    {isLoadingSla ? (
+                      <div className="flex flex-col items-center justify-center py-20 gap-3 text-slate-400 text-xs font-sans">
+                        <RefreshCw className="w-8 h-8 text-emerald-400 animate-spin" />
+                        <span>Gerando métricas de governança...</span>
+                      </div>
+                    ) : slaData ? (
+                      <div className="flex flex-col gap-5 text-slate-300 font-sans animate-fadeIn">
+                        {reportMode === 'executive' ? (
+                          <>
+                            {/* Executive view */}
+                            <div className="grid grid-cols-3 gap-4">
+                              <div className="p-4 rounded-xl bg-white/5 border border-white/5 flex flex-col gap-1 animate-fadeIn">
+                                <span className="text-[9px] uppercase font-bold text-slate-400">Total de Incidentes</span>
+                                <span className="text-2xl font-bold text-slate-100">{slaData.total_incidents}</span>
+                              </div>
+                              
+                              <div className="p-4 rounded-xl bg-white/5 border border-white/5 flex flex-col gap-1 animate-fadeIn">
+                                <span className="text-[9px] uppercase font-bold text-slate-400">Tempo Médio Resposta (MTTR)</span>
+                                <span className="text-2xl font-bold text-slate-100">{slaData.mttr_minutes} min</span>
+                              </div>
+
+                              <div className="p-4 rounded-xl bg-white/5 border border-white/5 flex flex-col gap-1 animate-fadeIn">
+                                <span className="text-[9px] uppercase font-bold text-slate-400">Nível Geral de SLA (Compliance)</span>
+                                <span className="text-2xl font-bold text-emerald-400">{slaData.sla_percentage}%</span>
+                              </div>
+                            </div>
+
+                            <div className="p-5 rounded-xl bg-white/5 border border-white/5 flex flex-col gap-3 animate-fadeIn">
+                              <h5 className="text-xs font-bold text-slate-200 uppercase tracking-wide">Status Geral de Compliance</h5>
+                              <div className="w-full bg-slate-950 rounded-full h-3.5 border border-white/5 overflow-hidden">
+                                <div 
+                                  className="bg-emerald-500 h-full rounded-full transition-all" 
+                                  style={{ width: `${slaData.sla_percentage}%` }}
+                                ></div>
+                              </div>
+                              <p className="text-[10px] text-slate-400 leading-relaxed">
+                                O SLA (Service Level Agreement) é calculado com base no tempo de resposta inicial e tempo de mitigação acordado. As metas estabelecidas são de resposta rápida de até 15 minutos para alertas críticos e correção em até 1 hora.
+                              </p>
+                            </div>
+
+                            {/* Export/Download SLA PDF */}
+                            <div className="p-5 rounded-xl bg-[#0e1626] border border-cyan-500/10 flex items-center justify-between mt-2 animate-fadeIn">
+                              <div className="flex flex-col gap-0.5">
+                                <h5 className="text-xs font-bold text-white">Relatório Executivo Mensal</h5>
+                                <p className="text-[10px] text-slate-400">Gere e baixe a via em PDF oficial com assinaturas e log de incidentes.</p>
+                              </div>
+                              <button
+                                onClick={() => {
+                                  window.open(`${API_BASE_URL}/api/v1/reports/sla?token=${token || selectedTenant.id}&tenant_name=${encodeURIComponent(selectedTenant.name)}`);
+                                }}
+                                className="bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold uppercase tracking-wider text-[10px] px-4 py-2.5 rounded-lg flex items-center gap-1.5 transition-all shadow-lg cursor-pointer"
+                              >
+                                <FileText className="w-3.5 h-3.5" />
+                                Baixar Relatório PDF
+                              </button>
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            {/* Technical SOC view */}
+                            {/* MITRE ATT&CK Matrix simulation */}
+                            <div className="p-4 rounded-xl bg-white/5 border border-white/5 flex flex-col gap-3 animate-fadeIn">
+                              <div className="flex justify-between items-center animate-fadeIn">
+                                <h5 className="text-xs font-bold text-slate-200 uppercase tracking-wider">Mapeamento Tático MITRE ATT&CK</h5>
+                                <span className="text-[9px] font-mono text-slate-500">v13 Enterprise Matrix</span>
+                              </div>
+                              
+                              <div className="grid grid-cols-3 gap-3 text-[10px]">
+                                <div className="p-2.5 rounded bg-slate-900 border border-white/5 flex flex-col gap-1.5">
+                                  <span className="font-bold text-slate-400 border-b border-white/5 pb-1">1. Initial Access</span>
+                                  <div className="flex flex-col gap-1">
+                                    <span className="p-1 rounded bg-rose-500/10 text-rose-400 border border-rose-500/20 font-medium">T1078 Valid Accounts (VPN)</span>
+                                    <span className="p-1 rounded bg-white/5 text-slate-400 font-medium">T1190 Exploit Public-Facing App</span>
+                                  </div>
+                                </div>
+                                
+                                <div className="p-2.5 rounded bg-slate-900 border border-white/5 flex flex-col gap-1.5 animate-fadeIn">
+                                  <span className="font-bold text-slate-400 border-b border-white/5 pb-1">2. Credential Access</span>
+                                  <div className="flex flex-col gap-1">
+                                    <span className="p-1 rounded bg-rose-500/10 text-rose-400 border border-rose-500/20 font-medium">T1110 Brute Force (SSH)</span>
+                                    <span className="p-1 rounded bg-white/5 text-slate-400 font-medium">T1555 Credentials from Store</span>
+                                  </div>
+                                </div>
+
+                                <div className="p-2.5 rounded bg-slate-900 border border-white/5 flex flex-col gap-1.5 animate-fadeIn">
+                                  <span className="font-bold text-slate-400 border-b border-white/5 pb-1">3. Impact</span>
+                                  <div className="flex flex-col gap-1">
+                                    <span className="p-1 rounded bg-rose-500/10 text-rose-400 border border-rose-500/20 font-medium">T1498 Network DoS (Loki)</span>
+                                    <span className="p-1 rounded bg-white/5 text-slate-400 font-medium">T1489 Service Stop</span>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Threat Intelligence Feed simulator */}
+                            <div className="p-4 rounded-xl bg-[#030712] border border-white/5 flex flex-col gap-2.5 animate-fadeIn">
+                              <h5 className="text-xs font-bold text-slate-200 uppercase tracking-wider font-sans">Feed Integrado de Threat Intelligence</h5>
+                              <div className="flex flex-col gap-2 max-h-[140px] overflow-y-auto pr-1 animate-fadeIn">
+                                <div className="p-2 rounded bg-white/5 flex items-center justify-between text-xs animate-fadeIn">
+                                  <div className="flex flex-col gap-0.5">
+                                    <span className="font-extrabold text-rose-400 font-mono">[CVE-2026-9912] Threat Advisory</span>
+                                    <span className="text-[10px] text-slate-400">Atividade suspeita vinda do IP malicioso catalogado: 198.51.100.42</span>
+                                  </div>
+                                  <span className="text-[8px] font-bold bg-rose-500/15 text-rose-400 px-2 py-0.5 rounded border border-rose-500/30 uppercase">Bloqueado SOAR</span>
+                                </div>
+                                <div className="p-2 rounded bg-white/5 flex items-center justify-between text-xs">
+                                  <div className="flex flex-col gap-0.5">
+                                    <span className="font-extrabold text-amber-400 font-mono">[STIX/TAXII feed] IP Reputation</span>
+                                    <span className="text-[10px] text-slate-400">Scanner de porta de entrada detectado em múltiplos firewalls periféricos.</span>
+                                  </div>
+                                  <span className="text-[8px] font-bold bg-amber-500/15 text-amber-400 px-2 py-0.5 rounded border border-amber-500/30 uppercase">Monitorando</span>
+                                </div>
+                              </div>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="text-xs text-slate-505 italic text-center py-10 font-sans">
+                        Nenhum dado operacional registrado para calcular métricas de SLA.
+                      </div>
+                    )}
+                  </div>
+                ) : null}
               </div>
             </div>
           )}
@@ -3201,1268 +4239,6 @@ export default function CockpitPage() {
                 </div>
               )}
             </div>
-          </div>
-        </div>
-      )}
-
-      {/* 3. Didactic Connections / Integrations Modal */}
-      {showIntegrationsModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4 animate-fadeIn">
-          <div className="glass-card w-full max-w-4xl h-[600px] rounded-2xl overflow-hidden flex flex-col border border-white/10 shadow-2xl">
-            
-            {/* Modal Header */}
-            <div className="px-6 py-4 border-b border-white/5 bg-surface/30 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <LinkIcon className="w-5 h-5 text-cyan-400" />
-                <h3 className="text-md font-bold uppercase tracking-wider">Painel de Conexões e Integrações (Connectors)</h3>
-              </div>
-              <button 
-                onClick={() => {
-                  setShowIntegrationsModal(false);
-                  setSaveStatus({ status: 'idle' });
-                }}
-                className="text-xs text-slate-400 hover:text-slate-200 bg-white/5 hover:bg-white/10 px-3 py-1.5 rounded-lg transition-all"
-              >
-                Fechar
-              </button>
-            </div>
-
-            {/* Modal Content */}
-            <div className="flex-1 flex overflow-hidden">
-              
-              {/* Left Column (Tool list) */}
-              <div className="w-[220px] bg-slate-950/20 border-r border-white/5 overflow-y-auto flex flex-col p-3 gap-1">
-                <span className="text-[9px] font-bold text-slate-500 uppercase tracking-widest px-2.5 py-2">Push Webhooks</span>
-                {[
-                  { id: 'uptimekuma', name: 'Uptime Kuma', color: 'text-emerald-400' },
-                  { id: 'zabbix', name: 'Zabbix Monitor', color: 'text-rose-400' },
-                  { id: 'prometheus', name: 'Prometheus / Alert', color: 'text-purple-400' },
-                  { id: 'wazuh', name: 'Wazuh SIEM', color: 'text-blue-400' },
-                  { id: 'grafana', name: 'Grafana Webhook', color: 'text-violet-400' }
-                ].map(tool => (
-                  <button
-                    key={tool.id}
-                    onClick={() => {
-                      setSelectedIntegrationTool(tool.id);
-                      setSaveStatus({ status: 'idle' });
-                    }}
-                    className={`w-full px-3 py-2.5 rounded-lg text-left text-xs font-bold transition-all flex items-center gap-2 ${
-                      selectedIntegrationTool === tool.id ? 'bg-white/5 text-white border-l-2 border-cyan-400' : 'text-slate-400 hover:bg-white/[0.02] hover:text-slate-200'
-                    }`}
-                  >
-                    <span className={`w-2 h-2 rounded-full ${selectedIntegrationTool === tool.id ? 'bg-cyan-400' : 'bg-slate-600'}`}></span>
-                    <span>{tool.name}</span>
-                    <span className="ml-auto w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" title="Conexão Saudável (Watchdog Online)"></span>
-                  </button>
-                ))}
-
-                <span className="text-[9px] font-bold text-slate-500 uppercase tracking-widest px-2.5 py-2 mt-4">Secure Vault (Pull)</span>
-                {[
-                  { id: 'sentinel', name: 'Microsoft Sentinel' },
-                  { id: 'loki', name: 'Grafana Loki' },
-                  { id: 'ssh', name: 'Credenciais SSH Runbook' }
-                ].map(tool => (
-                  <button
-                    key={tool.id}
-                    onClick={() => {
-                      setSelectedIntegrationTool(tool.id);
-                      setSaveStatus({ status: 'idle' });
-                      if (tool.id === 'sentinel') setVaultKey('sentinel_client_secret');
-                      else if (tool.id === 'loki') setVaultKey('loki_password');
-                      else if (tool.id === 'ssh') setVaultKey('ssh_private_key');
-                    }}
-                    className={`px-3 py-2.5 rounded-lg text-left text-xs font-bold transition-all flex items-center gap-2 ${
-                      selectedIntegrationTool === tool.id ? 'bg-white/5 text-white border-l-2 border-cyan-400' : 'text-slate-400 hover:bg-white/[0.02] hover:text-slate-200'
-                    }`}
-                  >
-                    <span className={`w-2 h-2 rounded-full ${selectedIntegrationTool === tool.id ? 'bg-cyan-400' : 'bg-slate-600'}`}></span>
-                    {tool.name}
-                  </button>
-                ))}
-
-                <span className="text-[9px] font-bold text-slate-500 uppercase tracking-widest px-2.5 py-2 mt-4">Desempenho</span>
-                <button
-                  onClick={() => {
-                    setSelectedIntegrationTool('sla_report');
-                  }}
-                  className={`px-3 py-2.5 rounded-lg text-left text-xs font-bold transition-all flex items-center gap-2 ${
-                    selectedIntegrationTool === 'sla_report' ? 'bg-white/5 text-white border-l-2 border-emerald-400' : 'text-slate-400 hover:bg-white/[0.02] hover:text-slate-200'
-                  }`}
-                >
-                  <span className={`w-2 h-2 rounded-full ${selectedIntegrationTool === 'sla_report' ? 'bg-emerald-400' : 'bg-slate-600'}`}></span>
-                  Relatório & SLA
-                </button>
-
-                {user?.role === 'admin' && (
-                  <>
-                    <span className="text-[9px] font-bold text-slate-500 uppercase tracking-widest px-2.5 py-2 mt-4">Administração</span>
-                    <button
-                      onClick={() => {
-                        setSelectedIntegrationTool('users_admin');
-                        setAdminUserStatus({ status: 'idle' });
-                      }}
-                      className={`px-3 py-2.5 rounded-lg text-left text-xs font-bold transition-all flex items-center gap-2 ${
-                        selectedIntegrationTool === 'users_admin' ? 'bg-white/5 text-white border-l-2 border-violet-500' : 'text-slate-400 hover:bg-white/[0.02] hover:text-slate-200'
-                      }`}
-                    >
-                      <span className={`w-2 h-2 rounded-full ${selectedIntegrationTool === 'users_admin' ? 'bg-violet-500' : 'bg-slate-600'}`}></span>
-                      Usuários (Admin)
-                    </button>
-                    <button
-                      onClick={() => {
-                        setSelectedIntegrationTool('tenants_admin');
-                        setTenantCreateStatus({ status: 'idle' });
-                      }}
-                      className={`px-3 py-2.5 rounded-lg text-left text-xs font-bold transition-all flex items-center gap-2 ${
-                        selectedIntegrationTool === 'tenants_admin' ? 'bg-white/5 text-white border-l-2 border-violet-500' : 'text-slate-400 hover:bg-white/[0.02] hover:text-slate-200'
-                      }`}
-                    >
-                      <span className={`w-2 h-2 rounded-full ${selectedIntegrationTool === 'tenants_admin' ? 'bg-violet-500' : 'bg-slate-600'}`}></span>
-                      Tenants (Admin)
-                    </button>
-                    <button
-                      onClick={() => {
-                        setSelectedIntegrationTool('vault_admin');
-                      }}
-                      className={`px-3 py-2.5 rounded-lg text-left text-xs font-bold transition-all flex items-center gap-2 ${
-                        selectedIntegrationTool === 'vault_admin' ? 'bg-white/5 text-white border-l-2 border-violet-500' : 'text-slate-400 hover:bg-white/[0.02] hover:text-slate-200'
-                      }`}
-                    >
-                      <span className={`w-2 h-2 rounded-full ${selectedIntegrationTool === 'vault_admin' ? 'bg-violet-500' : 'bg-slate-600'}`}></span>
-                      Cofre & Vault (Admin)
-                    </button>
-                    <button
-                      onClick={() => {
-                        setSelectedIntegrationTool('audit_admin');
-                      }}
-                      className={`px-3 py-2.5 rounded-lg text-left text-xs font-bold transition-all flex items-center gap-2 ${
-                        selectedIntegrationTool === 'audit_admin' ? 'bg-white/5 text-white border-l-2 border-violet-500' : 'text-slate-400 hover:bg-white/[0.02] hover:text-slate-200'
-                      }`}
-                    >
-                      <span className={`w-2 h-2 rounded-full ${selectedIntegrationTool === 'audit_admin' ? 'bg-violet-500' : 'bg-slate-600'}`}></span>
-                      Auditoria de Ações (Admin)
-                    </button>
-                  </>
-                )}
-              </div>
-
-              {/* Right Column (Instructions & Credentials Form) */}
-              <div className="flex-1 p-6 overflow-y-auto flex flex-col gap-6 bg-[#090d16]">
-                
-                {/* 1. Header of Tool */}
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-lg bg-cyan-950/20 border border-cyan-500/20 flex items-center justify-center text-cyan-400">
-                    <HelpCircle className="w-6 h-6" />
-                  </div>
-                  <div>
-                    <h4 className="text-sm font-bold uppercase text-white tracking-wide">
-                      {selectedIntegrationTool === 'uptimekuma' && 'Integração Uptime Kuma'}
-                      {selectedIntegrationTool === 'zabbix' && 'Integração Zabbix Monitor'}
-                      {selectedIntegrationTool === 'prometheus' && 'Integração Prometheus Alertmanager'}
-                      {selectedIntegrationTool === 'wazuh' && 'Integração Wazuh SIEM'}
-                      {selectedIntegrationTool === 'grafana' && 'Integração Grafana Alerts'}
-                      {selectedIntegrationTool === 'sentinel' && 'Conexão Microsoft Sentinel'}
-                      {selectedIntegrationTool === 'loki' && 'Conexão Grafana Loki'}
-                      {selectedIntegrationTool === 'ssh' && 'Cofre de Credenciais SSH'}
-                      {selectedIntegrationTool === 'users_admin' && 'Gerenciamento de Equipe e Permissões'}
-                      {selectedIntegrationTool === 'tenants_admin' && 'Gerenciamento de Multi-tenancy (Empresas)'}
-                    </h4>
-                    <p className="text-[10px] text-slate-500 uppercase tracking-widest font-bold">
-                      {selectedIntegrationTool === 'users_admin' || selectedIntegrationTool === 'tenants_admin' ? 'Método: Administração Local / Cadastro' : ['uptimekuma', 'zabbix', 'prometheus', 'wazuh', 'grafana'].includes(selectedIntegrationTool) ? 'Método: Webhook (Push / Envio de Alertas)' : 'Método: API Polling (Pull / Busca Ativa de Chaves)'}
-                    </p>
-                  </div>
-                </div>
-
-                {/* 2. Webhook URLs (Push) */}
-                {['uptimekuma', 'zabbix', 'prometheus', 'wazuh', 'grafana'].includes(selectedIntegrationTool) ? (
-                  <div className="flex flex-col gap-4">
-                    {/* Active Integrations list */}
-                    <div className="flex flex-col gap-2.5">
-                      <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">
-                        Integrações Ativas ({selectedTenant.name})
-                      </label>
-                      
-                      {(integrations || []).filter(i => i.type === selectedIntegrationTool).length > 0 ? (
-                        <div className="flex flex-col gap-2 max-h-[150px] overflow-y-auto pr-1">
-                          {(integrations || []).filter(i => i.type === selectedIntegrationTool).map(item => (
-                            <div key={item.id} className="p-3 rounded-lg bg-[#040811] border border-white/5 flex items-center justify-between font-sans text-xs">
-                              <div className="flex flex-col gap-0.5">
-                                <span className="font-bold text-slate-200">{item.name}</span>
-                                <span className="text-[9px] font-mono text-cyan-400 select-all leading-none mt-1">
-                                  {`${API_BASE_URL}/api/v1/webhook/${selectedIntegrationTool}/${selectedTenant.id}`}
-                                </span>
-                              </div>
-                              <div className="flex items-center gap-2 shrink-0 ml-4">
-                                <button
-                                  onClick={() => handleCopyWebhookUrl(`${API_BASE_URL}/api/v1/webhook/${selectedIntegrationTool}/${selectedTenant.id}`)}
-                                  className="p-1.5 rounded bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white transition-all"
-                                  title="Copiar URL de Ingestão"
-                                >
-                                  {copiedText ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                                </button>
-                                {user?.role === 'admin' && (
-                                  <button
-                                    onClick={() => handleDeleteIntegrationSetting(item.id)}
-                                    className="p-1.5 rounded bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 transition-all font-bold text-[10px]"
-                                    title="Desativar Integração"
-                                  >
-                                    Remover
-                                  </button>
-                                )}
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      ) : (
-                        <div className="p-3 rounded-lg bg-amber-950/10 border border-amber-500/10 text-amber-400 text-xs font-sans">
-                          Nenhuma integração deste tipo está ativa para o Tenant atual. Ative abaixo para liberar a recepção de alertas.
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Admin Integration Activation Form */}
-                    {user?.role === 'admin' && (
-                      <form onSubmit={handleCreateIntegrationSetting} className="p-4 rounded-xl bg-white/[0.02] border border-white/5 flex flex-col gap-3">
-                        <h5 className="text-[10px] font-bold uppercase tracking-wider text-slate-200">Ativar Nova Integração</h5>
-                        <div className="flex gap-2">
-                          <input
-                            type="text"
-                            required
-                            value={integrationName}
-                            onChange={(e) => setIntegrationName(e.target.value)}
-                            placeholder="Nome identificador (Ex: Zabbix Produção)"
-                            className="flex-1 bg-[#0b0f19] border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-violet-500 transition-all placeholder:text-slate-600"
-                          />
-                          <button
-                            type="submit"
-                            disabled={integrationStatus.status === 'saving'}
-                            className="bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white font-bold text-xs px-4 rounded-lg transition-all shadow-md flex items-center gap-1.5 shrink-0 cursor-pointer"
-                          >
-                            {integrationStatus.status === 'saving' && <RefreshCw className="w-3 h-3 animate-spin" />}
-                            Ativar
-                          </button>
-                        </div>
-                        {integrationStatus.status === 'success' && (
-                          <div className="text-[10px] text-emerald-400 font-sans">{integrationStatus.message}</div>
-                        )}
-                        {integrationStatus.status === 'error' && (
-                          <div className="text-[10px] text-rose-400 font-sans">{integrationStatus.message}</div>
-                        )}
-                      </form>
-                    )}
-
-                    <div className="flex flex-col gap-4 p-4 rounded-xl bg-slate-900/40 border border-white/5 text-xs text-slate-300 leading-relaxed font-sans">
-                      <h5 className="font-bold text-slate-200 uppercase tracking-wider text-[10px] border-b border-white/5 pb-2">Manual de Integração & Boas Práticas (Data Normalization)</h5>
-                      
-                      {selectedIntegrationTool === 'uptimekuma' && (
-                        <div className="flex flex-col gap-3">
-                          <p>O <b>Uptime Kuma</b> realiza monitoramento de disponibilidade HTTP/TCP. Para conectar a este Tenant:</p>
-                          <div className="flex flex-col gap-1.5 pl-3 border-l-2 border-cyan-500/50">
-                            <span>1. No painel do Uptime Kuma, navegue em <b>Configurações &gt; Notificações &gt; Adicionar Notificação</b>.</span>
-                            <span>2. Escolha o tipo como <b>Webhook</b>.</span>
-                            <span>3. No campo <b>Post URL</b>, cole a URL de Ingestão correspondente ao Tenant acima.</span>
-                            <span>4. Salve e teste. O status <i>Down</i> gerará alertas <b>CRITICAL</b>, e o <i>Up</i> resolverá o chamado no Cockpit.</span>
-                          </div>
-                          <div className="p-2.5 rounded bg-white/[0.02] border border-white/5 text-[10px]">
-                            <span className="font-bold text-slate-400 block mb-1">Mapeamento & Normalização:</span>
-                            <p>O conector extrai `heartbeat.status` (0 = Down, 1 = Up) e mapeia para a severidade correspondente, normalizando a mensagem de erro para evitar alarmes duplicados e garantir a correspondência de ativos no banco.</p>
-                          </div>
-                        </div>
-                      )}
-                      
-                      {selectedIntegrationTool === 'zabbix' && (
-                        <div className="flex flex-col gap-4">
-                          <p>O <b>Zabbix Monitor</b> utiliza Webhooks em Javascript para despachar payloads JSON ricos em incidentes:</p>
-                          <div className="flex flex-col gap-1.5 pl-3 border-l-2 border-rose-500/50">
-                            <span>1. Vá em <b>Administration &gt; Media Types</b> e crie uma mídia com tipo <b>Webhook</b>.</span>
-                            <span>2. Insira parâmetros essenciais: <b>event_id</b>, <b>event_name</b>, <b>host_name</b>, <b>severity</b> e <b>event_value</b>.</span>
-                            <span>3. Defina a URL de envio apontando para a URL de Webhook do Tenant acima.</span>
-                            <span>4. Habilite o envio e configure ações de trigger para despachar alertas à fila da IT Fácil.</span>
-                          </div>
-
-                          <div className="p-2.5 rounded bg-white/[0.02] border border-white/5 text-[10px]">
-                            <span className="font-bold text-slate-400 block mb-1">Mapeamento & Normalização:</span>
-                            <p>As severidades do Zabbix (Warning, Average, High, Disaster) são automaticamente normalizadas para a escala universal (Warning, Critical, Fatal). O campo `host_name` é associado ao ativo físico de forma persistente.</p>
-                          </div>
-                        </div>
-                      )}
-
-                      {selectedIntegrationTool === 'prometheus' && (
-                        <div className="flex flex-col gap-3">
-                          <p>O <b>Prometheus Alertmanager</b> unifica o roteamento de regras e disparo de webhooks:</p>
-                          <div className="flex flex-col gap-1.5 pl-3 border-l-2 border-purple-500/50">
-                            <span>1. Abra o arquivo de configuração do Alertmanager (geralmente <code>alertmanager.yml</code>).</span>
-                            <span>2. Crie ou configure um receiver apontando para o conector de Webhook deste Tenant:</span>
-                          </div>
-                          <pre className="bg-[#03060f] p-3 rounded-lg font-mono text-[10px] text-slate-400 overflow-x-auto leading-relaxed border border-white/5">
-{`receivers:
-  - name: 'itfacil-tenant-prometheus'
-    webhook_configs:
-      - url: '${API_BASE_URL}/api/v1/webhook/prometheus/${selectedTenant.id}'`}
-                          </pre>
-                          <div className="p-2.5 rounded bg-white/[0.02] border border-white/5 text-[10px]">
-                            <span className="font-bold text-slate-400 block mb-1">Mapeamento & Normalização:</span>
-                            <p>O mapeador itera sobre o array de alertas recebidos, extraindo `labels.alertname` como tipo de evento e normalizando severidades do Prometheus (ex: `critical` ou `page` tornam-se `critical` e `fatal` na base da IT Fácil).</p>
-                          </div>
-                        </div>
-                      )}
-
-                      {selectedIntegrationTool === 'wazuh' && (
-                        <div className="flex flex-col gap-3">
-                          <p>O <b>Wazuh SIEM</b> envia logs de auditoria e segurança em formato JSON estruturado:</p>
-                          <div className="flex flex-col gap-1.5 pl-3 border-l-2 border-blue-500/50">
-                            <span>1. Acesse o arquivo de configuração do seu Wazuh Manager (<code>/var/ossec/etc/ossec.conf</code>).</span>
-                            <span>2. Defina uma diretiva <code>&lt;integration&gt;</code> configurando o hook correspondente ao Tenant:</span>
-                          </div>
-                          <pre className="bg-[#03060f] p-3 rounded-lg font-mono text-[10px] text-slate-400 overflow-x-auto leading-relaxed border border-white/5">
-{`<integration>
-  <name>custom-webhook</name>
-  <hook_url>${API_BASE_URL}/api/v1/webhook/wazuh/${selectedTenant.id}</hook_url>
-  <alert_format>json</alert_format>
-  <level>7</level>
-</integration>`}
-                          </pre>
-                          <div className="p-2.5 rounded bg-white/[0.02] border border-white/5 text-[10px]">
-                            <span className="font-bold text-slate-400 block mb-1">Mapeamento & Normalização:</span>
-                            <p>O conector de segurança analisa a severidade com base nos níveis de regras do Wazuh (Rules Level). Níveis de 4 a 7 tornam-se `warning`; de 8 a 11 tornam-se `critical`; de 12 a 15 tornam-se `fatal`, preenchendo as táticas MITRE automaticamente.</p>
-                          </div>
-                        </div>
-                      )}
-
-                      {selectedIntegrationTool === 'grafana' && (
-                        <div className="flex flex-col gap-3">
-                          <p>O <b>Grafana Alerts</b> envia payloads de alerta unificados com dados de painéis e métricas:</p>
-                          <div className="flex flex-col gap-1.5 pl-3 border-l-2 border-violet-500/50">
-                            <span>1. Vá em <b>Alerting &gt; Contact Points &gt; New Contact Point</b>.</span>
-                            <span>2. Escolha o tipo de mídia como <b>Webhook</b>.</span>
-                            <span>3. Insira a URL do respectivo Tenant acima no campo de URL e salve.</span>
-                            <span>4. A IT Fácil receberá o payload JSON e fará o de-bounce inteligente para remover ruídos.</span>
-                          </div>
-                          <div className="p-2.5 rounded bg-white/[0.02] border border-white/5 text-[10px]">
-                            <span className="font-bold text-slate-400 block mb-1">Mapeamento & Normalização:</span>
-                            <p>As métricas e gráficos anexados ao alerta são interpretados para mapear o dispositivo afetado de forma unívoca, descartando informações ruidosas e reduzindo o tempo médio de mitigação (MTTR).</p>
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Unified Validation Box for Webhooks */}
-                      {['uptimekuma', 'zabbix', 'prometheus', 'wazuh', 'grafana'].includes(selectedIntegrationTool) && (
-                        <div className="p-3 rounded-lg bg-surface/30 border border-white/5 flex flex-col gap-2.5 mt-3">
-                          <div className="flex items-center justify-between">
-                            <span className="text-[10px] uppercase font-bold tracking-wider text-slate-400">
-                              Validação de Comunicação
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => handleValidateIntegration(selectedIntegrationTool)}
-                              disabled={isValidating}
-                              className="px-2.5 py-1 rounded bg-rose-500/10 hover:bg-rose-500/20 disabled:bg-white/5 text-rose-400 disabled:text-slate-500 border border-rose-500/25 disabled:border-transparent transition-all text-[10px] font-bold cursor-pointer"
-                            >
-                              {isValidating ? 'Validando...' : 'Testar Conexão / Logs'}
-                            </button>
-                          </div>
-
-                          {validationResult && (
-                            <div className="flex flex-col gap-2 font-sans text-xs">
-                              <div className="flex items-center gap-1.5">
-                                <span className="text-slate-400">Status do Conector:</span>
-                                {validationResult.status === 'active' ? (
-                                  <span className="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-bold uppercase text-[9px]">Ativo (Online)</span>
-                                ) : validationResult.status === 'offline' ? (
-                                  <span className="px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 font-bold uppercase text-[9px]">Offline (Sem Telemetria)</span>
-                                ) : (
-                                  <span className="px-1.5 py-0.5 rounded bg-slate-500/10 text-slate-400 border border-slate-500/20 font-bold uppercase text-[9px]">Inativo (Sem Sinal)</span>
-                                )}
-                              </div>
-                              {validationResult.last_seen > 0 && (
-                                <div className="text-[10px] text-slate-500 leading-none">
-                                  Último sinal recebido: {new Date(validationResult.last_seen * 1000).toLocaleString('pt-BR')}
-                                </div>
-                              )}
-                              <div className="flex flex-col gap-1 mt-1">
-                                <span className="text-slate-400 font-semibold">Verbose / Logs de Erro do Webhook:</span>
-                                {validationResult.last_error ? (
-                                  <pre className="p-2.5 rounded bg-red-950/15 border border-red-500/20 text-[10px] text-red-400 font-mono overflow-x-auto max-h-[100px] whitespace-pre-wrap leading-tight">
-                                    {validationResult.last_error}
-                                  </pre>
-                                ) : (
-                                  <p className="text-[10px] text-emerald-400 font-semibold bg-emerald-500/5 p-2 rounded border border-emerald-500/15">
-                                    ✓ Nenhuma falha pendente. Integração operando de forma limpa.
-                                  </p>
-                                )}
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                ) : ['sentinel', 'loki', 'ssh'].includes(selectedIntegrationTool) ? (
-                  // 3. Vault forms (Pull / Sentinel & Loki credentials saving)
-                  <form onSubmit={handleSaveVaultSecret} className="flex flex-col gap-4">
-                    
-                    <div className="flex flex-col gap-3 p-4 rounded-xl bg-cyan-950/10 border border-cyan-500/20 text-xs text-slate-300 leading-relaxed font-sans mb-2">
-                      <div className="flex items-center gap-1.5 text-cyan-400 font-extrabold uppercase text-[10px]">
-                        <Lock className="w-3.5 h-3.5" /> Cofre Criptográfico RLS Seguro
-                      </div>
-                      <p>Estas credenciais são salvas e encriptadas usando algoritmos robustos de **AES-256-GCM** na tabela `tenant_vault`. Graças à segurança estrita por nível de linha (RLS) no PostgreSQL, estes segredos são 100% invisíveis a qualquer outro tenant.</p>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-4">
-                      <div className="flex flex-col gap-2">
-                        <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Identificador da Credencial (Key)</label>
-                        <select
-                          value={vaultKey}
-                          onChange={(e) => setVaultKey(e.target.value)}
-                          className="bg-surface border border-white/5 rounded-lg p-2.5 text-xs text-slate-200 focus:outline-none focus:border-cyan-500/50"
-                        >
-                          {selectedIntegrationTool === 'sentinel' && (
-                            <>
-                              <option value="sentinel_client_secret">Client Secret (Azure API)</option>
-                              <option value="sentinel_client_id">Client ID (App Registration)</option>
-                              <option value="sentinel_tenant_id">Tenant ID (Azure Directory)</option>
-                              <option value="sentinel_subscription_id">Subscription ID</option>
-                            </>
-                          )}
-                          {selectedIntegrationTool === 'loki' && (
-                            <>
-                              <option value="loki_url">Loki Server URL</option>
-                              <option value="loki_username">Loki Username</option>
-                              <option value="loki_password">Loki Password</option>
-                            </>
-                          )}
-                          {selectedIntegrationTool === 'ssh' && (
-                            <>
-                              <option value="ssh_private_key">SSH Private Key (PEM format)</option>
-                              <option value="ssh_username">SSH Username</option>
-                              <option value="ssh_password">SSH Password (Fallback)</option>
-                            </>
-                          )}
-                        </select>
-                      </div>
-
-                      <div className="flex flex-col gap-2">
-                        <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Valor da Credencial (Secret Value)</label>
-                        <input
-                          type="password"
-                          required
-                          value={vaultValue}
-                          placeholder="Digite ou cole o valor confidencial aqui..."
-                          onChange={(e) => setVaultValue(e.target.value)}
-                          className="bg-surface border border-white/5 rounded-lg p-2.5 text-xs text-slate-200 focus:outline-none focus:border-cyan-500/50 placeholder:text-slate-600"
-                        />
-                      </div>
-                    </div>
-
-                    <button
-                      type="submit"
-                      disabled={saveStatus.status === 'saving'}
-                      className="bg-cyan-600 hover:bg-cyan-500 disabled:bg-cyan-800 disabled:opacity-50 text-slate-950 font-bold uppercase tracking-wider text-xs py-2.5 rounded-lg flex items-center justify-center gap-2 transition-all mt-2"
-                    >
-                      {saveStatus.status === 'saving' ? (
-                        <>
-                          <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                          <span>Criptografando e Salvando...</span>
-                        </>
-                      ) : (
-                        <>
-                          <Lock className="w-3.5 h-3.5" />
-                          <span>Salvar Segredo no Cofre do Banco</span>
-                        </>
-                      )}
-                    </button>
-
-                    {saveStatus.status === 'success' && (
-                      <div className="p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-semibold text-center">
-                        {saveStatus.message}
-                      </div>
-                    )}
-                    {saveStatus.status === 'error' && (
-                      <div className="p-3 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs font-semibold text-center">
-                        {saveStatus.message}
-                      </div>
-                    )}
-                    <div className="flex flex-col gap-3 p-4 rounded-xl bg-slate-900/40 border border-white/5 text-xs text-slate-300 leading-relaxed font-sans mt-3">
-                      <h5 className="font-bold text-slate-200 uppercase tracking-wider text-[10px] border-b border-white/5 pb-2">Como Funciona a Integração Pull & Credenciais:</h5>
-                      
-                      {selectedIntegrationTool === 'sentinel' && (
-                        <div className="flex flex-col gap-2">
-                          <p>O conector do <b>Microsoft Sentinel</b> atua via busca ativa (Polling API) consultando logs e incidentes de segurança no Azure Log Analytics:</p>
-                          <div className="flex flex-col gap-1.5 pl-3 border-l-2 border-cyan-500/50">
-                            <span>1. Registre um aplicativo (App Registration) no seu Azure Active Directory (Microsoft Entra ID).</span>
-                            <span>2. Atribua a função de **Log Analytics Reader** ou similar a este aplicativo.</span>
-                            <span>3. Salve as chaves obtidas (Client ID, Client Secret, Tenant ID e Subscription ID) separadamente neste cofre.</span>
-                            <span>4. O coletor rodará a cada 5 minutos buscando incidentes e normalizando as ameaças na fila do SOC da IT Fácil.</span>
-                          </div>
-                        </div>
-                      )}
-
-                      {selectedIntegrationTool === 'loki' && (
-                        <div className="flex flex-col gap-2">
-                          <p>A integração com o <b>Grafana Loki</b> permite coletar logs brutos em tempo real e processar inteligência AIOps:</p>
-                          <div className="flex flex-col gap-1.5 pl-3 border-l-2 border-orange-500/50">
-                            <span>1. Insira a URL base de acesso à API do seu servidor Loki (ex: <code>https://loki.empresa.com.br</code>).</span>
-                            <span>2. Forneça o Usuário e Senha de autenticação básica (Basic Auth) se configurado.</span>
-                            <span>3. A IT Fácil buscará ativamente exceções de logs e normalizará strings de erro em eventos unificados.</span>
-                          </div>
-                        </div>
-                      )}
-
-                      {selectedIntegrationTool === 'ssh' && (
-                        <div className="flex flex-col gap-2">
-                          <p>As chaves de acesso <b>SSH Runbook</b> habilitam os scripts automatizados de auto-cura (NOC) e contenção (SOC):</p>
-                          <div className="flex flex-col gap-1.5 pl-3 border-l-2 border-violet-500/50">
-                            <span>1. Adicione a chave privada SSH (no formato PEM clássico) utilizada para autenticação sem senha nos ativos.</span>
-                            <span>2. Preencha o Usuário de conexão correspondente (ex: <code>sre_runner</code> ou <code>soc_agent</code>).</span>
-                            <span>3. Estes dados são encriptados localmente e trafegados exclusivamente via túnel SSH criptografado para executar comandos como reinicialização de IIS ou contenção de hosts via EDR/Firewall periférico.</span>
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Unified Validation Box for Pull Integrations */}
-                      {['sentinel', 'loki'].includes(selectedIntegrationTool) && (
-                        <div className="p-3 rounded-lg bg-surface/30 border border-white/5 flex flex-col gap-2.5 mt-3">
-                          <div className="flex items-center justify-between">
-                            <span className="text-[10px] uppercase font-bold tracking-wider text-slate-400">
-                              Validação de Comunicação
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => handleValidateIntegration(selectedIntegrationTool)}
-                              disabled={isValidating}
-                              className="px-2.5 py-1 rounded bg-rose-500/10 hover:bg-rose-500/20 disabled:bg-white/5 text-rose-400 disabled:text-slate-500 border border-rose-500/25 disabled:border-transparent transition-all text-[10px] font-bold cursor-pointer"
-                            >
-                              {isValidating ? 'Validando...' : 'Testar Conexão / Logs'}
-                            </button>
-                          </div>
-
-                          {validationResult && (
-                            <div className="flex flex-col gap-2 font-sans text-xs">
-                              <div className="flex items-center gap-1.5">
-                                <span className="text-slate-400">Status do Conector:</span>
-                                {validationResult.status === 'active' ? (
-                                  <span className="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-bold uppercase text-[9px]">Ativo (Online)</span>
-                                ) : validationResult.status === 'offline' ? (
-                                  <span className="px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 font-bold uppercase text-[9px]">Offline (Sem Telemetria)</span>
-                                ) : (
-                                  <span className="px-1.5 py-0.5 rounded bg-slate-500/10 text-slate-400 border border-slate-500/20 font-bold uppercase text-[9px]">Inativo (Sem Sinal)</span>
-                                )}
-                              </div>
-                              {validationResult.last_seen > 0 && (
-                                <div className="text-[10px] text-slate-500 leading-none">
-                                  Último sinal recebido: {new Date(validationResult.last_seen * 1000).toLocaleString('pt-BR')}
-                                </div>
-                              )}
-                              <div className="flex flex-col gap-1 mt-1">
-                                <span className="text-slate-400 font-semibold">Verbose / Logs de Erro:</span>
-                                {validationResult.last_error ? (
-                                  <pre className="p-2.5 rounded bg-red-950/15 border border-red-500/20 text-[10px] text-red-400 font-mono overflow-x-auto max-h-[100px] whitespace-pre-wrap leading-tight">
-                                    {validationResult.last_error}
-                                  </pre>
-                                ) : (
-                                  <p className="text-[10px] text-emerald-400 font-semibold bg-emerald-500/5 p-2 rounded border border-emerald-500/15">
-                                    ✓ Conexão bem-sucedida. Integração operando de forma limpa.
-                                  </p>
-                                )}
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  </form>
-                ) : selectedIntegrationTool === 'users_admin' ? (
-                  // 4. Admin Users Form
-                  <div className="flex flex-col gap-4">
-                    <div className="flex flex-col gap-3 p-4 rounded-xl bg-violet-950/10 border border-violet-500/20 text-xs text-slate-300 leading-relaxed font-sans mb-2">
-                      <div className="flex items-center gap-1.5 text-violet-400 font-extrabold uppercase text-[10px]">
-                        <User className="w-3.5 h-3.5" /> Painel de Controle de Usuários (RBAC)
-                      </div>
-                      <p>Como administrador do NOC, você pode cadastrar e gerenciar perfis de novos colaboradores. Escolha se o nível de privilégio será **Admin** (acesso irrestrito), **Operator** (gerenciamento e SLA) ou **Viewer** (somente visualização).</p>
-                    </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                      {/* Left: Create Form */}
-                      <form onSubmit={handleAdminCreateUser} className="flex flex-col gap-4">
-                        <div className="flex flex-col gap-1.5">
-                          <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Nome Completo</label>
-                          <input
-                            type="text"
-                            required
-                            value={adminUserName}
-                            onChange={(e) => setAdminUserName(e.target.value)}
-                            placeholder="Ex: Carlos Silva"
-                            className="bg-[#0b0f19] border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-violet-500 transition-all placeholder:text-slate-600"
-                          />
-                        </div>
-
-                        <div className="flex flex-col gap-1.5">
-                          <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Endereço de E-mail</label>
-                          <input
-                            type="email"
-                            required
-                            value={adminUserEmail}
-                            onChange={(e) => setAdminUserEmail(e.target.value)}
-                            placeholder="usuario@empresa.com"
-                            className="bg-[#0b0f19] border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-violet-500 transition-all placeholder:text-slate-600"
-                          />
-                        </div>
-
-                        <div className="flex flex-col gap-1.5">
-                          <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Senha Provisória</label>
-                          <div className="relative flex items-center">
-                            <input
-                              type={showAdminUserPassword ? 'text' : 'password'}
-                              required
-                              value={adminUserPassword}
-                              onChange={(e) => setAdminUserPassword(e.target.value)}
-                              placeholder="Mínimo de 6 caracteres"
-                              className="w-full bg-[#0b0f19] border border-white/10 rounded-lg p-2.5 pr-10 text-xs text-white focus:outline-none focus:border-violet-500 transition-all placeholder:text-slate-600"
-                            />
-                            <button
-                              type="button"
-                              onClick={() => setShowAdminUserPassword(!showAdminUserPassword)}
-                              className="absolute right-3 text-slate-400 hover:text-white transition-all cursor-pointer"
-                            >
-                              {showAdminUserPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                            </button>
-                          </div>
-                        </div>
-
-                        <div className="flex flex-col gap-1.5">
-                          <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Nível de Permissão (Role)</label>
-                          <select
-                            value={adminUserRole}
-                            onChange={(e) => setAdminUserRole(e.target.value)}
-                            className="bg-[#0b0f19] border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-violet-500 transition-all"
-                          >
-                            <option value="operator">Operator (Operador - Acesso de Leitura/Ação)</option>
-                            <option value="admin">Admin (Administrador - Acesso Completo/Cofre/Usuários)</option>
-                            <option value="viewer">Viewer (Visualizador - Apenas Leitura de Painéis)</option>
-                          </select>
-                        </div>
-
-                        <button
-                          type="submit"
-                          disabled={adminUserStatus.status === 'saving'}
-                          className="bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white font-bold text-xs py-3 px-4 rounded-lg transition-all shadow-md shadow-violet-950/30 flex items-center justify-center gap-2 cursor-pointer"
-                        >
-                          {adminUserStatus.status === 'saving' && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
-                          Cadastrar Novo Usuário
-                        </button>
-
-                        {adminUserStatus.status === 'success' && (
-                          <div className="p-3 bg-emerald-950/20 border border-emerald-500/20 text-emerald-400 text-xs rounded-lg font-sans">
-                            {adminUserStatus.message}
-                          </div>
-                        )}
-                        {adminUserStatus.status === 'error' && (
-                          <div className="p-3 bg-rose-950/20 border border-rose-500/20 text-rose-400 text-xs rounded-lg font-sans">
-                            {adminUserStatus.message}
-                          </div>
-                        )}
-                      </form>
-
-                      {/* Right: Active Users List */}
-                      <div className="flex flex-col gap-4 border-l border-white/5 pl-6">
-                        <div className="flex items-center justify-between">
-                          <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400 block">
-                            Usuários Ativos no Sistema (RBAC)
-                          </label>
-                          <button
-                            onClick={fetchAdminUsers}
-                            disabled={isLoadingAdminUsers}
-                            className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-white/5 hover:bg-white/10 border border-white/10 text-[9px] text-slate-300 font-medium transition-all"
-                          >
-                            <RefreshCw className={`w-2.5 h-2.5 ${isLoadingAdminUsers ? 'animate-spin' : ''}`} />
-                            <span>Atualizar</span>
-                          </button>
-                        </div>
-                        
-                        {isLoadingAdminUsers ? (
-                          <div className="flex flex-col items-center justify-center py-12 gap-2 text-slate-400 text-xs">
-                            <RefreshCw className="w-6 h-6 animate-spin text-violet-400" />
-                            <span>Carregando usuários...</span>
-                          </div>
-                        ) : adminUsers.length === 0 ? (
-                          <span className="text-[10px] text-amber-500 font-medium">Nenhum usuário cadastrado.</span>
-                        ) : (
-                          <div className="flex flex-col gap-2 max-h-[300px] overflow-y-auto pr-1">
-                            {adminUsers.map(u => {
-                              const isSelf = u.email === user?.email;
-                              return (
-                                <div key={u.id} className="p-3 rounded-lg bg-black/40 border border-white/5 flex items-center justify-between text-xs hover:border-white/10 transition-all">
-                                  <div className="flex flex-col gap-0.5 min-w-0 mr-2">
-                                    <div className="flex items-center gap-1.5 flex-wrap">
-                                      <span className="font-bold text-slate-200 truncate">{u.name}</span>
-                                      <span className={`px-1 rounded text-[8px] font-extrabold uppercase tracking-wider leading-normal ${
-                                        u.global_role === 'admin' 
-                                          ? 'bg-violet-500/20 text-violet-400 border border-violet-500/10' 
-                                          : u.global_role === 'operator' 
-                                            ? 'bg-blue-500/20 text-blue-400 border border-blue-500/10'
-                                            : 'bg-slate-500/20 text-slate-400 border border-slate-500/10'
-                                      }`}>
-                                        {u.global_role}
-                                      </span>
-                                    </div>
-                                    <span className="text-[10px] text-slate-400 font-mono select-all truncate">{u.email}</span>
-                                  </div>
-                                  <button
-                                    onClick={() => handleDeleteUser(u.id)}
-                                    disabled={isSelf}
-                                    className={`text-[9px] px-2.5 py-1 rounded transition-all font-bold cursor-pointer shrink-0 ${
-                                      isSelf 
-                                        ? 'text-slate-600 bg-white/5 cursor-not-allowed border border-white/5' 
-                                        : 'text-rose-400 hover:text-rose-300 bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/10 hover:border-rose-500/20'
-                                    }`}
-                                  >
-                                    Excluir
-                                  </button>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                ) : selectedIntegrationTool === 'tenants_admin' ? (
-                  // 5. Admin Tenants Form
-                  <div className="flex flex-col gap-4">
-                    <div className="flex flex-col gap-3 p-4 rounded-xl bg-violet-950/10 border border-violet-500/20 text-xs text-slate-300 leading-relaxed font-sans mb-2">
-                      <div className="flex items-center gap-1.5 text-violet-400 font-extrabold uppercase text-[10px]">
-                        <Activity className="w-3.5 h-3.5" /> Painel de Controle de Tenants (Multi-tenancy)
-                      </div>
-                      <p>Adicione novos Tenants para segmentação física de alertas. Selecione um Tenant da lista para gerenciar e associar suas integrações ativas diretamente.</p>
-                    </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                      {/* Left: Create Form & Active Tenants List */}
-                      <div className="flex flex-col gap-4">
-                        <form onSubmit={handleCreateTenant} className="flex flex-col gap-3">
-                          <div className="flex flex-col gap-1">
-                            <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Nome da Empresa / Tenant</label>
-                            <input
-                              type="text"
-                              required
-                              value={newTenantName}
-                              onChange={(e) => setNewTenantName(e.target.value)}
-                              placeholder="Ex: Banco Alfa S.A."
-                              className="bg-[#0b0f19] border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-violet-500 transition-all placeholder:text-slate-600"
-                            />
-                          </div>
-
-                          <button
-                            type="submit"
-                            disabled={tenantCreateStatus.status === 'saving'}
-                            className="bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white font-bold text-xs py-2.5 px-4 rounded-lg transition-all shadow-md shadow-violet-950/30 flex items-center justify-center gap-2 cursor-pointer"
-                          >
-                            {tenantCreateStatus.status === 'saving' && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
-                            Cadastrar Novo Tenant
-                          </button>
-
-                          {tenantCreateStatus.status === 'success' && (
-                            <div className="p-2 bg-emerald-950/20 border border-emerald-500/20 text-emerald-400 text-[10px] rounded-lg font-sans">
-                              {tenantCreateStatus.message}
-                            </div>
-                          )}
-                          {tenantCreateStatus.status === 'error' && (
-                            <div className="p-2 bg-rose-950/20 border border-rose-500/20 text-rose-400 text-[10px] rounded-lg font-sans">
-                              {tenantCreateStatus.message}
-                            </div>
-                          )}
-                        </form>
-
-                        <div className="flex flex-col gap-2 mt-2">
-                          <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400 block">Tenants Ativos no Banco</label>
-                          <div className="flex flex-col gap-2 max-h-[180px] overflow-y-auto pr-1">
-                            {tenants.map(t => (
-                              <div
-                                key={t.id}
-                                onClick={() => setSelectedAdminTenant(t)}
-                                className={`p-2.5 rounded-lg border transition-all cursor-pointer flex items-center justify-between select-none ${
-                                  selectedAdminTenant?.id === t.id
-                                    ? 'bg-violet-600/10 border-violet-500/50 text-white'
-                                    : 'bg-white/5 border-white/5 text-slate-400 hover:bg-white/[0.07] hover:text-slate-300'
-                                }`}
-                              >
-                                <div className="flex flex-col gap-0.5 min-w-0 mr-2">
-                                  <span className="text-xs font-bold truncate">{t.name}</span>
-                                  <span className="text-[8px] font-mono select-all truncate">{t.id}</span>
-                                </div>
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleDeleteTenant(t.id);
-                                  }}
-                                  className="text-[9px] text-rose-400 hover:text-rose-300 bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/10 px-2 py-1 rounded transition-all font-bold cursor-pointer shrink-0"
-                                >
-                                  Excluir
-                                </button>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Right: Tenant Integrations Manager */}
-                      <div className="flex flex-col gap-4 border-l border-white/5 pl-6">
-                        <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400 block">
-                          Gerenciar Conexões por Tenant
-                        </label>
-
-                        {/* Tenant selection selector */}
-                        <div className="flex flex-col gap-2">
-                          <span className="text-xs text-slate-400">Selecione um tenant para configurar:</span>
-                          <select
-                            value={selectedAdminTenant?.id || ''}
-                            onChange={(e) => {
-                              const t = tenants.find(x => x.id === e.target.value);
-                              setSelectedAdminTenant(t || null);
-                            }}
-                            className="bg-[#0b0f19] border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-violet-500"
-                          >
-                            <option value="">-- Selecione um Tenant --</option>
-                            {tenants.map(t => (
-                              <option key={t.id} value={t.id}>{t.name}</option>
-                            ))}
-                          </select>
-                        </div>
-
-                        {selectedAdminTenant ? (
-                          <div className="flex flex-col gap-4 mt-2">
-                            <div className="p-3.5 rounded-xl bg-violet-950/20 border border-violet-500/20">
-                              <h6 className="text-xs font-bold text-slate-200 uppercase tracking-wide leading-none mb-1">
-                                {selectedAdminTenant.name}
-                              </h6>
-                              <span className="text-[9px] font-mono text-slate-400 select-all">{selectedAdminTenant.id}</span>
-                            </div>
-
-                            {/* Tool Selector */}
-                            <div className="flex flex-col gap-1.5">
-                              <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Ferramenta / App</label>
-                              <select
-                                value={adminIntegrationTool}
-                                onChange={(e) => setAdminIntegrationTool(e.target.value)}
-                                className="bg-[#0b0f19] border border-white/10 rounded-lg p-2 text-xs text-white focus:outline-none"
-                              >
-                                <option value="uptimekuma">Uptime Kuma</option>
-                                <option value="zabbix">Zabbix Monitor</option>
-                                <option value="prometheus">Prometheus Alertmanager</option>
-                                <option value="wazuh">Wazuh SIEM</option>
-                                <option value="grafana">Grafana Webhook</option>
-                              </select>
-                            </div>
-
-                            {/* Webhook URL preview */}
-                            <div className="flex flex-col gap-1.5">
-                              <label className="text-[9px] uppercase font-bold tracking-wider text-slate-400">URL do Webhook do Tenant</label>
-                              <div className="flex bg-[#040811] border border-white/5 rounded-lg p-2 items-center justify-between font-mono text-[10px] text-cyan-400 select-all select-text">
-                                <span className="truncate mr-3">
-                                  {`${API_BASE_URL}/api/v1/ingest/${adminIntegrationTool}?token=${selectedAdminTenant.id}`}
-                                </span>
-                                <button
-                                  onClick={() => handleCopyWebhookUrl(`${API_BASE_URL}/api/v1/ingest/${adminIntegrationTool}?token=${selectedAdminTenant.id}`)}
-                                  className="p-1 rounded bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white transition-all shrink-0"
-                                >
-                                  {copiedText ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
-                                </button>
-                              </div>
-                            </div>
-
-                            {/* Active Integrations list for this tenant & tool */}
-                            <div className="flex flex-col gap-2">
-                              <span className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Conexões Cadastradas</span>
-                              {(adminIntegrations || []).filter(i => i.type === adminIntegrationTool).length > 0 ? (
-                                <div className="flex flex-col gap-1.5 max-h-[110px] overflow-y-auto pr-1">
-                                  {(adminIntegrations || []).filter(i => i.type === adminIntegrationTool).map(item => (
-                                    <div key={item.id} className="p-2 rounded-lg bg-black/40 border border-white/5 flex items-center justify-between text-xs">
-                                      <span className="font-bold text-slate-300 truncate">{item.name}</span>
-                                      <button
-                                        onClick={() => handleAdminDeleteIntegration(item.id)}
-                                        className="text-[9px] text-rose-400 hover:text-rose-300 bg-rose-500/10 hover:bg-rose-500/20 px-2 py-0.5 rounded transition-all font-bold cursor-pointer"
-                                      >
-                                        Remover
-                                      </button>
-                                    </div>
-                                  ))}
-                                </div>
-                              ) : (
-                                <span className="text-[10px] text-amber-500 font-medium">Nenhuma conexão de {adminIntegrationTool} ativada para este tenant.</span>
-                              )}
-                            </div>
-
-                            {/* Validation Box for MSP */}
-                            <div className="p-3 rounded-lg bg-surface/30 border border-white/5 flex flex-col gap-2.5">
-                              <div className="flex items-center justify-between">
-                                <span className="text-[10px] uppercase font-bold tracking-wider text-slate-400">
-                                  Validação de Comunicação
-                                </span>
-                                <button
-                                  type="button"
-                                  onClick={() => handleValidateIntegration(adminIntegrationTool, true)}
-                                  disabled={isValidating}
-                                  className="px-2.5 py-1 rounded bg-rose-500/10 hover:bg-rose-500/20 disabled:bg-white/5 text-rose-400 disabled:text-slate-500 border border-rose-500/25 disabled:border-transparent transition-all text-[10px] font-bold cursor-pointer"
-                                >
-                                  {isValidating ? 'Validando...' : 'Testar Conexão / Logs'}
-                                </button>
-                              </div>
-
-                              {validationResult && (
-                                <div className="flex flex-col gap-2 font-sans text-xs">
-                                  <div className="flex items-center gap-1.5">
-                                    <span className="text-slate-400">Status do Conector:</span>
-                                    {validationResult.status === 'active' ? (
-                                      <span className="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-bold uppercase text-[9px]">Ativo (Online)</span>
-                                    ) : validationResult.status === 'offline' ? (
-                                      <span className="px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 font-bold uppercase text-[9px]">Offline (Sem Telemetria)</span>
-                                    ) : (
-                                      <span className="px-1.5 py-0.5 rounded bg-slate-500/10 text-slate-400 border border-slate-500/20 font-bold uppercase text-[9px]">Inativo (Sem Sinal)</span>
-                                    )}
-                                  </div>
-                                  {validationResult.last_seen > 0 && (
-                                    <div className="text-[10px] text-slate-500 leading-none">
-                                      Último sinal recebido: {new Date(validationResult.last_seen * 1000).toLocaleString('pt-BR')}
-                                    </div>
-                                  )}
-                                  <div className="flex flex-col gap-1 mt-1">
-                                    <span className="text-slate-400 font-semibold">Verbose / Logs de Erro do Webhook:</span>
-                                    {validationResult.last_error ? (
-                                      <pre className="p-2.5 rounded bg-red-950/15 border border-red-500/20 text-[10px] text-red-400 font-mono overflow-x-auto max-h-[100px] whitespace-pre-wrap leading-tight">
-                                        {validationResult.last_error}
-                                      </pre>
-                                    ) : (
-                                      <p className="text-[10px] text-emerald-400 font-semibold bg-emerald-500/5 p-2 rounded border border-emerald-500/15">
-                                        ✓ Nenhuma falha pendente. Integração operando de forma limpa.
-                                      </p>
-                                    )}
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-
-                            {/* Add Integration Form */}
-                            <form onSubmit={handleAdminCreateIntegration} className="p-3 rounded-lg bg-white/[0.01] border border-white/5 flex flex-col gap-2">
-                              <span className="text-[9px] font-bold uppercase tracking-wider text-slate-300">Nova Conexão</span>
-                              <div className="flex gap-1.5">
-                                <input
-                                  type="text"
-                                  required
-                                  value={adminIntegrationName}
-                                  onChange={(e) => setAdminIntegrationName(e.target.value)}
-                                  placeholder="Nome identificador"
-                                  className="flex-1 bg-[#0b0f19] border border-white/10 rounded p-2 text-xs text-white placeholder:text-slate-600 focus:outline-none"
-                                />
-                                <button
-                                  type="submit"
-                                  disabled={adminIntegrationStatus.status === 'saving'}
-                                  className="bg-violet-600 hover:bg-violet-500 text-white font-bold text-[10px] px-3 rounded transition-all flex items-center gap-1 shrink-0 cursor-pointer"
-                                >
-                                  {adminIntegrationStatus.status === 'saving' && <RefreshCw className="w-2.5 h-2.5 animate-spin" />}
-                                  Ativar
-                                </button>
-                              </div>
-                              {adminIntegrationStatus.status === 'success' && (
-                                <span className="text-[9px] text-emerald-400">{adminIntegrationStatus.message}</span>
-                              )}
-                              {adminIntegrationStatus.status === 'error' && (
-                                <span className="text-[9px] text-rose-400">{adminIntegrationStatus.message}</span>
-                              )}
-                            </form>
-                          </div>
-                        ) : (
-                          <div className="p-4 rounded-xl bg-white/[0.02] border border-white/5 text-center text-xs text-slate-500 mt-4">
-                            Selecione um tenant na lista para gerenciar suas integrações.
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                ) : selectedIntegrationTool === 'vault_admin' ? (
-                  // Vault keys expiration & status inspector
-                  <div className="flex flex-col gap-4">
-                    <div className="flex flex-col gap-3 p-4 rounded-xl bg-violet-950/10 border border-violet-500/20 text-xs text-slate-300 leading-relaxed font-sans mb-2">
-                      <div className="flex items-center gap-1.5 text-violet-400 font-extrabold uppercase text-[10px]">
-                        <Lock className="w-3.5 h-3.5" /> Auditoria Gerencial do Cofre (Vault)
-                      </div>
-                      <p>Lista de chaves criptográficas de API e SSH cadastradas para este tenant. Por motivos de segurança, os valores descriptografados originais não são enviados para o navegador.</p>
-                    </div>
-
-                    {isLoadingVaultSecrets ? (
-                      <div className="flex items-center justify-center py-12 gap-3 text-slate-400 text-xs">
-                        <RefreshCw className="w-5 h-5 animate-spin text-violet-400" />
-                        <span>Carregando chaves do cofre...</span>
-                      </div>
-                    ) : vaultSecrets.length > 0 ? (
-                      <div className="flex flex-col gap-2 max-h-[400px] overflow-y-auto pr-1">
-                        {vaultSecrets.map((s) => (
-                          <div key={s.id} className="p-3.5 rounded-xl bg-white/5 border border-white/5 flex items-center justify-between text-xs">
-                            <div className="flex flex-col gap-1">
-                              <span className="font-extrabold text-slate-200">{s.secret_key}</span>
-                              <span className="text-[10px] text-slate-400">{s.description || 'Nenhuma descrição inserida.'}</span>
-                            </div>
-                            <div className="flex flex-col items-end gap-1 font-mono text-[9px] text-slate-500">
-                              <span className="text-emerald-400 font-bold bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/20">PROTEGIDO (AES-256)</span>
-                              <span>Cadastrada: {new Date(s.created_at).toLocaleDateString()}</span>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <div className="text-xs text-slate-500 italic text-center py-10">
-                        Nenhuma credencial configurada no cofre de dados deste tenant.
-                      </div>
-                    )}
-                  </div>
-                ) : selectedIntegrationTool === 'audit_admin' ? (
-                  // SSH Execution Auditing log
-                  <div className="flex flex-col gap-4">
-                    <div className="flex flex-col gap-3 p-4 rounded-xl bg-violet-950/10 border border-violet-500/20 text-xs text-slate-300 leading-relaxed font-sans mb-2">
-                      <div className="flex items-center gap-1.5 text-violet-400 font-extrabold uppercase text-[10px]">
-                        <Shield className="w-3.5 h-3.5" /> Auditoria Forense de Comandos & Runbooks (SOC)
-                      </div>
-                      <p>Rastreabilidade regulatória completa de todas as execuções remotas SSH e ações de auto-cura disparadas pelos operadores na plataforma.</p>
-                    </div>
-
-                    {isLoadingRunbookAudits ? (
-                      <div className="flex items-center justify-center py-12 gap-3 text-slate-400 text-xs">
-                        <RefreshCw className="w-5 h-5 animate-spin text-violet-400" />
-                        <span>Carregando logs de auditoria...</span>
-                      </div>
-                    ) : runbookAudits.length > 0 ? (
-                      <div className="flex flex-col gap-3 max-h-[400px] overflow-y-auto pr-1">
-                        {runbookAudits.map((a) => (
-                          <div key={a.id} className="p-4 rounded-xl bg-[#030712] border border-white/5 flex flex-col gap-3 text-xs leading-relaxed">
-                            <div className="flex justify-between items-start">
-                              <div className="flex flex-col gap-0.5">
-                                <span className="font-bold text-slate-200">Playbook: {a.runbook_name}</span>
-                                <span className="text-[10px] text-slate-400">Operador: {a.operator_name}</span>
-                              </div>
-                              <div className="flex flex-col items-end gap-1">
-                                <span className={`text-[9px] font-bold px-2 py-0.5 rounded border ${
-                                  a.status === 'sucesso' 
-                                    ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' 
-                                    : 'bg-rose-500/10 border-rose-500/20 text-rose-400'
-                                }`}>
-                                  {a.status.toUpperCase()}
-                                </span>
-                                <span className="text-[9px] text-slate-500 font-mono">{new Date(a.created_at).toLocaleString()}</span>
-                              </div>
-                            </div>
-                            
-                            <div className="flex flex-col gap-1 font-mono text-[10px]">
-                              <span className="text-slate-500">Script Executado:</span>
-                              <pre className="p-2.5 rounded bg-black/60 text-slate-300 overflow-x-auto whitespace-pre-wrap">{a.script}</pre>
-                            </div>
-                            
-                            <div className="flex flex-col gap-1 font-mono text-[10px]">
-                              <span className="text-slate-500">Console Output:</span>
-                              <pre className="p-2.5 rounded bg-black/80 text-emerald-400 overflow-x-auto max-h-36 overflow-y-auto whitespace-pre-wrap">{a.output}</pre>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <div className="text-xs text-slate-500 italic text-center py-10">
-                        Nenhuma execução de remediação remota registrada para este cliente.
-                      </div>
-                    )}
-                  </div>
-                ) : selectedIntegrationTool === 'sla_report' ? (
-                  // Relatório Dual-Mode (NOC/SOC Compliance)
-                  <div className="flex flex-col gap-4">
-                    <div className="flex flex-col gap-3 p-4 rounded-xl bg-emerald-950/10 border border-emerald-500/20 text-xs text-slate-300 leading-relaxed font-sans mb-2">
-                      <div className="flex items-center gap-1.5 text-emerald-400 font-extrabold uppercase text-[10px]">
-                        <TrendingUp className="w-3.5 h-3.5" /> Relatório Dual-Mode (NOC/SOC Compliance)
-                      </div>
-                      <p>Mude o modo de visualização entre a perspectiva de governança de negócios (C-Level) ou detalhamento de infraestrutura e cibersegurança (Analistas).</p>
-                      
-                      {/* Mode switcher */}
-                      <div className="flex bg-black/40 rounded-lg p-0.5 mt-1 border border-white/5 w-fit">
-                        <button
-                          onClick={() => setReportMode('executive')}
-                          className={`px-3 py-1 text-[10px] uppercase font-bold tracking-wide rounded-md transition-all cursor-pointer ${
-                            reportMode === 'executive'
-                              ? 'bg-emerald-500 text-slate-950'
-                              : 'text-slate-400 hover:text-slate-200'
-                          }`}
-                        >
-                          Modo Executivo (Business)
-                        </button>
-                        <button
-                          onClick={() => setReportMode('technical')}
-                          className={`px-3 py-1 text-[10px] uppercase font-bold tracking-wide rounded-md transition-all cursor-pointer ${
-                            reportMode === 'technical'
-                              ? 'bg-emerald-500 text-slate-950'
-                              : 'text-slate-400 hover:text-slate-200'
-                          }`}
-                        >
-                          Modo Técnico (SOC)
-                        </button>
-                      </div>
-                    </div>
-
-                    {isLoadingSla ? (
-                      <div className="flex items-center justify-center py-16 gap-3 text-slate-400 text-xs">
-                        <RefreshCw className="w-5 h-5 animate-spin text-emerald-400" />
-                        <span>Carregando estatísticas do banco...</span>
-                      </div>
-                    ) : slaData ? (
-                      <div className="flex flex-col gap-5">
-                        {reportMode === 'executive' ? (
-                          <>
-                            {/* Executive view */}
-                            {/* Summary Metrics Grid */}
-                            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-                              <div className="p-4 rounded-xl bg-white/5 border border-white/5 flex flex-col gap-1">
-                                <span className="text-[9px] uppercase font-bold text-slate-500 tracking-wider">Conformidade SLA</span>
-                                <span className="text-xl font-extrabold text-emerald-400">{slaData.sla_compliance.toFixed(2)}%</span>
-                                <span className="text-[8px] text-slate-400">Meta Contratual: 99.90%</span>
-                              </div>
-                              <div className="p-4 rounded-xl bg-white/5 border border-white/5 flex flex-col gap-1">
-                                <span className="text-[9px] uppercase font-bold text-slate-500 tracking-wider">Total de Alertas</span>
-                                <span className="text-xl font-extrabold text-white">{slaData.total_incidents}</span>
-                                <span className="text-[8px] text-slate-400">Últimos 30 dias</span>
-                              </div>
-                              <div className="p-4 rounded-xl bg-white/5 border border-white/5 flex flex-col gap-1">
-                                <span className="text-[9px] uppercase font-bold text-slate-500 tracking-wider">TTA (Atendimento)</span>
-                                <span className="text-xl font-extrabold text-amber-400">{slaData.average_tta.toFixed(1)}m</span>
-                                <span className="text-[8px] text-slate-400">Média de Triagem</span>
-                              </div>
-                              <div className="p-4 rounded-xl bg-white/5 border border-white/5 flex flex-col gap-1">
-                                <span className="text-[9px] uppercase font-bold text-slate-500 tracking-wider">TTR (Resolução)</span>
-                                <span className="text-xl font-extrabold text-violet-400">{slaData.average_ttr.toFixed(1)}m</span>
-                                <span className="text-[8px] text-slate-400">Média de Solução</span>
-                              </div>
-                            </div>
-
-                            {/* Compliance Checklists */}
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                              <div className="p-4 rounded-xl bg-white/5 border border-white/5 flex flex-col gap-2">
-                                <h5 className="text-xs font-bold text-slate-200 uppercase tracking-wider">Conformidade Regulatória LGPD</h5>
-                                <div className="flex flex-col gap-1.5 text-[10px]">
-                                  <div className="flex items-center justify-between">
-                                    <span className="text-slate-400">Isolamento Lógico (Multi-tenancy RLS)</span>
-                                    <span className="text-emerald-400 font-bold bg-emerald-500/10 px-1.5 py-0.5 rounded">100% OK</span>
-                                  </div>
-                                  <div className="flex items-center justify-between">
-                                    <span className="text-slate-400">Encriptação de Segredos no Cofre (AES)</span>
-                                    <span className="text-emerald-400 font-bold bg-emerald-500/10 px-1.5 py-0.5 rounded">100% OK</span>
-                                  </div>
-                                  <div className="flex items-center justify-between">
-                                    <span className="text-slate-400">Retenção de Logs de Auditoria SSH</span>
-                                    <span className="text-emerald-400 font-bold bg-emerald-500/10 px-1.5 py-0.5 rounded">Ativo</span>
-                                  </div>
-                                </div>
-                              </div>
-
-                              <div className="p-4 rounded-xl bg-white/5 border border-white/5 flex flex-col gap-2">
-                                <h5 className="text-xs font-bold text-slate-200 uppercase tracking-wider">Conformidade ISO 27001</h5>
-                                <div className="flex flex-col gap-1.5 text-[10px]">
-                                  <div className="flex items-center justify-between">
-                                    <span className="text-slate-400">Controles de Acesso RBAC Ativos</span>
-                                    <span className="text-emerald-400 font-bold bg-emerald-500/10 px-1.5 py-0.5 rounded">Ativo</span>
-                                  </div>
-                                  <div className="flex items-center justify-between">
-                                    <span className="text-slate-400">Previsão e Rastreabilidade de Incidentes</span>
-                                    <span className="text-emerald-400 font-bold bg-emerald-500/10 px-1.5 py-0.5 rounded">100% OK</span>
-                                  </div>
-                                  <div className="flex items-center justify-between">
-                                    <span className="text-slate-400">Plano de Resposta Rápida (SOAR)</span>
-                                    <span className="text-emerald-400 font-bold bg-emerald-500/10 px-1.5 py-0.5 rounded">Ativo</span>
-                                  </div>
-                                </div>
-                              </div>
-                            </div>
-
-                            {/* Export/Download SLA PDF */}
-                            <div className="p-5 rounded-xl bg-[#0e1626] border border-cyan-500/10 flex items-center justify-between mt-2">
-                              <div className="flex flex-col gap-0.5">
-                                <h5 className="text-xs font-bold text-white">Relatório Executivo Mensal</h5>
-                                <p className="text-[10px] text-slate-400">Gere e baixe a via em PDF oficial com assinaturas e log de incidentes.</p>
-                              </div>
-                              <button
-                                onClick={() => {
-                                  window.open(`${API_BASE_URL}/api/v1/reports/sla?token=${token || selectedTenant.id}&tenant_name=${encodeURIComponent(selectedTenant.name)}`);
-                                }}
-                                className="bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold uppercase tracking-wider text-[10px] px-4 py-2.5 rounded-lg flex items-center gap-1.5 transition-all shadow-lg cursor-pointer"
-                              >
-                                <FileText className="w-3.5 h-3.5" />
-                                Baixar Relatório PDF
-                              </button>
-                            </div>
-                          </>
-                        ) : (
-                          <>
-                            {/* Technical SOC view */}
-                            {/* MITRE ATT&CK Matrix simulation */}
-                            <div className="p-4 rounded-xl bg-white/5 border border-white/5 flex flex-col gap-3">
-                              <div className="flex justify-between items-center">
-                                <h5 className="text-xs font-bold text-slate-200 uppercase tracking-wider">Mapeamento Tático MITRE ATT&CK</h5>
-                                <span className="text-[9px] font-mono text-slate-500">v13 Enterprise Matrix</span>
-                              </div>
-                              
-                              <div className="grid grid-cols-3 gap-3 text-[10px]">
-                                <div className="p-2.5 rounded bg-slate-900 border border-white/5 flex flex-col gap-1.5">
-                                  <span className="font-bold text-slate-400 border-b border-white/5 pb-1">1. Initial Access</span>
-                                  <div className="flex flex-col gap-1">
-                                    <span className="p-1 rounded bg-rose-500/10 text-rose-400 border border-rose-500/20 font-medium">T1078 Valid Accounts (VPN)</span>
-                                    <span className="p-1 rounded bg-white/5 text-slate-400 font-medium">T1190 Exploit Public-Facing App</span>
-                                  </div>
-                                </div>
-                                
-                                <div className="p-2.5 rounded bg-slate-900 border border-white/5 flex flex-col gap-1.5">
-                                  <span className="font-bold text-slate-400 border-b border-white/5 pb-1">2. Credential Access</span>
-                                  <div className="flex flex-col gap-1">
-                                    <span className="p-1 rounded bg-rose-500/10 text-rose-400 border border-rose-500/20 font-medium">T1110 Brute Force (SSH)</span>
-                                    <span className="p-1 rounded bg-white/5 text-slate-400 font-medium">T1555 Credentials from Store</span>
-                                  </div>
-                                </div>
-
-                                <div className="p-2.5 rounded bg-slate-900 border border-white/5 flex flex-col gap-1.5">
-                                  <span className="font-bold text-slate-400 border-b border-white/5 pb-1">3. Impact</span>
-                                  <div className="flex flex-col gap-1">
-                                    <span className="p-1 rounded bg-rose-500/10 text-rose-400 border border-rose-500/20 font-medium">T1498 Network DoS (Loki)</span>
-                                    <span className="p-1 rounded bg-white/5 text-slate-400 font-medium">T1489 Service Stop</span>
-                                  </div>
-                                </div>
-                              </div>
-                            </div>
-
-                            {/* Threat Intelligence Feed simulator */}
-                            <div className="p-4 rounded-xl bg-[#030712] border border-white/5 flex flex-col gap-2.5">
-                              <h5 className="text-xs font-bold text-slate-200 uppercase tracking-wider">Feed Integrado de Threat Intelligence</h5>
-                              <div className="flex flex-col gap-2 max-h-[140px] overflow-y-auto pr-1">
-                                <div className="p-2 rounded bg-white/5 flex items-center justify-between text-xs">
-                                  <div className="flex flex-col gap-0.5">
-                                    <span className="font-extrabold text-rose-400 font-mono">[CVE-2026-9912] Threat Advisory</span>
-                                    <span className="text-[10px] text-slate-400">Atividade suspeita vinda do IP malicioso catalogado: 198.51.100.42</span>
-                                  </div>
-                                  <span className="text-[8px] font-bold bg-rose-500/15 text-rose-400 px-2 py-0.5 rounded border border-rose-500/30 uppercase">Bloqueado SOAR</span>
-                                </div>
-                                <div className="p-2 rounded bg-white/5 flex items-center justify-between text-xs">
-                                  <div className="flex flex-col gap-0.5">
-                                    <span className="font-extrabold text-amber-400 font-mono">[STIX/TAXII feed] IP Reputation</span>
-                                    <span className="text-[10px] text-slate-400">Scanner de porta de entrada detectado em múltiplos firewalls periféricos.</span>
-                                  </div>
-                                  <span className="text-[8px] font-bold bg-amber-500/15 text-amber-400 px-2 py-0.5 rounded border border-amber-500/30 uppercase">Monitorando</span>
-                                </div>
-                              </div>
-                            </div>
-                          </>
-                        )}
-                      </div>
-                    ) : (
-                      <div className="text-xs text-slate-500 italic text-center py-10">
-                        Nenhum dado operacional registrado para calcular métricas de SLA.
-                      </div>
-                    )}
-                  </div>
-                ) : null}
-
-              </div>
-            </div>
-
           </div>
         </div>
       )}

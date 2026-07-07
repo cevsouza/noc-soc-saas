@@ -8,6 +8,7 @@ import (
 	"noc-api/internal/middleware"
 	"noc-api/internal/model"
 	"noc-api/internal/loki"
+	"noc-api/internal/connector"
 	"time"
 
 	"github.com/google/uuid"
@@ -251,6 +252,18 @@ func HandleGetIntegrationStatus(pgPool *pgxpool.Pool, redisClient *redis.Client)
 			} else {
 				redisClient.Set(ctx, "heartbeat:connector:"+tenantID.String()+":loki", time.Now().Unix(), 24*time.Hour)
 				redisClient.Del(ctx, "webhook:error:"+tenantID.String()+":loki")
+			}
+		}
+
+		// Live status check for Sentinel on demand
+		if integrationType == "sentinel" {
+			sentinelConnector := connector.NewSentinelConnector(pgPool, redisClient)
+			if err := sentinelConnector.TestConnection(ctx, tenantID); err != nil {
+				errMsg := fmt.Sprintf("Sentinel connection check failed: %v", err)
+				redisClient.Set(ctx, "webhook:error:"+tenantID.String()+":sentinel", errMsg, 24*time.Hour)
+			} else {
+				redisClient.Set(ctx, "heartbeat:connector:"+tenantID.String()+":sentinel", time.Now().Unix(), 24*time.Hour)
+				redisClient.Del(ctx, "webhook:error:"+tenantID.String()+":sentinel")
 			}
 		}
 		
