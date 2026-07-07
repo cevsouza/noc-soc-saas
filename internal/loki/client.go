@@ -189,3 +189,38 @@ func isIP(host string) bool {
 	}
 	return true
 }
+
+// TestConnection checks if Loki is responsive by querying its ready endpoint
+func (c *LokiClient) TestConnection(ctx context.Context, tenantID uuid.UUID) error {
+	tenantCtx := db.WithTenantID(ctx, tenantID)
+	cfg, err := c.getLokiConfig(tenantCtx, tenantID)
+	if err != nil {
+		return fmt.Errorf("loki configuration not found in Vault: %w", err)
+	}
+
+	if cfg.URL == "mock_loki" || cfg.URL == "" {
+		return nil // Mock is always ready
+	}
+
+	reqURL := cfg.URL + "/ready"
+	req, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
+	if err != nil {
+		return err
+	}
+
+	if cfg.Username != "" && cfg.Password != "" {
+		req.SetBasicAuth(cfg.Username, cfg.Password)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to reach Loki at %s: %w", cfg.URL, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("loki ready check returned status %d", resp.StatusCode)
+	}
+
+	return nil
+}

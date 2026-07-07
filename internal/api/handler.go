@@ -365,6 +365,8 @@ func HandleWazuhIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) http.Han
 
 		var payload WazuhAlertPayload
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			errMsg := fmt.Sprintf("Bad Request: Invalid Wazuh JSON payload: %v", err)
+			redisClient.Set(r.Context(), fmt.Sprintf("webhook:error:%s:%s", tenantID.String(), "wazuh"), errMsg, 24*time.Hour)
 			http.Error(w, "Bad Request: Invalid Wazuh JSON payload", http.StatusBadRequest)
 			return
 		}
@@ -382,6 +384,10 @@ func HandleWazuhIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) http.Han
 			http.Error(w, "Internal Server Error: Failed to queue alert", http.StatusInternalServerError)
 			return
 		}
+
+		// Register heartbeat in Redis and clear any previous errors
+		redisClient.Set(r.Context(), fmt.Sprintf("heartbeat:connector:%s:%s", tenantID.String(), "wazuh"), time.Now().Unix(), 24*time.Hour)
+		redisClient.Del(r.Context(), fmt.Sprintf("webhook:error:%s:%s", tenantID.String(), "wazuh"))
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
@@ -889,6 +895,8 @@ func HandleGrafanaIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) http.H
 
 		var payload AlertmanagerPayload // Grafana alert format matches Prometheus Alertmanager structure
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			errMsg := fmt.Sprintf("Bad Request: Invalid Grafana alert JSON payload: %v", err)
+			redisClient.Set(r.Context(), fmt.Sprintf("webhook:error:%s:%s", tenantID.String(), "grafana"), errMsg, 24*time.Hour)
 			http.Error(w, "Bad Request: Invalid Grafana alert JSON payload", http.StatusBadRequest)
 			return
 		}
@@ -919,6 +927,10 @@ func HandleGrafanaIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) http.H
 				return
 			}
 		}
+
+		// Register heartbeat in Redis and clear any previous errors
+		redisClient.Set(r.Context(), fmt.Sprintf("heartbeat:connector:%s:%s", tenantID.String(), "grafana"), time.Now().Unix(), 24*time.Hour)
+		redisClient.Del(r.Context(), fmt.Sprintf("webhook:error:%s:%s", tenantID.String(), "grafana"))
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)

@@ -7,6 +7,7 @@ import (
 	"noc-api/internal/db"
 	"noc-api/internal/middleware"
 	"noc-api/internal/model"
+	"noc-api/internal/loki"
 	"time"
 
 	"github.com/google/uuid"
@@ -239,6 +240,18 @@ func HandleGetIntegrationStatus(pgPool *pgxpool.Pool, redisClient *redis.Client)
 		if err != nil {
 			http.Error(w, "Bad Request: Invalid tenant ID", http.StatusBadRequest)
 			return
+		}
+
+		// Live status check for Loki on demand
+		if integrationType == "loki" {
+			lokiClient := loki.NewLokiClient(pgPool)
+			if err := lokiClient.TestConnection(ctx, tenantID); err != nil {
+				errMsg := fmt.Sprintf("Loki ready check failed: %v", err)
+				redisClient.Set(ctx, "webhook:error:"+tenantID.String()+":loki", errMsg, 24*time.Hour)
+			} else {
+				redisClient.Set(ctx, "heartbeat:connector:"+tenantID.String()+":loki", time.Now().Unix(), 24*time.Hour)
+				redisClient.Del(ctx, "webhook:error:"+tenantID.String()+":loki")
+			}
 		}
 		
 		// 1. Get heartbeat

@@ -489,6 +489,10 @@ export default function CockpitPage() {
   };
 
   useEffect(() => {
+    setValidationResult(null);
+  }, [selectedIntegrationTool, selectedTenant, selectedAdminTenant, adminIntegrationTool]);
+
+  useEffect(() => {
     if (selectedIntegrationTool === 'users_admin') {
       fetchAdminUsers();
     }
@@ -3469,53 +3473,6 @@ export default function CockpitPage() {
                             <span>3. Defina a URL de envio apontando para a URL de Webhook do Tenant acima.</span>
                             <span>4. Habilite o envio e configure ações de trigger para despachar alertas à fila da IT Fácil.</span>
                           </div>
-                          
-                          <div className="p-3 rounded-lg bg-surface/30 border border-white/5 flex flex-col gap-2.5">
-                            <div className="flex items-center justify-between">
-                              <span className="text-[10px] uppercase font-bold tracking-wider text-slate-400">
-                                Validação de Comunicação
-                              </span>
-                              <button
-                                onClick={() => handleValidateIntegration('zabbix')}
-                                disabled={isValidating}
-                                className="px-2.5 py-1 rounded bg-rose-500/10 hover:bg-rose-500/20 disabled:bg-white/5 text-rose-400 disabled:text-slate-500 border border-rose-500/25 disabled:border-transparent transition-all text-[10px] font-bold cursor-pointer"
-                              >
-                                {isValidating ? 'Validando...' : 'Testar Conexão / Logs'}
-                              </button>
-                            </div>
-
-                            {validationResult && (
-                              <div className="flex flex-col gap-2 font-sans text-xs">
-                                <div className="flex items-center gap-1.5">
-                                  <span className="text-slate-400">Status do Conector:</span>
-                                  {validationResult.status === 'active' ? (
-                                    <span className="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-bold uppercase text-[9px]">Ativo (Online)</span>
-                                  ) : validationResult.status === 'offline' ? (
-                                    <span className="px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 font-bold uppercase text-[9px]">Offline (Sem Telemetria)</span>
-                                  ) : (
-                                    <span className="px-1.5 py-0.5 rounded bg-slate-500/10 text-slate-400 border border-slate-500/20 font-bold uppercase text-[9px]">Inativo (Sem Sinal)</span>
-                                  )}
-                                </div>
-                                {validationResult.last_seen > 0 && (
-                                  <div className="text-[10px] text-slate-500 leading-none">
-                                    Último sinal recebido: {new Date(validationResult.last_seen * 1000).toLocaleString('pt-BR')}
-                                  </div>
-                                )}
-                                <div className="flex flex-col gap-1 mt-1">
-                                  <span className="text-slate-400 font-semibold">Verbose / Logs de Erro do Webhook:</span>
-                                  {validationResult.last_error ? (
-                                    <pre className="p-2.5 rounded bg-red-950/15 border border-red-500/20 text-[10px] text-red-400 font-mono overflow-x-auto max-h-[100px] whitespace-pre-wrap leading-tight">
-                                      {validationResult.last_error}
-                                    </pre>
-                                  ) : (
-                                    <p className="text-[10px] text-emerald-400 font-semibold bg-emerald-500/5 p-2 rounded border border-emerald-500/15">
-                                      ✓ Nenhuma falha pendente. Integração operando de forma limpa.
-                                    </p>
-                                  )}
-                                </div>
-                              </div>
-                            )}
-                          </div>
 
                           <div className="p-2.5 rounded bg-white/[0.02] border border-white/5 text-[10px]">
                             <span className="font-bold text-slate-400 block mb-1">Mapeamento & Normalização:</span>
@@ -3579,6 +3536,57 @@ export default function CockpitPage() {
                             <span className="font-bold text-slate-400 block mb-1">Mapeamento & Normalização:</span>
                             <p>As métricas e gráficos anexados ao alerta são interpretados para mapear o dispositivo afetado de forma unívoca, descartando informações ruidosas e reduzindo o tempo médio de mitigação (MTTR).</p>
                           </div>
+                        </div>
+                      )}
+
+                      {/* Unified Validation Box for Webhooks */}
+                      {['uptimekuma', 'zabbix', 'prometheus', 'wazuh', 'grafana'].includes(selectedIntegrationTool) && (
+                        <div className="p-3 rounded-lg bg-surface/30 border border-white/5 flex flex-col gap-2.5 mt-3">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] uppercase font-bold tracking-wider text-slate-400">
+                              Validação de Comunicação
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => handleValidateIntegration(selectedIntegrationTool)}
+                              disabled={isValidating}
+                              className="px-2.5 py-1 rounded bg-rose-500/10 hover:bg-rose-500/20 disabled:bg-white/5 text-rose-400 disabled:text-slate-500 border border-rose-500/25 disabled:border-transparent transition-all text-[10px] font-bold cursor-pointer"
+                            >
+                              {isValidating ? 'Validando...' : 'Testar Conexão / Logs'}
+                            </button>
+                          </div>
+
+                          {validationResult && (
+                            <div className="flex flex-col gap-2 font-sans text-xs">
+                              <div className="flex items-center gap-1.5">
+                                <span className="text-slate-400">Status do Conector:</span>
+                                {validationResult.status === 'active' ? (
+                                  <span className="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-bold uppercase text-[9px]">Ativo (Online)</span>
+                                ) : validationResult.status === 'offline' ? (
+                                  <span className="px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 font-bold uppercase text-[9px]">Offline (Sem Telemetria)</span>
+                                ) : (
+                                  <span className="px-1.5 py-0.5 rounded bg-slate-500/10 text-slate-400 border border-slate-500/20 font-bold uppercase text-[9px]">Inativo (Sem Sinal)</span>
+                                )}
+                              </div>
+                              {validationResult.last_seen > 0 && (
+                                <div className="text-[10px] text-slate-500 leading-none">
+                                  Último sinal recebido: {new Date(validationResult.last_seen * 1000).toLocaleString('pt-BR')}
+                                </div>
+                              )}
+                              <div className="flex flex-col gap-1 mt-1">
+                                <span className="text-slate-400 font-semibold">Verbose / Logs de Erro do Webhook:</span>
+                                {validationResult.last_error ? (
+                                  <pre className="p-2.5 rounded bg-red-950/15 border border-red-500/20 text-[10px] text-red-400 font-mono overflow-x-auto max-h-[100px] whitespace-pre-wrap leading-tight">
+                                    {validationResult.last_error}
+                                  </pre>
+                                ) : (
+                                  <p className="text-[10px] text-emerald-400 font-semibold bg-emerald-500/5 p-2 rounded border border-emerald-500/15">
+                                    ✓ Nenhuma falha pendente. Integração operando de forma limpa.
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>
@@ -3702,6 +3710,57 @@ export default function CockpitPage() {
                             <span>2. Preencha o Usuário de conexão correspondente (ex: <code>sre_runner</code> ou <code>soc_agent</code>).</span>
                             <span>3. Estes dados são encriptados localmente e trafegados exclusivamente via túnel SSH criptografado para executar comandos como reinicialização de IIS ou contenção de hosts via EDR/Firewall periférico.</span>
                           </div>
+                        </div>
+                      )}
+
+                      {/* Unified Validation Box for Pull Integrations */}
+                      {['sentinel', 'loki'].includes(selectedIntegrationTool) && (
+                        <div className="p-3 rounded-lg bg-surface/30 border border-white/5 flex flex-col gap-2.5 mt-3">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] uppercase font-bold tracking-wider text-slate-400">
+                              Validação de Comunicação
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => handleValidateIntegration(selectedIntegrationTool)}
+                              disabled={isValidating}
+                              className="px-2.5 py-1 rounded bg-rose-500/10 hover:bg-rose-500/20 disabled:bg-white/5 text-rose-400 disabled:text-slate-500 border border-rose-500/25 disabled:border-transparent transition-all text-[10px] font-bold cursor-pointer"
+                            >
+                              {isValidating ? 'Validando...' : 'Testar Conexão / Logs'}
+                            </button>
+                          </div>
+
+                          {validationResult && (
+                            <div className="flex flex-col gap-2 font-sans text-xs">
+                              <div className="flex items-center gap-1.5">
+                                <span className="text-slate-400">Status do Conector:</span>
+                                {validationResult.status === 'active' ? (
+                                  <span className="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-bold uppercase text-[9px]">Ativo (Online)</span>
+                                ) : validationResult.status === 'offline' ? (
+                                  <span className="px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 font-bold uppercase text-[9px]">Offline (Sem Telemetria)</span>
+                                ) : (
+                                  <span className="px-1.5 py-0.5 rounded bg-slate-500/10 text-slate-400 border border-slate-500/20 font-bold uppercase text-[9px]">Inativo (Sem Sinal)</span>
+                                )}
+                              </div>
+                              {validationResult.last_seen > 0 && (
+                                <div className="text-[10px] text-slate-500 leading-none">
+                                  Último sinal recebido: {new Date(validationResult.last_seen * 1000).toLocaleString('pt-BR')}
+                                </div>
+                              )}
+                              <div className="flex flex-col gap-1 mt-1">
+                                <span className="text-slate-400 font-semibold">Verbose / Logs de Erro:</span>
+                                {validationResult.last_error ? (
+                                  <pre className="p-2.5 rounded bg-red-950/15 border border-red-500/20 text-[10px] text-red-400 font-mono overflow-x-auto max-h-[100px] whitespace-pre-wrap leading-tight">
+                                    {validationResult.last_error}
+                                  </pre>
+                                ) : (
+                                  <p className="text-[10px] text-emerald-400 font-semibold bg-emerald-500/5 p-2 rounded border border-emerald-500/15">
+                                    ✓ Conexão bem-sucedida. Integração operando de forma limpa.
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>
