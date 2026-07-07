@@ -1225,8 +1225,8 @@ func HandleCleanupAlerts(pgPool *pgxpool.Pool) http.HandlerFunc {
 		err := db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
 			query := `
 				DELETE FROM alerts 
-				WHERE (ai_analysis->>'host' IN ('watchdog', 'azure-sentinel-vm', 'web-server-99', 'simulado') 
-				   OR payload->>'host' IN ('watchdog', 'azure-sentinel-vm', 'web-server-99', 'simulado') 
+				WHERE (ai_analysis->>'host' IN ('watchdog', 'azure-sentinel-vm', 'web-server-99', 'db-node-03', 'auth-gateway', 'ad-domain-controller-01', 'simulado') 
+				   OR payload->>'host' IN ('watchdog', 'azure-sentinel-vm', 'web-server-99', 'db-node-03', 'auth-gateway', 'ad-domain-controller-01', 'simulado') 
 				   OR summary LIKE '%Mock%' 
 				   OR summary LIKE '%Simulado%' 
 				   OR summary LIKE '%teste%')
