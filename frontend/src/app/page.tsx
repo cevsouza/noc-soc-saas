@@ -251,7 +251,8 @@ export default function CockpitPage() {
   const [playbookScript, setPlaybookScript] = useState('');
   const [playbookVaultKey, setPlaybookVaultKey] = useState('ssh');
   const [playbookStatus, setPlaybookStatus] = useState<{ status: 'idle' | 'saving' | 'success' | 'error', message?: string }>({ status: 'idle' });
-  const [playbookIsGlobal, setPlaybookIsGlobal] = useState(false);
+  const [playbookTargetTenantId, setPlaybookTargetTenantId] = useState<string>('all');
+  const [playbooksFilter, setPlaybooksFilter] = useState<'all' | 'tenant'>('all');
   const [simulatorNotification, setSimulatorNotification] = useState<string | null>(null);
   const [activeSummaryModal, setActiveSummaryModal] = useState<'total' | 'fatal' | 'critical' | 'warning' | 'info' | null>(null);
   
@@ -1299,7 +1300,8 @@ export default function CockpitPage() {
     if (!token || !selectedTenant) return;
     setIsLoadingSettingsPlaybooks(true);
     try {
-      const res = await fetch(`${API_BASE_URL}/api/v1/runbooks?tenant_id=${selectedTenant.id}`, {
+      const qTenant = playbooksFilter === 'all' ? 'all' : selectedTenant.id;
+      const res = await fetch(`${API_BASE_URL}/api/v1/runbooks?tenant_id=${qTenant}`, {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -1318,14 +1320,15 @@ export default function CockpitPage() {
   useEffect(() => {
     if (!token || !selectedTenant || selectedIntegrationTool !== 'playbooks_admin') return;
     fetchPlaybooksAdmin();
-  }, [selectedTenant, selectedIntegrationTool, token]);
+  }, [selectedTenant, selectedIntegrationTool, token, playbooksFilter]);
 
   const handleCreatePlaybook = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!token || !selectedTenant) return;
     setPlaybookStatus({ status: 'saving' });
     try {
-      const res = await fetch(`${API_BASE_URL}/api/v1/runbooks?tenant_id=${selectedTenant.id}`, {
+      const targetUrlTenant = playbookTargetTenantId === 'all' ? selectedTenant.id : playbookTargetTenantId;
+      const res = await fetch(`${API_BASE_URL}/api/v1/runbooks?tenant_id=${targetUrlTenant}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1336,7 +1339,7 @@ export default function CockpitPage() {
           trigger_rule: playbookTrigger,
           script: playbookScript,
           vault_key_host: playbookVaultKey,
-          is_global: playbookIsGlobal
+          is_global: playbookTargetTenantId === 'all'
         })
       });
       if (res.ok) {
@@ -1344,7 +1347,7 @@ export default function CockpitPage() {
         setPlaybookName('');
         setPlaybookTrigger('');
         setPlaybookScript('');
-        setPlaybookIsGlobal(false);
+        setPlaybookTargetTenantId('all');
         fetchPlaybooksAdmin();
       } else {
         const txt = await res.text();
@@ -3320,29 +3323,19 @@ export default function CockpitPage() {
                           </div>
 
                           <div className="flex flex-col gap-1.5">
-                            <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Escopo de Atuação do Playbook</label>
-                            <div className="flex gap-4 mt-1 mb-1">
-                              <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
-                                <input
-                                  type="radio"
-                                  name="playbookScope"
-                                  checked={!playbookIsGlobal}
-                                  onChange={() => setPlaybookIsGlobal(false)}
-                                  className="accent-cyan-400"
-                                />
-                                <span>Apenas este cliente ({selectedTenant.name})</span>
-                              </label>
-                              <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
-                                <input
-                                  type="radio"
-                                  name="playbookScope"
-                                  checked={playbookIsGlobal}
-                                  onChange={() => setPlaybookIsGlobal(true)}
-                                  className="accent-cyan-400"
-                                />
-                                <span className="text-cyan-400 font-semibold flex items-center gap-1">🌐 Todos os Clientes (Global)</span>
-                              </label>
-                            </div>
+                            <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Associar ao Tenant / Cliente</label>
+                            <select
+                              value={playbookTargetTenantId}
+                              onChange={(e) => setPlaybookTargetTenantId(e.target.value)}
+                              className="bg-[#0b0f19] border border-white/10 rounded-lg p-2 text-xs text-white focus:outline-none focus:border-violet-500"
+                            >
+                              <option value="all">🌐 Todos os Tenants (Playbook Global)</option>
+                              {tenants.map((t) => (
+                                <option key={t.id} value={t.id}>
+                                  🏢 {t.name}
+                                </option>
+                              ))}
+                            </select>
                           </div>
 
                           <div className="flex flex-col gap-1.5">
@@ -3397,18 +3390,46 @@ export default function CockpitPage() {
 
                       {/* Right side: List Playbooks */}
                       <div className="flex flex-col gap-4 animate-fadeIn">
-                        <div className="flex items-center justify-between border-b border-white/5 pb-2">
-                          <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400 block font-sans">
-                            Playbooks Ativos ({selectedTenant.name})
-                          </label>
-                          <button
-                            onClick={fetchPlaybooksAdmin}
-                            disabled={isLoadingSettingsPlaybooks}
-                            className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-white/5 hover:bg-white/10 border border-white/10 text-[9px] text-slate-300 font-medium transition-all cursor-pointer"
-                          >
-                            <RefreshCw className={`w-2.5 h-2.5 ${isLoadingSettingsPlaybooks ? 'animate-spin' : ''}`} />
-                            <span>Atualizar</span>
-                          </button>
+                        <div className="flex flex-col gap-2 border-b border-white/5 pb-3">
+                          <div className="flex items-center justify-between">
+                            <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400 block font-sans">
+                              Playbooks Ativos
+                            </label>
+                            <button
+                              onClick={fetchPlaybooksAdmin}
+                              disabled={isLoadingSettingsPlaybooks}
+                              className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-white/5 hover:bg-white/10 border border-white/10 text-[9px] text-slate-300 font-medium transition-all cursor-pointer"
+                            >
+                              <RefreshCw className={`w-2.5 h-2.5 ${isLoadingSettingsPlaybooks ? 'animate-spin' : ''}`} />
+                              <span>Atualizar</span>
+                            </button>
+                          </div>
+
+                          {/* Filter Segmented Control */}
+                          <div className="flex bg-[#0a0f1d] border border-white/5 p-0.5 rounded-lg w-full">
+                            <button
+                              type="button"
+                              onClick={() => setPlaybooksFilter('all')}
+                              className={`flex-1 py-1 text-[10px] font-bold rounded-md transition-all cursor-pointer text-center ${
+                                playbooksFilter === 'all'
+                                  ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/20'
+                                  : 'text-slate-500 hover:text-slate-300 border border-transparent'
+                              }`}
+                            >
+                              🌐 Todos os Tenants
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setPlaybooksFilter('tenant')}
+                              className={`flex-1 py-1 text-[10px] font-bold rounded-md transition-all cursor-pointer text-center ${
+                                playbooksFilter === 'tenant'
+                                  ? 'bg-purple-500/10 text-purple-400 border border-purple-500/20'
+                                  : 'text-slate-500 hover:text-slate-300 border border-transparent'
+                              }`}
+                            >
+                              🏢 Apenas {selectedTenant.name || 'Cliente Ativo'}
+                            </button>
+                          </div>
                         </div>
 
                         {isLoadingSettingsPlaybooks ? (
@@ -3437,7 +3458,7 @@ export default function CockpitPage() {
                                         </span>
                                       ) : (
                                         <span className="px-1.5 py-0.5 rounded text-[8px] font-bold bg-purple-500/10 border border-purple-500/30 text-purple-400 uppercase flex items-center gap-0.5">
-                                          🏢 Tenant
+                                          🏢 {p.tenant_name || 'Tenant'}
                                         </span>
                                       )}
                                     </div>

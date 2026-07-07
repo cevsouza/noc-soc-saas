@@ -32,19 +32,13 @@ type ExecuteRunbookRequest struct {
 	IncidentID uuid.UUID `json:"incident_id"`
 }
 
-// HandleGetRunbooks returns the list of runbooks for the current tenant.
+// HandleGetRunbooks returns the list of runbooks. If tenant_id = all, it bypasses RLS and returns all runbooks.
 func HandleGetRunbooks(pgPool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		tenantID, ok := resolveTenantID(r)
-		if !ok {
-			http.Error(w, "Unauthorized: Tenant context not found", http.StatusUnauthorized)
-			return
-		}
-		ctx := db.WithTenantID(r.Context(), tenantID)
-
 		type RunbookResponse struct {
 			ID           uuid.UUID `json:"id"`
 			TenantID     uuid.UUID `json:"tenant_id"`
+			TenantName   string    `json:"tenant_name"`
 			Name         string    `json:"name"`
 			TriggerRule  string    `json:"trigger_rule"`
 			Script       string    `json:"script"`
@@ -54,27 +48,82 @@ func HandleGetRunbooks(pgPool *pgxpool.Pool) http.HandlerFunc {
 		}
 
 		list := make([]RunbookResponse, 0)
-		err := db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
-			rows, err := tx.Query(ctx, "SELECT id, tenant_id, name, trigger_rule, script, vault_key_host, is_global, created_at FROM tenant_runbooks WHERE tenant_id = $1 OR is_global = TRUE ORDER BY name", tenantID)
+		tenantParam := r.URL.Query().Get("tenant_id")
+
+		if tenantParam == "all" {
+			tx, err := pgPool.Begin(r.Context())
 			if err != nil {
-				return err
+				http.Error(w, "Failed to begin transaction", http.StatusInternalServerError)
+				return
+			}
+			defer tx.Rollback(r.Context())
+
+			if _, err := tx.Exec(r.Context(), "SET LOCAL app.bypass_rls = 'true'"); err != nil {
+				http.Error(w, "Failed to bypass RLS", http.StatusInternalServerError)
+				return
+			}
+
+			rows, err := tx.Query(r.Context(), `
+				SELECT r.id, r.tenant_id, t.name, r.name, r.trigger_rule, r.script, r.vault_key_host, r.is_global, r.created_at 
+				FROM tenant_runbooks r 
+				JOIN tenants t ON r.tenant_id = t.id 
+				ORDER BY r.name
+			`)
+			if err != nil {
+				http.Error(w, "Failed to query all runbooks", http.StatusInternalServerError)
+				return
 			}
 			defer rows.Close()
 
 			for rows.Next() {
 				var rb RunbookResponse
-				err := rows.Scan(&rb.ID, &rb.TenantID, &rb.Name, &rb.TriggerRule, &rb.Script, &rb.VaultKeyHost, &rb.IsGlobal, &rb.CreatedAt)
+				err := rows.Scan(&rb.ID, &rb.TenantID, &rb.TenantName, &rb.Name, &rb.TriggerRule, &rb.Script, &rb.VaultKeyHost, &rb.IsGlobal, &rb.CreatedAt)
 				if err != nil {
-					return err
+					http.Error(w, "Error scanning runbooks", http.StatusInternalServerError)
+					return
 				}
 				list = append(list, rb)
 			}
-			return rows.Err()
-		})
+			if err := tx.Commit(r.Context()); err != nil {
+				http.Error(w, "Failed to commit transaction", http.StatusInternalServerError)
+				return
+			}
+		} else {
+			tenantID, ok := resolveTenantID(r)
+			if !ok {
+				http.Error(w, "Unauthorized: Tenant context not found", http.StatusUnauthorized)
+				return
+			}
+			ctx := db.WithTenantID(r.Context(), tenantID)
 
-		if err != nil {
-			http.Error(w, "Failed to query runbooks", http.StatusInternalServerError)
-			return
+			err := db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
+				rows, err := tx.Query(ctx, `
+					SELECT r.id, r.tenant_id, t.name, r.name, r.trigger_rule, r.script, r.vault_key_host, r.is_global, r.created_at 
+					FROM tenant_runbooks r 
+					JOIN tenants t ON r.tenant_id = t.id 
+					WHERE r.tenant_id = $1 OR r.is_global = TRUE 
+					ORDER BY r.name
+				`, tenantID)
+				if err != nil {
+					return err
+				}
+				defer rows.Close()
+
+				for rows.Next() {
+					var rb RunbookResponse
+					err := rows.Scan(&rb.ID, &rb.TenantID, &rb.TenantName, &rb.Name, &rb.TriggerRule, &rb.Script, &rb.VaultKeyHost, &rb.IsGlobal, &rb.CreatedAt)
+					if err != nil {
+						return err
+					}
+					list = append(list, rb)
+				}
+				return rows.Err()
+			})
+
+			if err != nil {
+				http.Error(w, "Failed to query runbooks", http.StatusInternalServerError)
+				return
+			}
 		}
 
 		w.Header().Set("Content-Type", "application/json")
