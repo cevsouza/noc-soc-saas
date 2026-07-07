@@ -896,7 +896,7 @@ export default function CockpitPage() {
     if (!token) return;
     if (!confirm("Tem certeza que deseja deletar todos os alertas mock/teste do sistema?")) return;
     try {
-      const response = await fetch(`${API_BASE_URL}/api/v1/alerts/cleanup`, {
+      const response = await fetch(`${API_BASE_URL}/api/v1/alerts/cleanup?tenant_id=${selectedTenant.id}`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`

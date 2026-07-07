@@ -1214,18 +1214,33 @@ func HandleCleanupAlerts(pgPool *pgxpool.Pool) http.HandlerFunc {
 			return
 		}
 
-		ctx := r.Context()
-		query := `
-			DELETE FROM alerts 
-			WHERE host IN ('watchdog', 'azure-sentinel-vm', 'web-server-99', 'simulado') 
-			   OR summary LIKE '%Mock%' 
-			   OR summary LIKE '%Simulado%' 
-			   OR summary LIKE '%teste%'
-		`
-		
-		res, err := pgPool.Exec(ctx, query)
+		tenantID, ok := resolveTenantID(r)
+		if !ok {
+			http.Error(w, "Unauthorized: Tenant context not found", http.StatusUnauthorized)
+			return
+		}
+		ctx := db.WithTenantID(r.Context(), tenantID)
+
+		var rowsAffected int64
+		err := db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
+			query := `
+				DELETE FROM alerts 
+				WHERE (host IN ('watchdog', 'azure-sentinel-vm', 'web-server-99', 'simulado') 
+				   OR summary LIKE '%Mock%' 
+				   OR summary LIKE '%Simulado%' 
+				   OR summary LIKE '%teste%')
+				  AND tenant_id = $1
+			`
+			res, err := tx.Exec(ctx, query, tenantID)
+			if err != nil {
+				return err
+			}
+			rowsAffected = res.RowsAffected()
+			return nil
+		})
+
 		if err != nil {
-			log.Printf("[API Error] Failed to cleanup mock alerts: %v", err)
+			log.Printf("[API Error] Failed to cleanup mock alerts for tenant %s: %v", tenantID, err)
 			http.Error(w, "Failed to cleanup mock alerts", http.StatusInternalServerError)
 			return
 		}
@@ -1233,7 +1248,7 @@ func HandleCleanupAlerts(pgPool *pgxpool.Pool) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"status":        "success",
-			"rows_affected": res.RowsAffected(),
+			"rows_affected": rowsAffected,
 		})
 	}
 }
