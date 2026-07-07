@@ -24,6 +24,7 @@ type CreateRunbookRequest struct {
 	TriggerRule  string `json:"trigger_rule"`
 	Script       string `json:"script"`
 	VaultKeyHost string `json:"vault_key_host"`
+	IsGlobal     bool   `json:"is_global"`
 }
 
 type ExecuteRunbookRequest struct {
@@ -48,12 +49,13 @@ func HandleGetRunbooks(pgPool *pgxpool.Pool) http.HandlerFunc {
 			TriggerRule  string    `json:"trigger_rule"`
 			Script       string    `json:"script"`
 			VaultKeyHost string    `json:"vault_key_host"`
+			IsGlobal     bool      `json:"is_global"`
 			CreatedAt    time.Time `json:"created_at"`
 		}
 
 		list := make([]RunbookResponse, 0)
 		err := db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
-			rows, err := tx.Query(ctx, "SELECT id, tenant_id, name, trigger_rule, script, vault_key_host, created_at FROM tenant_runbooks WHERE tenant_id = $1 ORDER BY name", tenantID)
+			rows, err := tx.Query(ctx, "SELECT id, tenant_id, name, trigger_rule, script, vault_key_host, is_global, created_at FROM tenant_runbooks WHERE tenant_id = $1 OR is_global = TRUE ORDER BY name", tenantID)
 			if err != nil {
 				return err
 			}
@@ -61,7 +63,7 @@ func HandleGetRunbooks(pgPool *pgxpool.Pool) http.HandlerFunc {
 
 			for rows.Next() {
 				var rb RunbookResponse
-				err := rows.Scan(&rb.ID, &rb.TenantID, &rb.Name, &rb.TriggerRule, &rb.Script, &rb.VaultKeyHost, &rb.CreatedAt)
+				err := rows.Scan(&rb.ID, &rb.TenantID, &rb.Name, &rb.TriggerRule, &rb.Script, &rb.VaultKeyHost, &rb.IsGlobal, &rb.CreatedAt)
 				if err != nil {
 					return err
 				}
@@ -103,8 +105,8 @@ func HandleCreateRunbook(pgPool *pgxpool.Pool) http.HandlerFunc {
 
 		var runbookID uuid.UUID
 		err := db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
-			query := "INSERT INTO tenant_runbooks (tenant_id, name, trigger_rule, script, vault_key_host) VALUES ($1, $2, $3, $4, $5) RETURNING id"
-			return tx.QueryRow(ctx, query, tenantID, req.Name, req.TriggerRule, req.Script, req.VaultKeyHost).Scan(&runbookID)
+			query := "INSERT INTO tenant_runbooks (tenant_id, name, trigger_rule, script, vault_key_host, is_global) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id"
+			return tx.QueryRow(ctx, query, tenantID, req.Name, req.TriggerRule, req.Script, req.VaultKeyHost, req.IsGlobal).Scan(&runbookID)
 		})
 
 		if err != nil {
@@ -141,7 +143,7 @@ func HandleExecuteRunbook(pgPool *pgxpool.Pool) http.HandlerFunc {
 
 		err := db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
 			// 1. Fetch Runbook details
-			err := tx.QueryRow(ctx, "SELECT name, script, vault_key_host FROM tenant_runbooks WHERE id = $1 AND tenant_id = $2", req.RunbookID, tenantID).Scan(&name, &script, &vaultKeyPrefix)
+			err := tx.QueryRow(ctx, "SELECT name, script, vault_key_host FROM tenant_runbooks WHERE id = $1 AND (tenant_id = $2 OR is_global = TRUE)", req.RunbookID, tenantID).Scan(&name, &script, &vaultKeyPrefix)
 			if err != nil {
 				return err
 			}

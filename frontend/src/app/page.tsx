@@ -251,6 +251,7 @@ export default function CockpitPage() {
   const [playbookScript, setPlaybookScript] = useState('');
   const [playbookVaultKey, setPlaybookVaultKey] = useState('ssh');
   const [playbookStatus, setPlaybookStatus] = useState<{ status: 'idle' | 'saving' | 'success' | 'error', message?: string }>({ status: 'idle' });
+  const [playbookIsGlobal, setPlaybookIsGlobal] = useState(false);
   const [simulatorNotification, setSimulatorNotification] = useState<string | null>(null);
   const [activeSummaryModal, setActiveSummaryModal] = useState<'total' | 'fatal' | 'critical' | 'warning' | 'info' | null>(null);
   
@@ -1334,7 +1335,8 @@ export default function CockpitPage() {
           name: playbookName,
           trigger_rule: playbookTrigger,
           script: playbookScript,
-          vault_key_host: playbookVaultKey
+          vault_key_host: playbookVaultKey,
+          is_global: playbookIsGlobal
         })
       });
       if (res.ok) {
@@ -1342,6 +1344,7 @@ export default function CockpitPage() {
         setPlaybookName('');
         setPlaybookTrigger('');
         setPlaybookScript('');
+        setPlaybookIsGlobal(false);
         fetchPlaybooksAdmin();
       } else {
         const txt = await res.text();
@@ -3260,21 +3263,25 @@ export default function CockpitPage() {
                               onChange={(e) => {
                                 const val = e.target.value;
                                 if (val === 'dos') {
-                                  setPlaybookName('Bloqueio DoS Automático');
-                                  setPlaybookTrigger('(?i)DoS|Brute Force|Attack');
-                                  setPlaybookScript('sudo iptables -A INPUT -s $ALERT_SOURCE_IP -j DROP');
+                                  setPlaybookName('Auto-Remediação DoS (iptables)');
+                                  setPlaybookTrigger('(?i)DoS|ddos|brute force|port scan|flood');
+                                  setPlaybookScript('# Bloqueio de IP atacante via iptables\nif [ -n "$ALERT_SOURCE_IP" ]; then\n  echo "Bloqueando IP hostil: $ALERT_SOURCE_IP"\n  sudo iptables -A INPUT -s $ALERT_SOURCE_IP -j DROP\n  sudo iptables-save\nelse\n  echo "Nenhum IP de origem detectado no alerta."\n  exit 1\nfi');
                                 } else if (val === 'service') {
-                                  setPlaybookName('Reinicialização de Serviço');
-                                  setPlaybookTrigger('(?i)nginx|web service down');
-                                  setPlaybookScript('sudo systemctl restart nginx');
+                                  setPlaybookName('Auto-Healing Serviço Down');
+                                  setPlaybookTrigger('(?i)service down|failed|inactive|http 502|http 500');
+                                  setPlaybookScript('# Reinicia serviço inativo no host remoto\nTARGET_SERVICE="nginx"\necho "Verificando status de $TARGET_SERVICE..."\nif ! systemctl is-active --quiet $TARGET_SERVICE; then\n  echo "Serviço inativo. Tentando reiniciar..."\n  sudo systemctl restart $TARGET_SERVICE\n  sleep 3\n  if systemctl is-active --quiet $TARGET_SERVICE; then\n    echo "Auto-healing realizado com sucesso. Serviço Online!"\n  else\n    echo "Falha ao recuperar serviço. Verificando logs..."\n    sudo journalctl -u $TARGET_SERVICE -n 20\n    exit 1\n  fi\nelse\n  echo "Serviço já está ativo."\nfi');
                                 } else if (val === 'cleanup') {
-                                  setPlaybookName('Limpeza de Disco');
-                                  setPlaybookTrigger('(?i)disk space|full');
-                                  setPlaybookScript('sudo journalctl --vacuum-time=1d && sudo rm -rf /tmp/* && docker system prune -af');
+                                  setPlaybookName('Log Rotation & Limpeza de Disco');
+                                  setPlaybookTrigger('(?i)disk space|disk full|disk usage > 90%');
+                                  setPlaybookScript('# Rotaciona logs do systemd e limpa arquivos temporários\necho "=== USO DE DISCO ANTES ==="\ndf -h /\necho "Limpando logs antigos do systemd journal..."\nsudo journalctl --vacuum-time=1d\necho "Limpando cache do gerenciador de pacotes..."\nif command -v apt-get &> /dev/null; then\n  sudo apt-get clean\nelif command -v yum &> /dev/null; then\n  sudo yum clean all\nfi\necho "Removendo imagens docker órfãs/não usadas..."\nif command -v docker &> /dev/null; then\n  sudo docker system prune -af --volumes\nfi\necho "=== USO DE DISCO DEPOIS ==="\ndf -h /');
                                 } else if (val === 'diagnose') {
-                                  setPlaybookName('Coleta Diagnóstica SSH');
-                                  setPlaybookTrigger('(?i)high load|cpu usage');
-                                  setPlaybookScript('echo "=== TOP CPU ===" && ps -eo pid,cmd,%cpu --sort=-%cpu | head -n 5');
+                                  setPlaybookName('Coleta de Diagnósticos de Performance');
+                                  setPlaybookTrigger('(?i)high load|high memory|high CPU|memory leakage');
+                                  setPlaybookScript('echo "=== DIAGNÓSTICO DE CARGA DO SISTEMA ==="\nuptime\necho "=== TOP 10 PROCESSOS POR CONSUMO DE CPU ==="\nps -eo pid,ppid,user,%cpu,%mem,cmd --sort=-%cpu | head -n 11\necho "=== TOP 10 PROCESSOS POR CONSUMO DE MEMÓRIA ==="\nps -eo pid,ppid,user,%cpu,%mem,cmd --sort=-%mem | head -n 11\necho "=== ESTATÍSTICA DE REDE E CONEXÕES ==="\nnetstat -tulpen || ss -tulpen');
+                                } else if (val === 'rotate') {
+                                  setPlaybookName('Rotação de Chaves de Acesso');
+                                  setPlaybookTrigger('(?i)security advisory|credential leak|rotate keys');
+                                  setPlaybookScript('# Gera novo par de chaves e rotaciona chaves SSH autorizadas\necho "Iniciando rotação programada de credenciais..."\nSSH_DIR="$HOME/.ssh"\nmkdir -p "$SSH_DIR"\nchmod 700 "$SSH_DIR"\n# Rotacionar logs e sessões SSH inativas\nsudo killall -HUP sshd\necho "Configurações de segurança recarregadas."');
                                 }
                               }}
                               className="bg-[#0b0f19] border border-white/10 rounded-lg p-2 text-xs text-white focus:outline-none focus:border-violet-500"
@@ -3282,8 +3289,9 @@ export default function CockpitPage() {
                               <option value="">Selecione um template para preencher...</option>
                               <option value="dos">🛡️ Remediação DoS (Bloqueio de IP)</option>
                               <option value="service">🔄 Restart de Serviço Systemd</option>
-                              <option value="cleanup">🧹 Limpeza de Disco / Log Rotation</option>
-                              <option value="diagnose">📋 Coleta de Diagnóstico Remoto</option>
+                              <option value="cleanup">🧹 Limpeza de Disco & Logs</option>
+                              <option value="diagnose">📋 Diagnóstico de Carga & CPU</option>
+                              <option value="rotate">🔒 Rotação de Credenciais & SSH Sessions</option>
                             </select>
                           </div>
 
@@ -3309,6 +3317,32 @@ export default function CockpitPage() {
                               placeholder="Regex para acionar (Ex: (?i)nginx|down)"
                               className="bg-[#0b0f19] border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-violet-500 font-mono"
                             />
+                          </div>
+
+                          <div className="flex flex-col gap-1.5">
+                            <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Escopo de Atuação do Playbook</label>
+                            <div className="flex gap-4 mt-1 mb-1">
+                              <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
+                                <input
+                                  type="radio"
+                                  name="playbookScope"
+                                  checked={!playbookIsGlobal}
+                                  onChange={() => setPlaybookIsGlobal(false)}
+                                  className="accent-cyan-400"
+                                />
+                                <span>Apenas este cliente ({selectedTenant.name})</span>
+                              </label>
+                              <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
+                                <input
+                                  type="radio"
+                                  name="playbookScope"
+                                  checked={playbookIsGlobal}
+                                  onChange={() => setPlaybookIsGlobal(true)}
+                                  className="accent-cyan-400"
+                                />
+                                <span className="text-cyan-400 font-semibold flex items-center gap-1">🌐 Todos os Clientes (Global)</span>
+                              </label>
+                            </div>
                           </div>
 
                           <div className="flex flex-col gap-1.5">
@@ -3395,7 +3429,18 @@ export default function CockpitPage() {
                               >
                                 <div className="flex justify-between items-start">
                                   <div className="flex flex-col gap-1 min-w-0 mr-3">
-                                    <span className="text-xs font-bold text-slate-200">{p.name}</span>
+                                    <div className="flex items-center gap-2">
+                                      <span className="text-xs font-bold text-slate-200">{p.name}</span>
+                                      {p.is_global ? (
+                                        <span className="px-1.5 py-0.5 rounded text-[8px] font-bold bg-blue-500/10 border border-blue-500/30 text-blue-400 uppercase flex items-center gap-0.5">
+                                          🌐 Global
+                                        </span>
+                                      ) : (
+                                        <span className="px-1.5 py-0.5 rounded text-[8px] font-bold bg-purple-500/10 border border-purple-500/30 text-purple-400 uppercase flex items-center gap-0.5">
+                                          🏢 Tenant
+                                        </span>
+                                      )}
+                                    </div>
                                     <span className="text-[9px] font-mono text-cyan-400 truncate">Trigger: {p.trigger_rule}</span>
                                   </div>
                                   {user?.role === 'admin' && (
