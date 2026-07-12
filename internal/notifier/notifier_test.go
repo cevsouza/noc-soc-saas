@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -160,5 +161,107 @@ func TestOpsgenieNotifierNonAcceptedStatusIsError(t *testing.T) {
 	n := &OpsgenieNotifier{httpClient: server.Client(), baseURL: server.URL}
 	if err := n.Notify(context.Background(), "bad-key", testAlert()); err == nil {
 		t.Error("expected error for non-202 response")
+	}
+}
+
+func TestSlackNotifierSendsExpectedRequest(t *testing.T) {
+	var receivedBody slackWebhookPayload
+	var receivedContentType string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedContentType = r.Header.Get("Content-Type")
+		if err := json.NewDecoder(r.Body).Decode(&receivedBody); err != nil {
+			t.Errorf("failed to decode request body: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	n := &SlackNotifier{httpClient: server.Client()}
+	alert := testAlert()
+
+	if err := n.Notify(context.Background(), server.URL, alert); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if receivedContentType != "application/json" {
+		t.Errorf("expected application/json content type, got %q", receivedContentType)
+	}
+	if !strings.Contains(receivedBody.Text, alert.Summary) {
+		t.Errorf("expected text to contain alert.Summary, got %q", receivedBody.Text)
+	}
+	if n.IntegrationType() != "slack" {
+		t.Errorf("expected IntegrationType()=slack, got %q", n.IntegrationType())
+	}
+}
+
+func TestSlackNotifierNonOKStatusIsError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	n := &SlackNotifier{httpClient: server.Client()}
+	if err := n.Notify(context.Background(), server.URL, testAlert()); err == nil {
+		t.Error("expected error for non-200 response")
+	}
+}
+
+func TestTeamsNotifierSendsExpectedRequest(t *testing.T) {
+	var receivedBody teamsMessageCard
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&receivedBody); err != nil {
+			t.Errorf("failed to decode request body: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	n := &TeamsNotifier{httpClient: server.Client()}
+	alert := testAlert()
+
+	if err := n.Notify(context.Background(), server.URL, alert); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if receivedBody.Type != "MessageCard" {
+		t.Errorf("expected @type=MessageCard, got %q", receivedBody.Type)
+	}
+	if len(receivedBody.Sections) == 0 {
+		t.Fatal("expected at least one section")
+	}
+	found := false
+	for _, f := range receivedBody.Sections[0].Facts {
+		if f.Name == "Tenant" && f.Value == alert.TenantID.String() {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected a Tenant fact matching alert.TenantID, got %+v", receivedBody.Sections[0].Facts)
+	}
+	if n.IntegrationType() != "teams" {
+		t.Errorf("expected IntegrationType()=teams, got %q", n.IntegrationType())
+	}
+}
+
+func TestTeamsNotifierThemeColorBySeverity(t *testing.T) {
+	if got := teamsThemeColor(model.SeverityFatal); got != "FF0000" {
+		t.Errorf("expected fatal to map to FF0000, got %q", got)
+	}
+	if got := teamsThemeColor(model.SeverityWarning); got != "FFA500" {
+		t.Errorf("expected warning to map to FFA500, got %q", got)
+	}
+}
+
+func TestTeamsNotifierNonOKStatusIsError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	n := &TeamsNotifier{httpClient: server.Client()}
+	if err := n.Notify(context.Background(), server.URL, testAlert()); err == nil {
+		t.Error("expected error for non-200 response")
 	}
 }

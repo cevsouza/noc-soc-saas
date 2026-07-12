@@ -80,6 +80,26 @@ export const INTEGRATIONS_REGISTRY: IntegrationRegistryEntry[] = [
     vaultFields: [{ key: 'opsgenie_api_key', label: 'API Key (Alert API)', inputType: 'password' }],
     accentColorClass: 'border-teal-500/20 text-teal-400',
   },
+
+  // --- Outbound-only escalation channels (Fase 3 fatia 1) — not yet consumed by
+  // legacy-cockpit-panels.tsx's "Central de Conectores" grid, which still uses its own
+  // hardcoded tool array; kept here for consistency until that panel is migrated to read from
+  // this registry.
+  {
+    id: 'slack', name: 'Slack', shortDescription: 'Escalonamento outbound de alertas críticos/fatais via webhook de entrada.', method: 'webhook',
+    vaultFields: [{ key: 'slack_webhook_url', label: 'Incoming Webhook URL', inputType: 'password' }],
+    accentColorClass: 'border-fuchsia-500/20 text-fuchsia-400',
+  },
+  {
+    id: 'teams', name: 'Microsoft Teams', shortDescription: 'Escalonamento outbound de alertas críticos/fatais via webhook de entrada.', method: 'webhook',
+    vaultFields: [{ key: 'teams_webhook_url', label: 'Incoming Webhook URL', inputType: 'password' }],
+    accentColorClass: 'border-indigo-600/20 text-indigo-500',
+  },
+  {
+    id: 'email', name: 'E-mail (SMTP)', shortDescription: 'Escalonamento outbound de alertas críticos/fatais por e-mail (SMTP da plataforma).', method: 'webhook',
+    vaultFields: [{ key: 'email_recipient', label: 'E-mail(s) do destinatário', inputType: 'text' }],
+    accentColorClass: 'border-slate-400/20 text-slate-300',
+  },
 ];
 
 export function getIntegrationById(id: string): IntegrationRegistryEntry | undefined {

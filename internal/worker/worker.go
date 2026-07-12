@@ -50,6 +50,9 @@ type WorkerPool struct {
 	lokiClient        *loki.LokiClient
 	pagerDutyNotifier *notifier.PagerDutyNotifier
 	opsgenieNotifier  *notifier.OpsgenieNotifier
+	slackNotifier     *notifier.SlackNotifier
+	teamsNotifier     *notifier.TeamsNotifier
+	emailNotifier     *notifier.EmailNotifier
 }
 
 func NewWorkerPool(pgPool *pgxpool.Pool, redisClient *redis.Client, numWorkers int) *WorkerPool {
@@ -64,6 +67,9 @@ func NewWorkerPool(pgPool *pgxpool.Pool, redisClient *redis.Client, numWorkers i
 		lokiClient:        loki.NewLokiClient(pgPool),
 		pagerDutyNotifier: notifier.NewPagerDutyNotifier(),
 		opsgenieNotifier:  notifier.NewOpsgenieNotifier(),
+		slackNotifier:     notifier.NewSlackNotifier(),
+		teamsNotifier:     notifier.NewTeamsNotifier(),
+		emailNotifier:     notifier.NewEmailNotifier(),
 	}
 }
 
@@ -528,6 +534,12 @@ func (wp *WorkerPool) triggerSOARPlaybooks(ctx context.Context, alert *model.Ale
 var escalationVaultKeys = map[string]string{
 	"pagerduty": "pagerduty_routing_key",
 	"opsgenie":  "opsgenie_api_key",
+	"slack":     "slack_webhook_url",
+	"teams":     "teams_webhook_url",
+	// "email" isn't really a "secret" — it's the tenant's configured recipient address — but it
+	// reuses the same vault/tenant_integrations mechanism as the others for UI consistency
+	// (SMTP credentials themselves stay a platform-wide env var, not per-tenant).
+	"email": "email_recipient",
 }
 
 // triggerEscalations pages out via PagerDuty/Opsgenie for any tenant that has one of those
@@ -539,7 +551,7 @@ func (wp *WorkerPool) triggerEscalations(ctx context.Context, alert *model.Alert
 	tenantCtx := db.WithTenantID(ctx, alert.TenantID)
 
 	rows, err := wp.pgPool.Query(tenantCtx,
-		`SELECT type FROM tenant_integrations WHERE tenant_id = $1 AND type IN ('pagerduty', 'opsgenie') AND status = 'active'`,
+		`SELECT type FROM tenant_integrations WHERE tenant_id = $1 AND type IN ('pagerduty', 'opsgenie', 'slack', 'teams', 'email') AND status = 'active'`,
 		alert.TenantID)
 	if err != nil {
 		log.Printf("[Escalation Warning] Failed to query active escalation integrations: %v", err)
@@ -594,6 +606,12 @@ func (wp *WorkerPool) triggerEscalations(ctx context.Context, alert *model.Alert
 				notifyErr = wp.pagerDutyNotifier.Notify(ctxBg, secretVal, alert)
 			case "opsgenie":
 				notifyErr = wp.opsgenieNotifier.Notify(ctxBg, secretVal, alert)
+			case "slack":
+				notifyErr = wp.slackNotifier.Notify(ctxBg, secretVal, alert)
+			case "teams":
+				notifyErr = wp.teamsNotifier.Notify(ctxBg, secretVal, alert)
+			case "email":
+				notifyErr = wp.emailNotifier.Notify(ctxBg, secretVal, alert)
 			}
 			if notifyErr != nil {
 				log.Printf("[Escalation Error] %s escalation failed for alert %s (tenant %s): %v", itype, alert.ID, alert.TenantID, notifyErr)

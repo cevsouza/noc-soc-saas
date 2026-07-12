@@ -1,10 +1,11 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Activity, Network, Settings, Target } from 'lucide-react';
 import { useAuth } from '@/lib/auth-context';
 import { useTenantSelection } from '@/lib/tenant-context';
 import { useAlertsSocket } from '@/lib/use-alerts-socket';
+import { usePendingApprovalsCount } from '@/lib/use-pending-approvals-count';
 import { AppHeader } from '@/components/app-header';
 import { AlertStatCards } from '@/components/alerts/alert-stat-cards';
 import { AlertsSearchBar } from '@/components/alerts/alerts-search-bar';
@@ -28,6 +29,7 @@ export default function CockpitPage() {
   const { token, user } = useAuth();
   const { tenants, selectedTenantIds, setSelectedTenantIds } = useTenantSelection();
   const { alerts, setAlerts, connStatus } = useAlertsSocket(token, selectedTenantIds);
+  const { count: pendingApprovals, refetch: refetchApprovals } = usePendingApprovalsCount(token);
 
   const [cockpitTab, setCockpitTab] = useState<CockpitTab>('alerts');
   const [searchTerm, setSearchTerm] = useState('');
@@ -52,6 +54,14 @@ export default function CockpitPage() {
     const isActive = a.status !== 'resolved' && a.status !== 'suppressed';
     return matchesSearch && matchesSeverity && matchesTenant && isActive;
   });
+
+  useEffect(() => {
+    const latest = alerts[0];
+    if (latest && (latest.severity === 'fatal' || latest.severity === 'critical')) {
+      refetchApprovals();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [alerts[0]?.id]);
 
   const handleStatusChange = (alertId: string, newStatus: AlertStatus) => {
     const now = new Date().toISOString();
@@ -96,10 +106,15 @@ export default function CockpitPage() {
               <Network className="w-3.5 h-3.5" />
               Topologia CMDB &amp; Ativos
             </button>
-            {user?.role === 'admin' && (
+            {(user?.role === 'admin' || user?.role === 'operator') && (
               <button onClick={() => setCockpitTab('settings')} className={TAB_BUTTON_CLASS(cockpitTab === 'settings')}>
                 <Settings className="w-3.5 h-3.5" />
                 Configuração MSP
+                {pendingApprovals > 0 && (
+                  <span className="ml-1 px-1.5 py-0.5 rounded-full bg-rose-500/20 border border-rose-500/40 text-rose-400 text-[9px] font-bold leading-none">
+                    {pendingApprovals}
+                  </span>
+                )}
               </button>
             )}
           </div>

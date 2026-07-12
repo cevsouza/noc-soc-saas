@@ -14,6 +14,7 @@ import {
   Lock,
   Palette,
   RefreshCw,
+  ShieldAlert,
   Terminal,
   TrendingUp,
   User,
@@ -22,6 +23,7 @@ import { useAuth } from '@/lib/auth-context';
 import { useTenantSelection } from '@/lib/tenant-context';
 import { apiFetch } from '@/lib/api-client';
 import { API_BASE_URL } from '@/lib/env';
+import { RunbookApprovalsPanel } from '@/components/settings/runbook-approvals-panel';
 import type { Alert } from '@/types';
 
 type AsyncStatus = { status: 'idle' | 'saving' | 'success' | 'error'; message?: string };
@@ -637,6 +639,18 @@ export function LegacyCockpitPanels({ cockpitTab, alerts, onSearchTermChange }: 
                   <Cpu className="w-3.5 h-3.5 text-cyan-400" />
                   <span>Playbooks de Auto-Cura</span>
                 </button>
+                <button
+                  onClick={() => {
+                    setSelectedIntegrationTool('approvals_admin');
+                    setValidationResult(null);
+                  }}
+                  className={`w-full px-3 py-2 rounded-lg text-left text-xs font-bold transition-all flex items-center gap-2 ${
+                    selectedIntegrationTool === 'approvals_admin' ? 'bg-white/5 text-white border-l-2 border-cyan-400' : 'text-slate-400 hover:bg-white/[0.02] hover:text-slate-200'
+                  }`}
+                >
+                  <ShieldAlert className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Aprovações Pendentes</span>
+                </button>
 
                 {user?.role === 'admin' && (
                   <>
@@ -852,7 +866,10 @@ export function LegacyCockpitPanels({ cockpitTab, alerts, onSearchTermChange }: 
                           { id: 'wazuh', name: 'Wazuh SIEM', method: 'Webhook (Push)', desc: 'Eventos de segurança, auditoria e ameaças de endpoints.', color: 'border-blue-500/20' },
                           { id: 'grafana', name: 'Grafana Webhook', method: 'Webhook (Push)', desc: 'Ingestão de triggers visuais baseados em painéis de métricas.', color: 'border-violet-500/20' },
                           { id: 'sentinel', name: 'Microsoft Sentinel', method: 'API Polling (Pull)', desc: 'Varredura ativa de incidentes de segurança na nuvem do Azure.', color: 'border-cyan-500/20' },
-                          { id: 'loki', name: 'Grafana Loki', method: 'API Polling (Pull)', desc: 'Leitura de logs distribuídos com inteligência AIOps em tempo real.', color: 'border-orange-500/20' }
+                          { id: 'loki', name: 'Grafana Loki', method: 'API Polling (Pull)', desc: 'Leitura de logs distribuídos com inteligência AIOps em tempo real.', color: 'border-orange-500/20' },
+                          { id: 'slack', name: 'Slack', method: 'Escalonamento (Outbound)', desc: 'Notifica um canal via webhook quando um alerta crítico/fatal dispara.', color: 'border-fuchsia-500/20' },
+                          { id: 'teams', name: 'Microsoft Teams', method: 'Escalonamento (Outbound)', desc: 'Notifica um canal via webhook quando um alerta crítico/fatal dispara.', color: 'border-indigo-600/20' },
+                          { id: 'email', name: 'E-mail (SMTP)', method: 'Escalonamento (Outbound)', desc: 'Envia um e-mail de alerta crítico/fatal via SMTP da plataforma.', color: 'border-slate-400/20' },
                         ].map(tool => {
                           const statusData = connectorStatuses[tool.id] || { status: 'inactive' };
                           const isPush = tool.method.includes('Push');
@@ -900,6 +917,9 @@ export function LegacyCockpitPanels({ cockpitTab, alerts, onSearchTermChange }: 
                                   if (tool.id === 'sentinel') setVaultKey('sentinel_client_secret');
                                   else if (tool.id === 'loki') setVaultKey('loki_password');
                                   else if (tool.id === 'ssh') setVaultKey('ssh_private_key');
+                                  else if (tool.id === 'slack') setVaultKey('slack_webhook_url');
+                                  else if (tool.id === 'teams') setVaultKey('teams_webhook_url');
+                                  else if (tool.id === 'email') setVaultKey('email_recipient');
                                   handleValidateIntegration(tool.id);
                                 }}
                                 className="w-full py-2 bg-white/5 hover:bg-cyan-500/15 hover:text-cyan-400 text-slate-300 font-extrabold uppercase tracking-widest text-[9px] rounded-lg transition-all border border-white/5 hover:border-cyan-500/30 cursor-pointer text-center"
@@ -911,7 +931,7 @@ export function LegacyCockpitPanels({ cockpitTab, alerts, onSearchTermChange }: 
                         })}
                       </div>
                     </div>
-                ) : ['uptimekuma', 'zabbix', 'prometheus', 'wazuh', 'grafana', 'sentinel', 'loki'].includes(selectedIntegrationTool) ? (
+                ) : ['uptimekuma', 'zabbix', 'prometheus', 'wazuh', 'grafana', 'sentinel', 'loki', 'slack', 'teams', 'email'].includes(selectedIntegrationTool) ? (
                     // Detail panel for a conector
                     <div className="flex flex-col gap-4">
                       {/* Back button */}
@@ -938,9 +958,16 @@ export function LegacyCockpitPanels({ cockpitTab, alerts, onSearchTermChange }: 
                             {selectedIntegrationTool === 'grafana' && 'Configuração Grafana Alerts'}
                             {selectedIntegrationTool === 'sentinel' && 'Configuração Microsoft Sentinel'}
                             {selectedIntegrationTool === 'loki' && 'Configuração Grafana Loki'}
+                            {selectedIntegrationTool === 'slack' && 'Configuração Slack'}
+                            {selectedIntegrationTool === 'teams' && 'Configuração Microsoft Teams'}
+                            {selectedIntegrationTool === 'email' && 'Configuração E-mail (SMTP)'}
                           </h4>
                           <p className="text-[10px] text-slate-500 uppercase tracking-widest font-bold">
-                            {['uptimekuma', 'zabbix', 'prometheus', 'wazuh', 'grafana'].includes(selectedIntegrationTool) ? 'Método: Webhook (Push / Envio de Alertas)' : 'Método: API Polling (Pull / Busca Ativa de Chaves)'}
+                            {['uptimekuma', 'zabbix', 'prometheus', 'wazuh', 'grafana'].includes(selectedIntegrationTool)
+                              ? 'Método: Webhook (Push / Envio de Alertas)'
+                              : ['slack', 'teams', 'email'].includes(selectedIntegrationTool)
+                                ? 'Método: Escalonamento (Outbound / Somente Envio)'
+                                : 'Método: API Polling (Pull / Busca Ativa de Chaves)'}
                           </p>
                         </div>
                       </div>
@@ -1072,7 +1099,7 @@ export function LegacyCockpitPanels({ cockpitTab, alerts, onSearchTermChange }: 
                             )}
                           </div>
                         </div>
-                      ) : ['sentinel', 'loki', 'ssh'].includes(selectedIntegrationTool) ? (
+                      ) : ['sentinel', 'loki', 'ssh', 'slack', 'teams', 'email'].includes(selectedIntegrationTool) ? (
                         // Secure Vault Pull Connectors Form
                         <form onSubmit={handleSaveVaultSecret} className="flex flex-col gap-4">
                           <div className="flex flex-col gap-3 p-4 rounded-xl bg-cyan-950/10 border border-cyan-500/20 text-xs text-slate-300 leading-relaxed font-sans mb-2">
@@ -1112,16 +1139,27 @@ export function LegacyCockpitPanels({ cockpitTab, alerts, onSearchTermChange }: 
                                     <option value="ssh_password">SSH Password (Fallback)</option>
                                   </>
                                 )}
+                                {selectedIntegrationTool === 'slack' && (
+                                  <option value="slack_webhook_url">Incoming Webhook URL</option>
+                                )}
+                                {selectedIntegrationTool === 'teams' && (
+                                  <option value="teams_webhook_url">Incoming Webhook URL</option>
+                                )}
+                                {selectedIntegrationTool === 'email' && (
+                                  <option value="email_recipient">E-mail(s) do Destinatário</option>
+                                )}
                               </select>
                             </div>
 
                             <div className="flex flex-col gap-2">
-                              <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Valor da Credencial (Secret Value)</label>
+                              <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">
+                                {selectedIntegrationTool === 'email' ? 'Valor (não confidencial)' : 'Valor da Credencial (Secret Value)'}
+                              </label>
                               <input
-                                type="password"
+                                type={selectedIntegrationTool === 'email' ? 'text' : 'password'}
                                 required
                                 value={vaultValue}
-                                placeholder="Digite ou cole o valor confidencial aqui..."
+                                placeholder={selectedIntegrationTool === 'email' ? 'destinatario@empresa.com' : 'Digite ou cole o valor confidencial aqui...'}
                                 onChange={(e) => setVaultValue(e.target.value)}
                                 className="bg-surface border border-white/5 rounded-lg p-2.5 text-xs text-slate-200 focus:outline-none focus:border-cyan-500/50 placeholder:text-slate-600"
                               />
@@ -1178,6 +1216,39 @@ export function LegacyCockpitPanels({ cockpitTab, alerts, onSearchTermChange }: 
                                   <span>1. Insira a URL base de acesso à API do seu servidor Loki (ex: <code>https://loki.empresa.com.br</code>).</span>
                                   <span>2. Forneça o Usuário e Senha de autenticação básica (Basic Auth) se configurado.</span>
                                   <span>3. A IT Fácil buscará ativamente exceções de logs e normalizará strings de erro em eventos unificados.</span>
+                                </div>
+                              </div>
+                            )}
+
+                            {selectedIntegrationTool === 'slack' && (
+                              <div className="flex flex-col gap-2">
+                                <p>Envia uma notificação para um canal do <b>Slack</b> sempre que um alerta crítico ou fatal disparar:</p>
+                                <div className="flex flex-col gap-1.5 pl-3 border-l-2 border-fuchsia-500/50">
+                                  <span>1. No Slack, vá em Apps → Incoming Webhooks e crie um novo webhook para o canal desejado.</span>
+                                  <span>2. Cole a URL gerada (formato <code>https://hooks.slack.com/services/...</code>) no campo ao lado.</span>
+                                  <span>3. Alertas critical/fatal passam a ser enviados automaticamente para esse canal.</span>
+                                </div>
+                              </div>
+                            )}
+
+                            {selectedIntegrationTool === 'teams' && (
+                              <div className="flex flex-col gap-2">
+                                <p>Envia uma notificação para um canal do <b>Microsoft Teams</b> sempre que um alerta crítico ou fatal disparar:</p>
+                                <div className="flex flex-col gap-1.5 pl-3 border-l-2 border-indigo-500/50">
+                                  <span>1. No canal do Teams, adicione o conector "Incoming Webhook" e gere a URL.</span>
+                                  <span>2. Cole a URL gerada no campo ao lado.</span>
+                                  <span>3. Alertas critical/fatal passam a ser enviados automaticamente para esse canal.</span>
+                                </div>
+                              </div>
+                            )}
+
+                            {selectedIntegrationTool === 'email' && (
+                              <div className="flex flex-col gap-2">
+                                <p>Envia um e-mail sempre que um alerta crítico ou fatal disparar, usando o SMTP já configurado na plataforma:</p>
+                                <div className="flex flex-col gap-1.5 pl-3 border-l-2 border-slate-400/50">
+                                  <span>1. Informe o(s) e-mail(s) que devem receber os alertas deste cliente.</span>
+                                  <span>2. Não é necessário configurar credenciais SMTP aqui — elas são globais da plataforma.</span>
+                                  <span>3. Se o SMTP da plataforma não estiver configurado, o envio é apenas registrado em log (sem erro).</span>
                                 </div>
                               </div>
                             )}
@@ -1481,6 +1552,8 @@ export function LegacyCockpitPanels({ cockpitTab, alerts, onSearchTermChange }: 
                       </div>
                     </div>
                   </div>
+                ) : selectedIntegrationTool === 'approvals_admin' ? (
+                  <RunbookApprovalsPanel />
                 ) : selectedIntegrationTool === 'users_admin' ? (
                   // 4. Admin Users Form
                   <div className="flex flex-col gap-4">
