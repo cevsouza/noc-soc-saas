@@ -223,7 +223,7 @@ func HandleExecuteRunbook(pgPool *pgxpool.Pool) http.HandlerFunc {
 				if err != nil {
 					return ""
 				}
-				decrypted, err := security.Decrypt(sec.EncryptedValue, sec.Nonce, masterKey)
+				decrypted, err := security.DecryptForTenant(sec.EncryptedValue, sec.Nonce, masterKey, tenantID)
 				if err != nil {
 					return ""
 				}
@@ -369,7 +369,7 @@ func buildTOFUHostKeyCallback(ctx context.Context, pgPool *pgxpool.Pool, vaultRe
 		if err != nil {
 			return nil // Not pinned yet: first connection, handled below.
 		}
-		decrypted, err := security.Decrypt(sec.EncryptedValue, sec.Nonce, masterKey)
+		decrypted, err := security.DecryptForTenant(sec.EncryptedValue, sec.Nonce, masterKey, tenantID)
 		if err == nil {
 			storedFP = string(decrypted)
 		}
@@ -381,7 +381,7 @@ func buildTOFUHostKeyCallback(ctx context.Context, pgPool *pgxpool.Pool, vaultRe
 
 		if storedFP == "" {
 			// Trust On First Use: persist the fingerprint for future connections.
-			encrypted, nonce, err := security.Encrypt([]byte(fp), masterKey)
+			encrypted, nonce, err := security.EncryptForTenant([]byte(fp), masterKey, tenantID)
 			if err != nil {
 				return fmt.Errorf("TOFU: failed to encrypt host fingerprint: %w", err)
 			}
@@ -635,7 +635,7 @@ func HandleApproveRunbookRequest(pgPool *pgxpool.Pool) http.HandlerFunc {
 				if err != nil {
 					return ""
 				}
-				decrypted, err := security.Decrypt(sec.EncryptedValue, sec.Nonce, masterKey)
+				decrypted, err := security.DecryptForTenant(sec.EncryptedValue, sec.Nonce, masterKey, tenantID)
 				if err != nil {
 					return ""
 				}

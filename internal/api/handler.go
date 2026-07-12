@@ -1334,8 +1334,8 @@ func HandleSaveSecret(pgPool *pgxpool.Pool, vaultRepo repository.VaultRepository
 			return
 		}
 
-		// Encrypt credentials using AES-GCM-256
-		encrypted, nonce, err := security.Encrypt([]byte(req.Value), masterKey)
+		// Encrypt credentials using AES-GCM-256 with the tenant-derived key.
+		encrypted, nonce, err := security.EncryptForTenant([]byte(req.Value), masterKey, tenantID)
 		if err != nil {
 			log.Printf("Encryption Error: %v", err)
 			http.Error(w, "Internal Server Error: Encryption failure", http.StatusInternalServerError)
@@ -1480,7 +1480,7 @@ func getTenantWebhookSecret(ctx context.Context, pgPool *pgxpool.Pool, vaultRepo
 		if err != nil {
 			return err
 		}
-		decrypted, err := security.Decrypt(sec.EncryptedValue, sec.Nonce, masterKey)
+		decrypted, err := security.DecryptForTenant(sec.EncryptedValue, sec.Nonce, masterKey, tenantID)
 		if err != nil {
 			return err
 		}

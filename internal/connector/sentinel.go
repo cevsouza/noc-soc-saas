@@ -167,7 +167,7 @@ func (c *SentinelConnector) getSentinelConfig(ctx context.Context, tenantID uuid
 			if err != nil {
 				return err
 			}
-			decrypted, err := security.Decrypt(secret.EncryptedValue, secret.Nonce, masterKey)
+			decrypted, err := security.DecryptForTenant(secret.EncryptedValue, secret.Nonce, masterKey, tenantID)
 			if err != nil {
 				return err
 			}

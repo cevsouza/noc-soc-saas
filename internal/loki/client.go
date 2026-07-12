@@ -52,7 +52,7 @@ func (c *LokiClient) getLokiConfig(ctx context.Context, tenantID uuid.UUID) (*Lo
 		if err != nil {
 			return err
 		}
-		decryptedURL, err := security.Decrypt(secretURL.EncryptedValue, secretURL.Nonce, masterKey)
+		decryptedURL, err := security.DecryptForTenant(secretURL.EncryptedValue, secretURL.Nonce, masterKey, tenantID)
 		if err != nil {
 			return err
 		}
@@ -61,13 +61,13 @@ func (c *LokiClient) getLokiConfig(ctx context.Context, tenantID uuid.UUID) (*Lo
 		// Username and password are optional (anonymous Loki is common in internal dev)
 		secretUser, err := c.vaultRepo.GetSecretByKey(ctx, tx, "loki_username")
 		if err == nil {
-			decryptedUser, _ := security.Decrypt(secretUser.EncryptedValue, secretUser.Nonce, masterKey)
+			decryptedUser, _ := security.DecryptForTenant(secretUser.EncryptedValue, secretUser.Nonce, masterKey, tenantID)
 			cfg.Username = string(decryptedUser)
 		}
 
 		secretPass, err := c.vaultRepo.GetSecretByKey(ctx, tx, "loki_password")
 		if err == nil {
-			decryptedPass, _ := security.Decrypt(secretPass.EncryptedValue, secretPass.Nonce, masterKey)
+			decryptedPass, _ := security.DecryptForTenant(secretPass.EncryptedValue, secretPass.Nonce, masterKey, tenantID)
 			cfg.Password = string(decryptedPass)
 		}
 

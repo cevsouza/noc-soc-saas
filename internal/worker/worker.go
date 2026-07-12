@@ -409,7 +409,7 @@ func (wp *WorkerPool) triggerSOARPlaybooks(ctx context.Context, alert *model.Ale
 					if err != nil {
 						return ""
 					}
-					decrypted, err := security.Decrypt(sec.EncryptedValue, sec.Nonce, masterKey)
+					decrypted, err := security.DecryptForTenant(sec.EncryptedValue, sec.Nonce, masterKey, alert.TenantID)
 					if err != nil {
 						return ""
 					}
@@ -588,7 +588,7 @@ func (wp *WorkerPool) triggerEscalations(ctx context.Context, alert *model.Alert
 				if err != nil {
 					return err
 				}
-				decrypted, err := security.Decrypt(sec.EncryptedValue, sec.Nonce, masterKey)
+				decrypted, err := security.DecryptForTenant(sec.EncryptedValue, sec.Nonce, masterKey, alert.TenantID)
 				if err != nil {
 					return err
 				}

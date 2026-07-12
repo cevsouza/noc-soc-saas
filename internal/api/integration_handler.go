@@ -287,7 +287,7 @@ func HandleGenerateWebhookSecret(pgPool *pgxpool.Pool, vaultRepo repository.Vaul
 			http.Error(w, "Internal Server Error: Vault encryption setup failure", http.StatusInternalServerError)
 			return
 		}
-		encrypted, nonce, err := security.Encrypt([]byte(secretPlain), masterKey)
+		encrypted, nonce, err := security.EncryptForTenant([]byte(secretPlain), masterKey, tenantID)
 		if err != nil {
 			http.Error(w, "Internal Server Error: Encryption failure", http.StatusInternalServerError)
 			return
