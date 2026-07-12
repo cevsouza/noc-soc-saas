@@ -1297,6 +1297,90 @@ func HandleOpsgenieIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) http.
 	}
 }
 
+// handleTypedIngest is the shared flow for typed single-incident ingest endpoints: gate on an
+// active tenant_integration → read body → map through the registered connector → queue on the
+// normalized queue → refresh heartbeat / clear last error. The older per-source handlers above
+// predate this helper and stay inlined; new sources (CrowdStrike/Palo Alto/Fortinet) use it so we
+// don't re-duplicate ~50 lines of identical boilerplate each.
+func handleTypedIngest(pgPool *pgxpool.Pool, redisClient *redis.Client, source model.IncidentSource, label string) http.HandlerFunc {
+	sourceType := string(source)
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		tenantID, ok := db.TenantIDFromContext(r.Context())
+		if !ok {
+			http.Error(w, "Unauthorized: Tenant context not found", http.StatusUnauthorized)
+			return
+		}
+
+		var exists bool
+		err := pgPool.QueryRow(r.Context(), "SELECT EXISTS(SELECT 1 FROM tenant_integrations WHERE tenant_id = $1 AND type = $2 AND status = 'active')", tenantID, sourceType).Scan(&exists)
+		if err != nil || !exists {
+			http.Error(w, fmt.Sprintf("Forbidden: %s integration not active for this tenant", label), http.StatusForbidden)
+			return
+		}
+
+		bodyBytes, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "Bad Request: failed to read body", http.StatusBadRequest)
+			return
+		}
+
+		incidents, err := connector.MustGet(source).MapToUnified(bodyBytes, tenantID)
+		if err != nil || len(incidents) == 0 {
+			errMsg := fmt.Sprintf("Bad Request: Invalid %s JSON payload: %v", label, err)
+			redisClient.Set(r.Context(), fmt.Sprintf("webhook:error:%s:%s", tenantID.String(), sourceType), errMsg, 24*time.Hour)
+			http.Error(w, fmt.Sprintf("Bad Request: Invalid %s JSON payload", label), http.StatusBadRequest)
+			return
+		}
+		incident := incidents[0]
+
+		eventBytes, err := json.Marshal(incident)
+		if err != nil {
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return
+		}
+
+		if err := redisClient.LPush(r.Context(), queue.AlertsNormalizedQueueKey, eventBytes).Err(); err != nil {
+			http.Error(w, fmt.Sprintf("Internal Server Error: Failed to queue %s alert", label), http.StatusInternalServerError)
+			return
+		}
+
+		redisClient.Set(r.Context(), fmt.Sprintf("heartbeat:connector:%s:%s", tenantID.String(), sourceType), time.Now().Unix(), 24*time.Hour)
+		redisClient.Del(r.Context(), fmt.Sprintf("webhook:error:%s:%s", tenantID.String(), sourceType))
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(IngestResponse{
+			Status:    "accepted",
+			ID:        incident.ID,
+			Message:   fmt.Sprintf("%s alert successfully normalized and queued", label),
+			Timestamp: incident.Timestamp,
+		})
+	}
+}
+
+// HandleCrowdStrikeIngest ingests CrowdStrike Falcon EDR detections (POSTed by a Falcon Fusion
+// workflow HTTP action — see internal/connector/crowdstrike.go).
+func HandleCrowdStrikeIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) http.HandlerFunc {
+	return handleTypedIngest(pgPool, redisClient, model.SourceCrowdStrike, "CrowdStrike")
+}
+
+// HandlePaloAltoIngest ingests PAN-OS threat logs forwarded via an HTTP Log Forwarding profile
+// (see internal/connector/paloalto.go).
+func HandlePaloAltoIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) http.HandlerFunc {
+	return handleTypedIngest(pgPool, redisClient, model.SourcePaloAlto, "Palo Alto")
+}
+
+// HandleFortinetIngest ingests FortiGate UTM/IPS logs posted via a FortiOS Automation Stitch
+// webhook (see internal/connector/fortinet.go).
+func HandleFortinetIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) http.HandlerFunc {
+	return handleTypedIngest(pgPool, redisClient, model.SourceFortinet, "Fortinet")
+}
+
 type SaveSecretRequest struct {
 	Key   string `json:"key"`
 	Value string `json:"value"`

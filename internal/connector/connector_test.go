@@ -231,3 +231,115 @@ func TestMapRawPayloadDispatchesToRegisteredConnector(t *testing.T) {
 		t.Errorf("expected zabbix connector to handle dispatch and map severity=disaster to fatal, got %+v", incidents)
 	}
 }
+
+const crowdStrikeJSON = `{
+	"detection_id": "ldt:abc123",
+	"severity_name": "Critical",
+	"severity": 95,
+	"tactic": "Defense Evasion",
+	"technique": "Masquerading",
+	"filename": "evil.exe",
+	"description": "Malicious binary executed",
+	"timestamp": "2026-07-12T12:00:00Z",
+	"device": {"hostname": "WIN-EDR-01", "external_ip": "203.0.113.10", "local_ip": "10.0.0.5"}
+}`
+
+func TestCrowdStrikeConnector(t *testing.T) {
+	conn := connector.MustGet(model.SourceCrowdStrike)
+	if conn.Type() != model.SourceCrowdStrike {
+		t.Errorf("expected Type() crowdstrike, got %s", conn.Type())
+	}
+	incidents, err := conn.MapToUnified([]byte(crowdStrikeJSON), uuid.New())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(incidents) != 1 {
+		t.Fatalf("expected 1 incident, got %d", len(incidents))
+	}
+	inc := incidents[0]
+	if inc.Severity != model.SeverityFatal {
+		t.Errorf("expected severity fatal for severity_name=Critical, got %s", inc.Severity)
+	}
+	if inc.ExternalID != "ldt:abc123" {
+		t.Errorf("expected external_id from detection_id, got %q", inc.ExternalID)
+	}
+	if inc.Host != "WIN-EDR-01" {
+		t.Errorf("expected host from device.hostname, got %q", inc.Host)
+	}
+	if inc.EventType != "edr_detection" {
+		t.Errorf("expected event_type edr_detection, got %q", inc.EventType)
+	}
+	if _, err := conn.MapToUnified([]byte("not-json"), uuid.New()); err == nil {
+		t.Error("expected error for malformed JSON")
+	}
+}
+
+const paloAltoJSON = `{
+	"serial": "007",
+	"type": "THREAT",
+	"threatid": "30001",
+	"threat_name": "Cobalt Strike Beacon",
+	"severity": "high",
+	"action": "reset-both",
+	"src_ip": "198.51.100.7",
+	"dst_ip": "10.0.0.9",
+	"rule": "block-c2",
+	"device_name": "PA-VM-01",
+	"time_generated": "2026/07/12 12:00:00"
+}`
+
+func TestPaloAltoConnector(t *testing.T) {
+	conn := connector.MustGet(model.SourcePaloAlto)
+	incidents, err := conn.MapToUnified([]byte(paloAltoJSON), uuid.New())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	inc := incidents[0]
+	if inc.Severity != model.SeverityCritical {
+		t.Errorf("expected severity critical for PAN severity=high, got %s", inc.Severity)
+	}
+	if inc.ExternalID != "30001" {
+		t.Errorf("expected external_id from threatid, got %q", inc.ExternalID)
+	}
+	if inc.EventType != "firewall_threat" {
+		t.Errorf("expected event_type firewall_threat, got %q", inc.EventType)
+	}
+	if _, err := conn.MapToUnified([]byte("]["), uuid.New()); err == nil {
+		t.Error("expected error for malformed JSON")
+	}
+}
+
+const fortinetJSON = `{
+	"type": "utm",
+	"subtype": "ips",
+	"level": "critical",
+	"logid": "0419016384",
+	"attack": "Backdoor.Double.Pulsar",
+	"msg": "backdoor detected",
+	"action": "dropped",
+	"srcip": "198.51.100.22",
+	"dstip": "10.0.0.11",
+	"devname": "FGT-60F",
+	"eventtime": "1783000000"
+}`
+
+func TestFortinetConnector(t *testing.T) {
+	conn := connector.MustGet(model.SourceFortinet)
+	incidents, err := conn.MapToUnified([]byte(fortinetJSON), uuid.New())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	inc := incidents[0]
+	if inc.Severity != model.SeverityCritical {
+		t.Errorf("expected severity critical for FortiOS level=critical, got %s", inc.Severity)
+	}
+	if inc.ExternalID != "0419016384" {
+		t.Errorf("expected external_id from logid, got %q", inc.ExternalID)
+	}
+	if inc.Host != "FGT-60F" {
+		t.Errorf("expected host from devname, got %q", inc.Host)
+	}
+	if _, err := conn.MapToUnified([]byte("<xml/>"), uuid.New()); err == nil {
+		t.Error("expected error for malformed JSON")
+	}
+}

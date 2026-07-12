@@ -22,6 +22,9 @@ const (
 	SourceAzureMonitor IncidentSource = "azuremonitor"
 	SourcePagerDuty    IncidentSource = "pagerduty"
 	SourceOpsgenie     IncidentSource = "opsgenie"
+	SourceCrowdStrike  IncidentSource = "crowdstrike"
+	SourcePaloAlto     IncidentSource = "paloalto"
+	SourceFortinet     IncidentSource = "fortinet"
 )
 
 // UnifiedIncident is the normalized internal JSON structure used by the SaaS NOC/SOC engine.

@@ -493,6 +493,20 @@ func main() {
 	protectedCloudWatch := middleware.APIKeyAuth(appPool, redisClient, jwtSecret)(middleware.RateLimiter(redisClient, 500)(cloudwatchHandler))
 	mux.Handle("/api/v1/ingest/cloudwatch", protectedCloudWatch)
 
+	// EDR (CrowdStrike) and firewall (Palo Alto, Fortinet) inbound connectors — same auth/rate-limit
+	// wrapping as the connectors above.
+	crowdstrikeHandler := api.HandleCrowdStrikeIngest(appPool, redisClient)
+	protectedCrowdStrike := middleware.APIKeyAuth(appPool, redisClient, jwtSecret)(middleware.RateLimiter(redisClient, 500)(crowdstrikeHandler))
+	mux.Handle("/api/v1/ingest/crowdstrike", protectedCrowdStrike)
+
+	paloAltoHandler := api.HandlePaloAltoIngest(appPool, redisClient)
+	protectedPaloAlto := middleware.APIKeyAuth(appPool, redisClient, jwtSecret)(middleware.RateLimiter(redisClient, 500)(paloAltoHandler))
+	mux.Handle("/api/v1/ingest/paloalto", protectedPaloAlto)
+
+	fortinetHandler := api.HandleFortinetIngest(appPool, redisClient)
+	protectedFortinet := middleware.APIKeyAuth(appPool, redisClient, jwtSecret)(middleware.RateLimiter(redisClient, 500)(fortinetHandler))
+	mux.Handle("/api/v1/ingest/fortinet", protectedFortinet)
+
 	// Secure Vault Credentials Storage Endpoint (Postgres Vault with RLS & GCM Ciphers, protected by JWT & Admin Role check)
 	vaultRepo := repository.NewPostgresVaultRepository()
 
