@@ -10,6 +10,7 @@ import (
 	"noc-api/internal/model"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -23,12 +24,35 @@ type CreateTenantRequest struct {
 	Name string `json:"name"`
 }
 
-// HandleGetTenants returns all active tenants in the platform.
+// HandleGetTenants returns the active tenants visible to the caller: every active tenant for a
+// platform-wide admin (GlobalRole==admin, matching the MSP-wide view used elsewhere), or only
+// the tenants the caller is an explicit member of (tenant_users) otherwise. Previously this
+// returned every active tenant to any authenticated user regardless of role — a cross-tenant
+// info disclosure (any operator/viewer could see every client's name) that also caused the
+// frontend's tenant selector to default to a tenant the user isn't actually a member of,
+// making unrelated tenant-scoped endpoints 403 silently.
 func HandleGetTenants(pgPool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 
-		rows, err := pgPool.Query(ctx, "SELECT id, name, slug FROM tenants WHERE status = 'active' ORDER BY name")
+		claims, ok := middleware.ClaimsFromContext(ctx)
+		if !ok {
+			http.Error(w, "Unauthorized: User claims missing", http.StatusUnauthorized)
+			return
+		}
+
+		var rows pgx.Rows
+		var err error
+		if claims.GlobalRole == model.RoleAdmin {
+			rows, err = pgPool.Query(ctx, "SELECT id, name, slug FROM tenants WHERE status = 'active' ORDER BY name")
+		} else {
+			rows, err = pgPool.Query(ctx, `
+				SELECT t.id, t.name, t.slug FROM tenants t
+				JOIN tenant_users tu ON tu.tenant_id = t.id
+				WHERE t.status = 'active' AND tu.user_id = $1
+				ORDER BY t.name
+			`, claims.UserID)
+		}
 		if err != nil {
 			http.Error(w, "Failed to query tenants", http.StatusInternalServerError)
 			return
