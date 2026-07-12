@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log"
 	"net/http"
@@ -24,6 +25,7 @@ import (
 	"noc-api/internal/ws"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -386,11 +388,56 @@ func main() {
 		}`))
 	})
 
-	// Health Check endpoint (unauthenticated)
+	// Health Check endpoint (unauthenticated) — actually pings the DB and Redis rather than
+	// returning a static string, so restart/alerting policies relying on this are meaningful.
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		checkCtx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+		defer cancel()
+
+		dbStatus := "ok"
+		if err := appPool.Ping(checkCtx); err != nil {
+			dbStatus = "unreachable"
+		}
+
+		redisStatus := "ok"
+		if err := redisClient.Ping(checkCtx).Err(); err != nil {
+			redisStatus = "unreachable"
+		}
+
+		healthy := dbStatus == "ok" && redisStatus == "ok"
+		status := "healthy"
+		statusCode := http.StatusOK
+		if !healthy {
+			status = "unhealthy"
+			statusCode = http.StatusServiceUnavailable
+		}
+
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"status":"healthy","uptime":"online"}`))
+		w.WriteHeader(statusCode)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"status": status,
+			"checks": map[string]string{
+				"database": dbStatus,
+				"redis":    redisStatus,
+			},
+		})
+	})
+
+	// Prometheus metrics endpoint — only responds if METRICS_TOKEN is configured AND the
+	// request supplies that exact value (header or query param); otherwise 404, so nothing is
+	// exposed on this public Railway URL by default.
+	metricsToken := os.Getenv("METRICS_TOKEN")
+	promMetricsHandler := promhttp.Handler()
+	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
+		supplied := r.Header.Get("X-Metrics-Token")
+		if supplied == "" {
+			supplied = r.URL.Query().Get("token")
+		}
+		if metricsToken == "" || supplied != metricsToken {
+			http.NotFound(w, r)
+			return
+		}
+		promMetricsHandler.ServeHTTP(w, r)
 	})
 
 	// High-Performance Ingestion endpoint (protected by API Key auth middleware & rate limiter)

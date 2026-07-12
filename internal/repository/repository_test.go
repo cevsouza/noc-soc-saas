@@ -65,6 +65,14 @@ func getTestPool(t *testing.T) *pgxpool.Pool {
 		t.Skipf("Skipping integration test: PostgreSQL connection failed: %v", err)
 	}
 
+	// NewConnectionPool never dials eagerly (pgxpool defers the actual TCP connection), so it
+	// "succeeds" even when Postgres isn't reachable — without this Ping, the real connection
+	// error only surfaces on the first live query as a t.Fatalf, not the intended graceful skip.
+	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
+		t.Skipf("Skipping integration test: PostgreSQL ping failed: %v", err)
+	}
+
 	return pool
 }
 
