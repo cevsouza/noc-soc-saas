@@ -423,6 +423,14 @@ func HandleAdminCreateUser(pgPool *pgxpool.Pool) http.HandlerFunc {
 		}
 
 		verificationToken := uuid.New().String()
+
+		// Mirror HandleRegister: if SMTP isn't configured, no verification email can ever arrive,
+		// so auto-verify the account instead of leaving it permanently unable to log in. When SMTP
+		// IS configured, keep requiring email verification.
+		smtpConfigured := os.Getenv("SMTP_HOST") != "" && os.Getenv("SMTP_PORT") != "" &&
+			os.Getenv("SMTP_USERNAME") != "" && os.Getenv("SMTP_PASSWORD") != "" && os.Getenv("SMTP_SENDER") != ""
+		isVerified := !smtpConfigured
+
 		ctx := r.Context()
 
 		tx, err := pgPool.Begin(ctx)
@@ -457,7 +465,7 @@ func HandleAdminCreateUser(pgPool *pgxpool.Pool) http.HandlerFunc {
 			VALUES ($1, $2, $3, $4, $5, $6)
 			RETURNING id
 		`
-		err = tx.QueryRow(ctx, queryInsertUser, req.Email, req.Name, string(pwdHash), false, verificationToken, string(req.Role)).Scan(&userID)
+		err = tx.QueryRow(ctx, queryInsertUser, req.Email, req.Name, string(pwdHash), isVerified, verificationToken, string(req.Role)).Scan(&userID)
 		if err != nil {
 			http.Error(w, "Internal Server Error: Failed to create user", http.StatusInternalServerError)
 			return
@@ -491,14 +499,20 @@ func HandleAdminCreateUser(pgPool *pgxpool.Pool) http.HandlerFunc {
 			return
 		}
 
-		// Send verification email
-		go func() {
-			_ = security.SendVerificationEmail(req.Email, req.Name, verificationToken)
-		}()
+		// Only send a verification email when the account actually needs verifying (SMTP configured).
+		if !isVerified {
+			go func() {
+				_ = security.SendVerificationEmail(req.Email, req.Name, verificationToken)
+			}()
+		}
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
-		_, _ = w.Write([]byte(`{"message":"Usuário cadastrado com sucesso pelo administrador. E-mail de verificação enviado."}`))
+		if isVerified {
+			_, _ = w.Write([]byte(`{"message":"Usuário cadastrado com sucesso e ativado automaticamente (SMTP não configurado)."}`))
+		} else {
+			_, _ = w.Write([]byte(`{"message":"Usuário cadastrado com sucesso pelo administrador. E-mail de verificação enviado."}`))
+		}
 	}
 }
 
