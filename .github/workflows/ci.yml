@@ -8,6 +8,31 @@ jobs:
   backend:
     name: Backend (Go)
     runs-on: ubuntu-latest
+    # Ephemeral, CI-only Postgres so internal/repository's RLS tests (TestTenantIsolation,
+    # TestTenantVault) run for real instead of skipping — matches the version pinned in
+    # docker-compose.yml.
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: noc_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DB_HOST: localhost
+      DB_PORT: 5432
+      DB_NAME: noc_test
+      DB_SSLMODE: disable
+      # Throwaway password for the noc_app_runtime role on this disposable CI database only —
+      # not a real secret, never used against Railway/production.
+      APP_DB_PASSWORD: ci_ephemeral_password_only
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -17,7 +42,19 @@ jobs:
         run: go build ./...
       - name: Vet
         run: go vet ./...
+      - name: Run migrations (admin role, provisions noc_app_runtime)
+        env:
+          DB_USER: postgres
+          DB_PASSWORD: postgres
+        run: go run ./cmd/migrate
       - name: Test
+        # Connect as the non-superuser noc_app_runtime role (not the migration-owner "postgres"
+        # user above) so FORCE ROW LEVEL SECURITY in internal/repository's tests is actually
+        # exercised — a superuser connection bypasses RLS entirely and would let a real
+        # tenant-isolation regression pass silently.
+        env:
+          DB_USER: noc_app_runtime
+          DB_PASSWORD: ci_ephemeral_password_only
         run: go test ./...
 
   frontend:

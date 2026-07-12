@@ -19,6 +19,14 @@ import (
 )
 
 // getTestPool initialized the database pool using environment variables or defaults.
+//
+// IMPORTANT: DB_USER/DB_PASSWORD should point at the non-superuser "noc_app_runtime" role
+// (see internal/db/connection.go's SetupAppRuntimeRole and migration 000012), not at the
+// migration-owner superuser. FORCE ROW LEVEL SECURITY still exempts a superuser connection
+// from RLS, so running these tests against one wouldn't prove anything about tenant
+// isolation — it would just silently skip the actual security check while still "passing".
+// See .github/workflows/ci.yml for the reference setup: migrations run once as the admin
+// user (provisioning noc_app_runtime), then `go test` itself connects as noc_app_runtime.
 func getTestPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 
