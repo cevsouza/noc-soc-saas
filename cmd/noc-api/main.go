@@ -732,6 +732,31 @@ func main() {
 	mux.Handle("/api/v1/runbooks/approvals/approve", protectedApproveRunbook)
 	mux.Handle("/api/v1/runbooks/approvals/reject", protectedRejectRunbook)
 
+	// Outbound response actions (Fase 5 fatia 4): vendor-native containment — block/unblock a
+	// source IP on a firewall (Palo Alto, Fortinet) or contain/lift a host on the EDR
+	// (CrowdStrike). Every action mutates network/endpoint state, so it is filed as a request
+	// and only executed on approval — same operator/admin approval gate as runbook auto-triggers.
+	protectedListResponse := middleware.JWTAuth(jwtSecret)(api.HandleGetResponseActions(appPool))
+	protectedCreateResponse := middleware.JWTAuth(jwtSecret)(
+		middleware.RequireRole(model.RoleAdmin, model.RoleOperator)(
+			api.HandleCreateResponseAction(appPool),
+		),
+	)
+	protectedApproveResponse := middleware.JWTAuth(jwtSecret)(
+		middleware.RequireRole(model.RoleAdmin, model.RoleOperator)(
+			api.HandleApproveResponseAction(appPool),
+		),
+	)
+	protectedRejectResponse := middleware.JWTAuth(jwtSecret)(
+		middleware.RequireRole(model.RoleAdmin, model.RoleOperator)(
+			api.HandleRejectResponseAction(appPool),
+		),
+	)
+	mux.Handle("/api/v1/response/requests", protectedListResponse)
+	mux.Handle("/api/v1/response/request", protectedCreateResponse)
+	mux.Handle("/api/v1/response/approve", protectedApproveResponse)
+	mux.Handle("/api/v1/response/reject", protectedRejectResponse)
+
 	// Incident chat & timeline endpoints
 	protectedIncidentChat := middleware.JWTAuth(jwtSecret)(api.HandleIncidentChat(appPool))
 	protectedIncidentComments := middleware.JWTAuth(jwtSecret)(api.HandleGetIncidentComments(appPool))
