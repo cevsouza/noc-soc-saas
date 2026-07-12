@@ -685,6 +685,12 @@ func main() {
 	protectedGetSLAReport := middleware.JWTAuth(jwtSecret)(api.HandleGetSLAReport(appPool))
 	mux.Handle("/api/v1/reports/sla/stats", protectedGetSLAReport)
 
+	// Operational KPI bundle (Fase 6 fatia 1): tactical NOC/SOC metrics (triage backlog, alert
+	// noise ratio, top offenders, automation ROI, MITRE breakdown, silent telemetry sources) that
+	// complement the SLA executive report. Same authenticated-user access level as SLA stats.
+	protectedGetOperationalStats := middleware.JWTAuth(jwtSecret)(api.HandleGetOperationalStats(appPool, redisClient))
+	mux.Handle("/api/v1/reports/operational/stats", protectedGetOperationalStats)
+
 	// Global search (alerts/runbooks/tenants), scoped to whatever tenants the caller has access to
 	protectedSearch := middleware.JWTAuth(jwtSecret)(api.HandleGlobalSearch(appPool))
 	mux.Handle("/api/v1/search", protectedSearch)
