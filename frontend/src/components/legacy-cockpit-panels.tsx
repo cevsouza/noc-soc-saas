@@ -27,6 +27,7 @@ import { apiFetch } from '@/lib/api-client';
 import { API_BASE_URL } from '@/lib/env';
 import { RunbookApprovalsPanel } from '@/components/settings/runbook-approvals-panel';
 import { AccessControlPanel } from '@/components/settings/access-control-panel';
+import { OperationalKpisPanel } from '@/components/settings/operational-kpis-panel';
 import type { Alert, SLAExecutiveStats } from '@/types';
 
 type AsyncStatus = { status: 'idle' | 'saving' | 'success' | 'error'; message?: string };
@@ -631,6 +632,18 @@ export function LegacyCockpitPanels({ cockpitTab, alerts, onSearchTermChange }: 
                 >
                   <TrendingUp className="w-3.5 h-3.5 text-emerald-400" />
                   <span>Métricas & SLA</span>
+                </button>
+                <button
+                  onClick={() => {
+                    setSelectedIntegrationTool('operational_kpis');
+                    setValidationResult(null);
+                  }}
+                  className={`w-full px-3 py-2 rounded-lg text-left text-xs font-bold transition-all flex items-center gap-2 ${
+                    selectedIntegrationTool === 'operational_kpis' ? 'bg-white/5 text-white border-l-2 border-cyan-400' : 'text-slate-400 hover:bg-white/[0.02] hover:text-slate-200'
+                  }`}
+                >
+                  <Activity className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>KPIs Operacionais</span>
                 </button>
 
                 <span className="text-[9px] font-bold text-slate-500 uppercase tracking-widest px-2.5 py-2 mt-4">Auto-Healing</span>
@@ -1571,6 +1584,8 @@ export function LegacyCockpitPanels({ cockpitTab, alerts, onSearchTermChange }: 
                       </div>
                     </div>
                   </div>
+                ) : selectedIntegrationTool === 'operational_kpis' ? (
+                  <OperationalKpisPanel tenantId={selectedTenant?.id} />
                 ) : selectedIntegrationTool === 'approvals_admin' ? (
                   <RunbookApprovalsPanel />
                 ) : selectedIntegrationTool === 'access_admin' ? (
