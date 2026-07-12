@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import {
   Activity,
   Check,
@@ -24,7 +25,7 @@ import { useTenantSelection } from '@/lib/tenant-context';
 import { apiFetch } from '@/lib/api-client';
 import { API_BASE_URL } from '@/lib/env';
 import { RunbookApprovalsPanel } from '@/components/settings/runbook-approvals-panel';
-import type { Alert } from '@/types';
+import type { Alert, SLAExecutiveStats } from '@/types';
 
 type AsyncStatus = { status: 'idle' | 'saving' | 'success' | 'error'; message?: string };
 
@@ -108,7 +109,7 @@ export function LegacyCockpitPanels({ cockpitTab, alerts, onSearchTermChange }: 
   const [playbooksFilter, setPlaybooksFilter] = useState<'all' | 'tenant'>('all');
 
   // SLA report (Settings > Relatórios)
-  const [slaData, setSlaData] = useState<any | null>(null);
+  const [slaData, setSlaData] = useState<SLAExecutiveStats | null>(null);
   const [isLoadingSla, setIsLoadingSla] = useState(false);
   const [reportMode, setReportMode] = useState<'executive' | 'technical'>('executive');
 
@@ -1904,35 +1905,57 @@ export function LegacyCockpitPanels({ cockpitTab, alerts, onSearchTermChange }: 
                         {reportMode === 'executive' ? (
                           <>
                             {/* Executive view */}
-                            <div className="grid grid-cols-3 gap-4">
+                            <div className="grid grid-cols-4 gap-4">
                               <div className="p-4 rounded-xl bg-white/5 border border-white/5 flex flex-col gap-1 animate-fadeIn">
                                 <span className="text-[9px] uppercase font-bold text-slate-400">Total de Incidentes</span>
                                 <span className="text-2xl font-bold text-slate-100">{slaData.total_incidents}</span>
                               </div>
-                              
+
+                              <div className="p-4 rounded-xl bg-white/5 border border-white/5 flex flex-col gap-1 animate-fadeIn">
+                                <span className="text-[9px] uppercase font-bold text-slate-400">Tempo Médio Reconhecimento (MTTA)</span>
+                                <span className="text-2xl font-bold text-slate-100">{slaData.average_tta.toFixed(1)} min</span>
+                              </div>
+
                               <div className="p-4 rounded-xl bg-white/5 border border-white/5 flex flex-col gap-1 animate-fadeIn">
                                 <span className="text-[9px] uppercase font-bold text-slate-400">Tempo Médio Resposta (MTTR)</span>
-                                <span className="text-2xl font-bold text-slate-100">{slaData.mttr_minutes} min</span>
+                                <span className="text-2xl font-bold text-slate-100">{slaData.average_ttr.toFixed(1)} min</span>
                               </div>
 
                               <div className="p-4 rounded-xl bg-white/5 border border-white/5 flex flex-col gap-1 animate-fadeIn">
                                 <span className="text-[9px] uppercase font-bold text-slate-400">Nível Geral de SLA (Compliance)</span>
-                                <span className="text-2xl font-bold text-emerald-400">{slaData.sla_percentage}%</span>
+                                <span className="text-2xl font-bold text-emerald-400">{slaData.sla_compliance.toFixed(1)}%</span>
                               </div>
                             </div>
 
                             <div className="p-5 rounded-xl bg-white/5 border border-white/5 flex flex-col gap-3 animate-fadeIn">
                               <h5 className="text-xs font-bold text-slate-200 uppercase tracking-wide">Status Geral de Compliance</h5>
                               <div className="w-full bg-slate-950 rounded-full h-3.5 border border-white/5 overflow-hidden">
-                                <div 
-                                  className="bg-emerald-500 h-full rounded-full transition-all" 
-                                  style={{ width: `${slaData.sla_percentage}%` }}
+                                <div
+                                  className="bg-emerald-500 h-full rounded-full transition-all"
+                                  style={{ width: `${slaData.sla_compliance}%` }}
                                 ></div>
                               </div>
                               <p className="text-[10px] text-slate-400 leading-relaxed">
-                                O SLA (Service Level Agreement) é calculado com base no tempo de resposta inicial e tempo de mitigação acordado. As metas estabelecidas são de resposta rápida de até 15 minutos para alertas críticos e correção em até 1 hora.
+                                O SLA (Service Level Agreement) é calculado com base na meta de tempo de resolução por severidade: até 15 minutos para alertas fatais, 30 minutos para críticos, 2 horas para avisos e 8 horas para informativos. Compliance considera apenas incidentes já resolvidos.
                               </p>
                             </div>
+
+                            {slaData.by_severity && slaData.by_severity.length > 0 && (
+                              <div className="p-5 rounded-xl bg-white/5 border border-white/5 flex flex-col gap-3 animate-fadeIn">
+                                <h5 className="text-xs font-bold text-slate-200 uppercase tracking-wide">MTTR Médio vs. Meta de SLA, por Severidade</h5>
+                                <ResponsiveContainer width="100%" height={260}>
+                                  <BarChart data={slaData.by_severity} margin={{ top: 8, right: 8, left: 0, bottom: 8 }}>
+                                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+                                    <XAxis dataKey="severity" tickFormatter={(s: string) => s.toUpperCase()} stroke="#64748b" fontSize={10} />
+                                    <YAxis stroke="#64748b" fontSize={10} label={{ value: 'minutos', angle: -90, position: 'insideLeft', fill: '#64748b', fontSize: 10 }} />
+                                    <Tooltip contentStyle={{ background: '#0b0f19', border: '1px solid rgba(255,255,255,0.1)', fontSize: 11 }} labelFormatter={(s: string) => s.toUpperCase()} />
+                                    <Legend wrapperStyle={{ fontSize: 10 }} />
+                                    <Bar dataKey="average_ttr" name="MTTR médio" fill="#10b981" radius={[4, 4, 0, 0]} />
+                                    <Bar dataKey="target_minutes" name="Meta SLA" fill="#64748b" fillOpacity={0.35} radius={[4, 4, 0, 0]} />
+                                  </BarChart>
+                                </ResponsiveContainer>
+                              </div>
+                            )}
 
                             {/* Export/Download SLA PDF */}
                             <div className="p-5 rounded-xl bg-[#0e1626] border border-cyan-500/10 flex items-center justify-between mt-2 animate-fadeIn">

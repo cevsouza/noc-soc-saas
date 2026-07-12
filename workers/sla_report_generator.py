@@ -17,6 +17,18 @@ from reportlab.lib import colors
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("SLAGenerator")
 
+# Mirrors frontend/src/components/alerts/sla-countdown.tsx (lines 19-24) and the equivalent Go
+# map in internal/api/handler.go (slaTargetMinutesBySeverity). Duplicated here because this
+# script runs in a separate Python process/runtime and can't import Go or TS source — if the
+# targets ever change, update all three places.
+SLA_TARGET_MINUTES_BY_SEVERITY = {
+    "fatal": 15,
+    "critical": 30,
+    "warning": 120,
+    "info": 480,
+}
+DEFAULT_SLA_TARGET_MINUTES = 480  # falls back to the "info" tier for any unrecognized severity
+
 DB_HOST = os.environ.get("DB_HOST", "localhost")
 DB_PORT = int(os.environ.get("DB_PORT", "5432"))
 DB_USER = os.environ.get("DB_USER", "postgres")
@@ -44,8 +56,9 @@ def fetch_sla_data(tenant_id: str):
             cur.execute("SET LOCAL app.current_tenant_id = %s", (tenant_id,))
             cur.execute(
                 """
-                SELECT id, event_type, severity, status, summary, created_at, updated_at, resolved_at 
-                FROM alerts 
+                SELECT id, event_type, severity, status, summary, created_at, updated_at,
+                       acknowledged_at, resolved_at
+                FROM alerts
                 WHERE created_at >= NOW() - INTERVAL '30 days'
                 ORDER BY created_at DESC
                 """
@@ -130,35 +143,39 @@ def generate_pdf(tenant_id: str, tenant_name: str, alerts: list, output_path: st
     critical_alerts = sum(1 for a in alerts if a['severity'] == 'critical')
     resolved_alerts = sum(1 for a in alerts if a['status'] == 'resolved')
     
-    # Calculate MTTA & MTTR in minutes
+    # Calculate MTTA & MTTR in minutes from real timestamps (previously MTTA was fabricated —
+    # min(15, mttr*0.15) or a hardcoded 8.5 — because acknowledged_at wasn't even fetched from
+    # the DB). Uses .get() throughout since some callers (e.g. the test suite's mock data) omit
+    # acknowledged_at/resolved_at entirely rather than setting them to None.
     mtta_list = []
     mttr_list = []
-    
+    compliance_hits = 0
+    compliance_total = 0
+
     for a in alerts:
-        # Simulate / compute MTTA (Acknowledge) and MTTR (Resolve) if timestamps exist
         c_time = a['created_at']
-        r_time = a['resolved_at']
-        
+        ack_time = a.get('acknowledged_at')
+        r_time = a.get('resolved_at')
+
+        if ack_time:
+            mtta_list.append((ack_time - c_time).total_seconds() / 60.0)
+
         if r_time:
-            # Calculate actual delta
             delta_resolve = (r_time - c_time).total_seconds() / 60.0
             mttr_list.append(delta_resolve)
-            # Acknowledge time is usually faster, we simulate it as 10% of MTTR or a delta if we had state transitions
-            mtta_list.append(min(15.0, delta_resolve * 0.15))
-        else:
-            # Mock default values for active alerts
-            if a['status'] == 'acknowledged':
-                mtta_list.append(8.5)
 
-    mtta = sum(mtta_list) / len(mtta_list) if mtta_list else 5.2
-    mttr = sum(mttr_list) / len(mttr_list) if mttr_list else 48.0
-    
-    # SLA Compliance Calculation
-    # SLA Target: Acknowledge < 15m, Resolve < 120m
-    sla_compliance = 100.0
-    if mttr_list:
-        failures = sum(1 for m in mttr_list if m > 120)
-        sla_compliance = ((len(mttr_list) - failures) / len(mttr_list)) * 100.0
+            # SLA compliance only counts already-resolved incidents (an open incident hasn't
+            # "passed or failed" its target yet) — mirrors the Go endpoint's same convention.
+            target = SLA_TARGET_MINUTES_BY_SEVERITY.get(a.get('severity'), DEFAULT_SLA_TARGET_MINUTES)
+            compliance_total += 1
+            if delta_resolve <= target:
+                compliance_hits += 1
+
+    # No fabricated fallback numbers — 0.0/100% honestly communicate "no data" instead of
+    # inventing a plausible-looking value.
+    mtta = sum(mtta_list) / len(mtta_list) if mtta_list else 0.0
+    mttr = sum(mttr_list) / len(mttr_list) if mttr_list else 0.0
+    sla_compliance = (compliance_hits / compliance_total * 100.0) if compliance_total else 100.0
 
     # 2. Executive Summary Metrics Table
     summary_data = [

@@ -569,16 +569,183 @@ func HandleResolveIncident(pgPool *pgxpool.Pool) http.HandlerFunc {
 	}
 }
 
-type SLAReportResponse struct {
-	TotalIncidents  int     `json:"total_incidents"`
-	ResolvedCount   int     `json:"resolved_count"`
-	UnresolvedCount int     `json:"unresolved_count"`
-	AverageTTA      float64 `json:"average_tta"`    // in minutes
-	AverageTTR      float64 `json:"average_ttr"`    // in minutes
-	SLACompliance   float64 `json:"sla_compliance"` // percentage
+// slaTargetMinutesBySeverity mirrors the per-severity SLA targets already shown to users in
+// frontend/src/components/alerts/sla-countdown.tsx (lines 19-24) and duplicated again in
+// workers/sla_report_generator.py — this is the single canonical definition of "SLA
+// compliance" for incident response across the whole product. Keep all three in sync if the
+// targets ever change (Go can't import the TS/Python source, hence the duplication).
+var slaTargetMinutesBySeverity = map[string]float64{
+	"fatal":    15,
+	"critical": 30,
+	"warning":  120,
+	"info":     480,
 }
 
-// HandleGetSLAReport calculates averages of response time and resolution time for a tenant.
+// severityOrder fixes the display/serialization order of SLASeverityBreakdown entries —
+// fatal (most urgent) through info (least), independent of SQL row order.
+var severityOrder = []string{"fatal", "critical", "warning", "info"}
+
+type SLASeverityBreakdown struct {
+	Severity      string  `json:"severity"`
+	TargetMinutes float64 `json:"target_minutes"`
+	Count         int     `json:"count"`
+	ResolvedCount int     `json:"resolved_count"`
+	AverageTTA    float64 `json:"average_tta"`    // minutes; 0 if no acknowledged alerts in this severity
+	AverageTTR    float64 `json:"average_ttr"`    // minutes; 0 if no resolved alerts in this severity
+	Compliance    float64 `json:"compliance_pct"` // % of resolved alerts in this severity resolved within target
+}
+
+type SLAExecutiveStats struct {
+	TotalIncidents  int                    `json:"total_incidents"`
+	ResolvedCount   int                    `json:"resolved_count"`
+	UnresolvedCount int                    `json:"unresolved_count"`
+	AverageTTA      float64                `json:"average_tta"`    // minutes, overall
+	AverageTTR      float64                `json:"average_ttr"`    // minutes, overall
+	SLACompliance   float64                `json:"sla_compliance"` // %, severity-target-based
+	BySeverity      []SLASeverityBreakdown `json:"by_severity"`    // always 4 rows: fatal, critical, warning, info
+}
+
+// severityRow is the raw per-severity query result, before the pure aggregation step.
+type severityRow struct {
+	severity      string
+	targetMinutes float64
+	count         int
+	resolvedCount int
+	avgTTA        float64
+	avgTTR        float64
+	metSLACount   int
+}
+
+// deriveSLAExecutiveStats aggregates per-severity rows into the final response — pure
+// function, no DB dependency, so it's unit-testable without Postgres (see handler_test.go).
+// Overall SLA compliance is computed only over already-resolved incidents (an open incident
+// hasn't "passed or failed" its target yet), defaulting to 100% when there's no resolved data.
+func deriveSLAExecutiveStats(rows []severityRow) SLAExecutiveStats {
+	var total, resolved int
+	var totalMet, totalResolvedForCompliance int
+	bySeverity := make([]SLASeverityBreakdown, 0, len(rows))
+
+	for _, row := range rows {
+		total += row.count
+		resolved += row.resolvedCount
+		totalMet += row.metSLACount
+		totalResolvedForCompliance += row.resolvedCount
+
+		compliance := 100.0
+		if row.resolvedCount > 0 {
+			compliance = float64(row.metSLACount) / float64(row.resolvedCount) * 100.0
+		}
+
+		bySeverity = append(bySeverity, SLASeverityBreakdown{
+			Severity:      row.severity,
+			TargetMinutes: row.targetMinutes,
+			Count:         row.count,
+			ResolvedCount: row.resolvedCount,
+			AverageTTA:    row.avgTTA,
+			AverageTTR:    row.avgTTR,
+			Compliance:    compliance,
+		})
+	}
+
+	overallCompliance := 100.0
+	if totalResolvedForCompliance > 0 {
+		overallCompliance = float64(totalMet) / float64(totalResolvedForCompliance) * 100.0
+	}
+
+	var avgTTASum, avgTTRSum float64
+	var ttaWeight, ttrWeight int
+	for _, row := range rows {
+		if row.avgTTA > 0 {
+			avgTTASum += row.avgTTA * float64(row.resolvedCount)
+			ttaWeight += row.resolvedCount
+		}
+		if row.avgTTR > 0 {
+			avgTTRSum += row.avgTTR * float64(row.resolvedCount)
+			ttrWeight += row.resolvedCount
+		}
+	}
+	overallTTA, overallTTR := 0.0, 0.0
+	if ttaWeight > 0 {
+		overallTTA = avgTTASum / float64(ttaWeight)
+	}
+	if ttrWeight > 0 {
+		overallTTR = avgTTRSum / float64(ttrWeight)
+	}
+
+	return SLAExecutiveStats{
+		TotalIncidents:  total,
+		ResolvedCount:   resolved,
+		UnresolvedCount: total - resolved,
+		AverageTTA:      overallTTA,
+		AverageTTR:      overallTTR,
+		SLACompliance:   overallCompliance,
+		BySeverity:      bySeverity,
+	}
+}
+
+// computeSLAExecutiveStats is the single canonical place that computes MTTA/MTTR/SLA-compliance
+// for a tenant over the last 30 days. HandleGetSLAReport calls this directly.
+func computeSLAExecutiveStats(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID) (SLAExecutiveStats, error) {
+	// VALUES-seeded so all four severities always appear in the result (a plain GROUP BY on
+	// alerts.severity would silently drop any severity with zero alerts in the window).
+	// COUNT(a.id) (not COUNT(*)) is required so unmatched LEFT JOIN rows count as 0, not 1.
+	query := `
+		WITH severity_targets (severity, target_minutes) AS (
+			VALUES ('fatal', 15::numeric), ('critical', 30::numeric), ('warning', 120::numeric), ('info', 480::numeric)
+		)
+		SELECT
+			st.severity,
+			st.target_minutes,
+			COUNT(a.id) AS total,
+			COUNT(a.id) FILTER (WHERE a.status = 'resolved') AS resolved,
+			COALESCE(AVG(EXTRACT(EPOCH FROM (a.acknowledged_at - a.created_at)) / 60)
+					 FILTER (WHERE a.acknowledged_at IS NOT NULL), 0) AS avg_tta,
+			COALESCE(AVG(EXTRACT(EPOCH FROM (a.resolved_at - a.created_at)) / 60)
+					 FILTER (WHERE a.resolved_at IS NOT NULL), 0) AS avg_ttr,
+			COUNT(a.id) FILTER (
+				WHERE a.status = 'resolved'
+				  AND a.resolved_at IS NOT NULL
+				  AND EXTRACT(EPOCH FROM (a.resolved_at - a.created_at)) / 60 <= st.target_minutes
+			) AS met_sla
+		FROM severity_targets st
+		LEFT JOIN alerts a
+			ON a.severity = st.severity
+		   AND a.tenant_id = $1
+		   AND a.created_at >= NOW() - INTERVAL '30 days'
+		GROUP BY st.severity, st.target_minutes
+	`
+	rows, err := tx.Query(ctx, query, tenantID)
+	if err != nil {
+		return SLAExecutiveStats{}, err
+	}
+	defer rows.Close()
+
+	bySeverity := make(map[string]severityRow, 4)
+	for rows.Next() {
+		var row severityRow
+		if err := rows.Scan(&row.severity, &row.targetMinutes, &row.count, &row.resolvedCount, &row.avgTTA, &row.avgTTR, &row.metSLACount); err != nil {
+			return SLAExecutiveStats{}, err
+		}
+		bySeverity[row.severity] = row
+	}
+	if err := rows.Err(); err != nil {
+		return SLAExecutiveStats{}, err
+	}
+
+	orderedRows := make([]severityRow, 0, len(severityOrder))
+	for _, sev := range severityOrder {
+		if row, ok := bySeverity[sev]; ok {
+			orderedRows = append(orderedRows, row)
+		} else {
+			orderedRows = append(orderedRows, severityRow{severity: sev, targetMinutes: slaTargetMinutesBySeverity[sev]})
+		}
+	}
+
+	return deriveSLAExecutiveStats(orderedRows), nil
+}
+
+// HandleGetSLAReport calculates MTTA/MTTR/SLA-compliance averages for a tenant, broken down by
+// severity — the canonical incident-response SLA definition (see slaTargetMinutesBySeverity).
 func HandleGetSLAReport(pgPool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		tenantID, err := middleware.ResolveTenantScope(r.Context(), r, pgPool)
@@ -588,36 +755,11 @@ func HandleGetSLAReport(pgPool *pgxpool.Pool) http.HandlerFunc {
 		}
 		ctx := db.WithTenantID(r.Context(), tenantID)
 
-		var total, resolved, unresolved int
-		var avgTTA, avgTTR float64
-		var totalDevices, onlineDevices int
-
+		var stats SLAExecutiveStats
 		err = db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
-			// 1. Fetch SLA statistics from database
-			queryStats := `
-				SELECT 
-					COUNT(*) as total,
-					COUNT(CASE WHEN status = 'resolved' THEN 1 END) as resolved,
-					COUNT(CASE WHEN status != 'resolved' THEN 1 END) as unresolved,
-					COALESCE(AVG(EXTRACT(EPOCH FROM (acknowledged_at - created_at)) / 60), 0) as avg_tta,
-					COALESCE(AVG(EXTRACT(EPOCH FROM (resolved_at - created_at)) / 60), 0) as avg_ttr
-				FROM alerts
-				WHERE tenant_id = $1 AND created_at >= NOW() - INTERVAL '30 days'
-			`
-			err := tx.QueryRow(ctx, queryStats, tenantID).Scan(&total, &resolved, &unresolved, &avgTTA, &avgTTR)
-			if err != nil {
-				return err
-			}
-
-			// 2. Fetch device availability SLA compliance
-			queryDevices := `
-				SELECT COUNT(*) as total_devices,
-				       COUNT(CASE WHEN status = 'online' THEN 1 END) as online_devices
-				FROM devices
-				WHERE tenant_id = $1
-			`
-			_ = tx.QueryRow(ctx, queryDevices, tenantID).Scan(&totalDevices, &onlineDevices)
-			return nil
+			var err error
+			stats, err = computeSLAExecutiveStats(ctx, tx, tenantID)
+			return err
 		})
 
 		if err != nil {
@@ -625,20 +767,8 @@ func HandleGetSLAReport(pgPool *pgxpool.Pool) http.HandlerFunc {
 			return
 		}
 
-		slaCompliance := 100.0
-		if totalDevices > 0 {
-			slaCompliance = (float64(onlineDevices) / float64(totalDevices)) * 100.0
-		}
-
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(SLAReportResponse{
-			TotalIncidents:  total,
-			ResolvedCount:   resolved,
-			UnresolvedCount: unresolved,
-			AverageTTA:      avgTTA,
-			AverageTTR:      avgTTR,
-			SLACompliance:   slaCompliance,
-		})
+		_ = json.NewEncoder(w).Encode(stats)
 	}
 }
 

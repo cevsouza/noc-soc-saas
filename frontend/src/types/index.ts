@@ -6,3 +6,4 @@ export * from './runbook';
 export * from './vault';
 export * from './incident';
 export * from './active-user';
+export * from './sla';

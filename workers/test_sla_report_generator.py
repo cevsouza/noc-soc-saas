@@ -22,6 +22,9 @@ class TestSLAReportGenerator(unittest.TestCase):
                 "event_type": "cpu",
                 "summary": "High CPU utilization on web server",
                 "created_at": now - timedelta(hours=2),
+                # NEW: real acknowledged_at so the (previously fabricated) MTTA path is
+                # actually exercised with a real timestamp delta.
+                "acknowledged_at": now - timedelta(hours=2) + timedelta(minutes=8),
                 "resolved_at": now - timedelta(hours=1)
             },
             {
@@ -31,6 +34,8 @@ class TestSLAReportGenerator(unittest.TestCase):
                 "event_type": "memory",
                 "summary": "OOM Killer triggered on database node",
                 "created_at": now - timedelta(hours=4),
+                # Deliberately no "acknowledged_at" key at all — still exercises the .get()
+                # safe-access path for alerts that haven't been acknowledged yet.
                 "resolved_at": None
             }
         ]
