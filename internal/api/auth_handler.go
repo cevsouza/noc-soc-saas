@@ -127,20 +127,12 @@ func HandleRegister(pgPool *pgxpool.Pool) http.HandlerFunc {
 			isVerified = true
 		}
 
-		// Access control: Auto-promote and auto-verify specified initial administrator emails to prevent lockouts
+		// Access control: auto-promote and auto-verify configured initial administrator emails
+		// (INITIAL_ADMIN_EMAILS env var) to bootstrap the platform without lockouts.
 		role := model.RoleOperator
-		adminEmails := []string{
-			"cadu.souza@itfacilservicos.com.br",
-			"felipe.gomes@itfacilservicos.com.br",
-			"cevsouza@hotmail.com",
-			"admin@itfacil.com.br",
-		}
-		for _, adminEmail := range adminEmails {
-			if req.Email == adminEmail {
-				role = model.RoleAdmin
-				isVerified = true
-				break
-			}
+		if security.IsInitialAdminEmail(req.Email) {
+			role = model.RoleAdmin
+			isVerified = true
 		}
 
 		ctx := r.Context()
@@ -336,13 +328,16 @@ func HandleLogin(pgPool *pgxpool.Pool, jwtSecret []byte) http.HandlerFunc {
 			tenantRoleStr = string(model.RoleAdmin)
 		}
 
-		// Issue JWT signed token
+		// Issue JWT signed token.
+		// Role is scoped to this tenant; GlobalRole is platform-wide (MSP-level) and is the
+		// only claim that may authorize cross-tenant actions (e.g. tenant_id=all).
 		claims := &middleware.JWTClaims{
-			UserID:   userID,
-			TenantID: tenantID,
-			Role:     model.UserRole(tenantRoleStr),
-			Email:    req.Email,
-			Exp:      time.Now().Add(24 * time.Hour).Unix(), // 24 Hours valid
+			UserID:     userID,
+			TenantID:   tenantID,
+			Role:       model.UserRole(tenantRoleStr),
+			GlobalRole: model.UserRole(globalRole),
+			Email:      req.Email,
+			Exp:        time.Now().Add(24 * time.Hour).Unix(), // 24 Hours valid
 		}
 
 		token, err := middleware.GenerateJWT(claims, jwtSecret)

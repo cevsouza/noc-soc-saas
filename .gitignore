@@ -34,3 +34,7 @@ postgres_data/
 redis_data/
 test_sla_report.pdf
 frontend/public/reports/sla_report_*.pdf
+
+# Local tooling
+.claude/
+frontend/tsconfig.tsbuildinfo

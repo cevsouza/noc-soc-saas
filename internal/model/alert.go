@@ -42,4 +42,7 @@ type Alert struct {
 	ITSMTicketRef  *string                `json:"itsm_ticket_ref,omitempty"`
 	MitreTactics   *string                `json:"mitre_tactics,omitempty"`
 	UEBAAnomalous  *bool                  `json:"ueba_anomalous,omitempty"`
+	// Fingerprint is a SHA256 content hash (tenant+source+external_id, or a fallback seed when
+	// external_id is empty) used for dedupe correlation. Set once at creation, immutable.
+	Fingerprint string `json:"fingerprint,omitempty"`
 }

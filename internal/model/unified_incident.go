@@ -9,13 +9,19 @@ import (
 type IncidentSource string
 
 const (
-	SourcePrometheus IncidentSource = "prometheus"
-	SourceWazuh      IncidentSource = "wazuh"
-	SourceSentinel   IncidentSource = "sentinel"
-	SourceUptimeKuma IncidentSource = "uptimekuma"
-	SourceGrafana    IncidentSource = "grafana"
-	SourceZabbix     IncidentSource = "zabbix"
-	SourceSystem     IncidentSource = "system"
+	SourcePrometheus   IncidentSource = "prometheus"
+	SourceWazuh        IncidentSource = "wazuh"
+	SourceSentinel     IncidentSource = "sentinel"
+	SourceUptimeKuma   IncidentSource = "uptimekuma"
+	SourceGrafana      IncidentSource = "grafana"
+	SourceZabbix       IncidentSource = "zabbix"
+	SourceSystem       IncidentSource = "system"
+	SourceOTLP         IncidentSource = "otlp"
+	SourceIcinga       IncidentSource = "icinga"
+	SourceCloudWatch   IncidentSource = "cloudwatch"
+	SourceAzureMonitor IncidentSource = "azuremonitor"
+	SourcePagerDuty    IncidentSource = "pagerduty"
+	SourceOpsgenie     IncidentSource = "opsgenie"
 )
 
 // UnifiedIncident is the normalized internal JSON structure used by the SaaS NOC/SOC engine.

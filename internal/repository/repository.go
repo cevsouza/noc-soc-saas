@@ -23,7 +23,7 @@ type DeviceRepository interface {
 type AlertRepository interface {
 	Create(ctx context.Context, q db.Queryer, alert *model.Alert) error
 	GetByID(ctx context.Context, q db.Queryer, id uuid.UUID, createdAt time.Time) (*model.Alert, error)
-	List(ctx context.Context, q db.Queryer, limit, offset int) ([]*model.Alert, error)
+	List(ctx context.Context, q db.Queryer, tenantID uuid.UUID, limit, offset int) ([]*model.Alert, error)
 	UpdateStatus(ctx context.Context, q db.Queryer, id uuid.UUID, createdAt time.Time, status model.AlertStatus) error
 	Update(ctx context.Context, q db.Queryer, alert *model.Alert) error
 }

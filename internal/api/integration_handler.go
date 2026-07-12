@@ -1,17 +1,21 @@
 package api
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"noc-api/internal/db"
-	"noc-api/internal/middleware"
-	"noc-api/internal/model"
-	"noc-api/internal/loki"
 	"noc-api/internal/connector"
+	"noc-api/internal/db"
+	"noc-api/internal/loki"
+	"noc-api/internal/middleware"
+	"noc-api/internal/repository"
+	"noc-api/internal/security"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 )
@@ -37,28 +41,10 @@ type CreateIntegrationRequest struct {
 func HandleGetIntegrations(pgPool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
-		var tenantID uuid.UUID
-		var ok bool
 
-		// If user is admin, allow overriding tenant_id via query parameter
-		tenantIDStr := r.URL.Query().Get("tenant_id")
-		if tenantIDStr != "" {
-			claims, claimsOk := middleware.ClaimsFromContext(ctx)
-			if claimsOk && claims.Role == model.RoleAdmin {
-				parsedID, err := uuid.Parse(tenantIDStr)
-				if err == nil {
-					tenantID = parsedID
-					ok = true
-				}
-			}
-		}
-
-		if !ok {
-			tenantID, ok = db.TenantIDFromContext(ctx)
-		}
-
-		if !ok {
-			http.Error(w, "Unauthorized: Tenant context not found", http.StatusUnauthorized)
+		tenantID, err := middleware.ResolveTenantScope(ctx, r, pgPool)
+		if err != nil {
+			middleware.WriteScopeError(w, err)
 			return
 		}
 
@@ -93,28 +79,10 @@ func HandleGetIntegrations(pgPool *pgxpool.Pool) http.HandlerFunc {
 func HandleCreateIntegration(pgPool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
-		var tenantID uuid.UUID
-		var ok bool
 
-		// If user is admin, allow overriding tenant_id via query parameter
-		tenantIDStr := r.URL.Query().Get("tenant_id")
-		if tenantIDStr != "" {
-			claims, claimsOk := middleware.ClaimsFromContext(ctx)
-			if claimsOk && claims.Role == model.RoleAdmin {
-				parsedID, err := uuid.Parse(tenantIDStr)
-				if err == nil {
-					tenantID = parsedID
-					ok = true
-				}
-			}
-		}
-
-		if !ok {
-			tenantID, ok = db.TenantIDFromContext(ctx)
-		}
-
-		if !ok {
-			http.Error(w, "Unauthorized: Tenant context not found", http.StatusUnauthorized)
+		tenantID, err := middleware.ResolveTenantScope(ctx, r, pgPool)
+		if err != nil {
+			middleware.WriteScopeError(w, err)
 			return
 		}
 
@@ -171,28 +139,10 @@ func HandleCreateIntegration(pgPool *pgxpool.Pool) http.HandlerFunc {
 func HandleDeleteIntegration(pgPool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
-		var tenantID uuid.UUID
-		var ok bool
 
-		// If user is admin, allow overriding tenant_id via query parameter
-		tenantIDStr := r.URL.Query().Get("tenant_id")
-		if tenantIDStr != "" {
-			claims, claimsOk := middleware.ClaimsFromContext(ctx)
-			if claimsOk && claims.Role == model.RoleAdmin {
-				parsedID, err := uuid.Parse(tenantIDStr)
-				if err == nil {
-					tenantID = parsedID
-					ok = true
-				}
-			}
-		}
-
-		if !ok {
-			tenantID, ok = db.TenantIDFromContext(ctx)
-		}
-
-		if !ok {
-			http.Error(w, "Unauthorized: Tenant context not found", http.StatusUnauthorized)
+		tenantID, err := middleware.ResolveTenantScope(ctx, r, pgPool)
+		if err != nil {
+			middleware.WriteScopeError(w, err)
 			return
 		}
 
@@ -237,9 +187,9 @@ func HandleGetIntegrationStatus(pgPool *pgxpool.Pool, redisClient *redis.Client)
 			return
 		}
 		
-		tenantID, err := uuid.Parse(tenantIDStr)
+		tenantID, err := middleware.ResolveTenantScope(ctx, r, pgPool)
 		if err != nil {
-			http.Error(w, "Bad Request: Invalid tenant ID", http.StatusBadRequest)
+			middleware.WriteScopeError(w, err)
 			return
 		}
 
@@ -301,5 +251,65 @@ func HandleGetIntegrationStatus(pgPool *pgxpool.Pool, redisClient *redis.Client)
 		
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(response)
+	}
+}
+
+type WebhookSecretResponse struct {
+	Secret string `json:"secret"`
+}
+
+// HandleGenerateWebhookSecret creates (or rotates) the per-tenant HMAC signing secret used to
+// authenticate POST /api/v1/webhook/{integration_type}/{tenant_id}. The plaintext secret is
+// only ever returned in this response — it is stored encrypted in the tenant vault and must be
+// configured on the source tool's webhook signature setting (e.g. Zabbix, Wazuh).
+func HandleGenerateWebhookSecret(pgPool *pgxpool.Pool, vaultRepo repository.VaultRepository) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		tenantID, err := middleware.ResolveTenantScope(r.Context(), r, pgPool)
+		if err != nil {
+			middleware.WriteScopeError(w, err)
+			return
+		}
+
+		secretBytes := make([]byte, 32)
+		if _, err := rand.Read(secretBytes); err != nil {
+			http.Error(w, "Internal Server Error: Failed to generate secret", http.StatusInternalServerError)
+			return
+		}
+		secretPlain := hex.EncodeToString(secretBytes)
+
+		masterKey, err := security.GetMasterKey()
+		if err != nil {
+			http.Error(w, "Internal Server Error: Vault encryption setup failure", http.StatusInternalServerError)
+			return
+		}
+		encrypted, nonce, err := security.Encrypt([]byte(secretPlain), masterKey)
+		if err != nil {
+			http.Error(w, "Internal Server Error: Encryption failure", http.StatusInternalServerError)
+			return
+		}
+
+		tenantCtx := db.WithTenantID(r.Context(), tenantID)
+		err = db.ExecuteInTenantTx(tenantCtx, pgPool, func(tx pgx.Tx) error {
+			query := `
+				INSERT INTO tenant_vault (id, tenant_id, secret_key, encrypted_value, nonce, description, created_at, updated_at)
+				VALUES ($1, $2, 'webhook_hmac_secret', $3, $4, 'HMAC signing secret for the generic webhook ingestion endpoint', NOW(), NOW())
+				ON CONFLICT (tenant_id, secret_key)
+				DO UPDATE SET encrypted_value = EXCLUDED.encrypted_value, nonce = EXCLUDED.nonce, updated_at = NOW()
+			`
+			_, err := tx.Exec(tenantCtx, query, uuid.New(), tenantID, encrypted, nonce)
+			return err
+		})
+		if err != nil {
+			http.Error(w, "Internal Server Error: Failed to store webhook secret", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(WebhookSecretResponse{Secret: secretPlain})
 	}
 }

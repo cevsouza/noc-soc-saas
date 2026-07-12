@@ -13,6 +13,7 @@ import (
 
 	"noc-api/internal/db"
 	"noc-api/internal/model"
+	"noc-api/internal/queue"
 	"noc-api/internal/repository"
 	"noc-api/internal/security"
 
@@ -21,6 +22,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 )
+
+var _ PollConnector = (*SentinelConnector)(nil)
 
 type SentinelConfig struct {
 	TenantID       string
@@ -283,7 +286,7 @@ func (c *SentinelConnector) syncTenantSentinel(ctx context.Context, tenant model
 		}
 
 		bytes, _ := json.Marshal(incident)
-		_ = c.redisClient.LPush(ctx, "noc:queue:alerts", bytes).Err()
+		_ = c.redisClient.LPush(ctx, queue.AlertsNormalizedQueueKey, bytes).Err()
 	}
 
 	// Register heartbeat in Redis and clear any previous errors
@@ -349,7 +352,7 @@ func (c *SentinelConnector) runMockSync(ctx context.Context, tenant model.Tenant
 	}
 
 	bytes, _ := json.Marshal(incident)
-	_ = c.redisClient.LPush(ctx, "noc:queue:alerts", bytes).Err()
+	_ = c.redisClient.LPush(ctx, queue.AlertsNormalizedQueueKey, bytes).Err()
 	log.Printf("[Sentinel Mock Connector] Mock incident pushed to queue: %s", incidentID)
 
 	// Register heartbeat in Redis and clear any previous errors
@@ -381,4 +384,3 @@ func (c *SentinelConnector) TestConnection(ctx context.Context, tenantID uuid.UU
 
 	return nil
 }
-

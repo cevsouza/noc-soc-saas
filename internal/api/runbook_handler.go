@@ -2,14 +2,18 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"time"
 
 	"noc-api/internal/db"
+	"noc-api/internal/middleware"
+	"noc-api/internal/model"
 	"noc-api/internal/repository"
 	"noc-api/internal/security"
 
@@ -25,6 +29,10 @@ type CreateRunbookRequest struct {
 	Script       string `json:"script"`
 	VaultKeyHost string `json:"vault_key_host"`
 	IsGlobal     bool   `json:"is_global"`
+	// IsSafe marks the runbook as reviewed/idempotent enough to auto-execute without human
+	// approval when auto_trigger is set. Defaults to false (secure by default) — an admin
+	// must explicitly opt a runbook in after reviewing it.
+	IsSafe bool `json:"is_safe"`
 }
 
 type ExecuteRunbookRequest struct {
@@ -44,13 +52,19 @@ func HandleGetRunbooks(pgPool *pgxpool.Pool) http.HandlerFunc {
 			Script       string    `json:"script"`
 			VaultKeyHost string    `json:"vault_key_host"`
 			IsGlobal     bool      `json:"is_global"`
+			IsSafe       bool      `json:"is_safe"`
 			CreatedAt    time.Time `json:"created_at"`
 		}
 
 		list := make([]RunbookResponse, 0)
-		tenantParam := r.URL.Query().Get("tenant_id")
 
-		if tenantParam == "all" {
+		allScope, err := middleware.AllTenantsScope(r.Context(), r)
+		if err != nil {
+			middleware.WriteScopeError(w, err)
+			return
+		}
+
+		if allScope {
 			tx, err := pgPool.Begin(r.Context())
 			if err != nil {
 				http.Error(w, "Failed to begin transaction", http.StatusInternalServerError)
@@ -64,9 +78,9 @@ func HandleGetRunbooks(pgPool *pgxpool.Pool) http.HandlerFunc {
 			}
 
 			rows, err := tx.Query(r.Context(), `
-				SELECT r.id, r.tenant_id, t.name, r.name, r.trigger_rule, r.script, r.vault_key_host, r.is_global, r.created_at 
-				FROM tenant_runbooks r 
-				JOIN tenants t ON r.tenant_id = t.id 
+				SELECT r.id, r.tenant_id, t.name, r.name, r.trigger_rule, r.script, r.vault_key_host, r.is_global, r.is_safe, r.created_at
+				FROM tenant_runbooks r
+				JOIN tenants t ON r.tenant_id = t.id
 				ORDER BY r.name
 			`)
 			if err != nil {
@@ -77,7 +91,7 @@ func HandleGetRunbooks(pgPool *pgxpool.Pool) http.HandlerFunc {
 
 			for rows.Next() {
 				var rb RunbookResponse
-				err := rows.Scan(&rb.ID, &rb.TenantID, &rb.TenantName, &rb.Name, &rb.TriggerRule, &rb.Script, &rb.VaultKeyHost, &rb.IsGlobal, &rb.CreatedAt)
+				err := rows.Scan(&rb.ID, &rb.TenantID, &rb.TenantName, &rb.Name, &rb.TriggerRule, &rb.Script, &rb.VaultKeyHost, &rb.IsGlobal, &rb.IsSafe, &rb.CreatedAt)
 				if err != nil {
 					http.Error(w, "Error scanning runbooks", http.StatusInternalServerError)
 					return
@@ -89,19 +103,19 @@ func HandleGetRunbooks(pgPool *pgxpool.Pool) http.HandlerFunc {
 				return
 			}
 		} else {
-			tenantID, ok := resolveTenantID(r)
-			if !ok {
-				http.Error(w, "Unauthorized: Tenant context not found", http.StatusUnauthorized)
+			tenantID, err := middleware.ResolveTenantScope(r.Context(), r, pgPool)
+			if err != nil {
+				middleware.WriteScopeError(w, err)
 				return
 			}
 			ctx := db.WithTenantID(r.Context(), tenantID)
 
-			err := db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
+			err = db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
 				rows, err := tx.Query(ctx, `
-					SELECT r.id, r.tenant_id, t.name, r.name, r.trigger_rule, r.script, r.vault_key_host, r.is_global, r.created_at 
-					FROM tenant_runbooks r 
-					JOIN tenants t ON r.tenant_id = t.id 
-					WHERE r.tenant_id = $1 OR r.is_global = TRUE 
+					SELECT r.id, r.tenant_id, t.name, r.name, r.trigger_rule, r.script, r.vault_key_host, r.is_global, r.is_safe, r.created_at
+					FROM tenant_runbooks r
+					JOIN tenants t ON r.tenant_id = t.id
+					WHERE r.tenant_id = $1 OR r.is_global = TRUE
 					ORDER BY r.name
 				`, tenantID)
 				if err != nil {
@@ -111,7 +125,7 @@ func HandleGetRunbooks(pgPool *pgxpool.Pool) http.HandlerFunc {
 
 				for rows.Next() {
 					var rb RunbookResponse
-					err := rows.Scan(&rb.ID, &rb.TenantID, &rb.TenantName, &rb.Name, &rb.TriggerRule, &rb.Script, &rb.VaultKeyHost, &rb.IsGlobal, &rb.CreatedAt)
+					err := rows.Scan(&rb.ID, &rb.TenantID, &rb.TenantName, &rb.Name, &rb.TriggerRule, &rb.Script, &rb.VaultKeyHost, &rb.IsGlobal, &rb.IsSafe, &rb.CreatedAt)
 					if err != nil {
 						return err
 					}
@@ -134,9 +148,9 @@ func HandleGetRunbooks(pgPool *pgxpool.Pool) http.HandlerFunc {
 // HandleCreateRunbook registers a new runbook for the tenant.
 func HandleCreateRunbook(pgPool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		tenantID, ok := resolveTenantID(r)
-		if !ok {
-			http.Error(w, "Unauthorized: Tenant context not found", http.StatusUnauthorized)
+		tenantID, err := middleware.ResolveTenantScope(r.Context(), r, pgPool)
+		if err != nil {
+			middleware.WriteScopeError(w, err)
 			return
 		}
 		ctx := db.WithTenantID(r.Context(), tenantID)
@@ -153,9 +167,9 @@ func HandleCreateRunbook(pgPool *pgxpool.Pool) http.HandlerFunc {
 		}
 
 		var runbookID uuid.UUID
-		err := db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
-			query := "INSERT INTO tenant_runbooks (tenant_id, name, trigger_rule, script, vault_key_host, is_global) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id"
-			return tx.QueryRow(ctx, query, tenantID, req.Name, req.TriggerRule, req.Script, req.VaultKeyHost, req.IsGlobal).Scan(&runbookID)
+		err = db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
+			query := "INSERT INTO tenant_runbooks (tenant_id, name, trigger_rule, script, vault_key_host, is_global, is_safe) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id"
+			return tx.QueryRow(ctx, query, tenantID, req.Name, req.TriggerRule, req.Script, req.VaultKeyHost, req.IsGlobal, req.IsSafe).Scan(&runbookID)
 		})
 
 		if err != nil {
@@ -174,9 +188,9 @@ func HandleExecuteRunbook(pgPool *pgxpool.Pool) http.HandlerFunc {
 	vaultRepo := repository.NewPostgresVaultRepository()
 
 	return func(w http.ResponseWriter, r *http.Request) {
-		tenantID, ok := resolveTenantID(r)
-		if !ok {
-			http.Error(w, "Unauthorized: Tenant context not found", http.StatusUnauthorized)
+		tenantID, err := middleware.ResolveTenantScope(r.Context(), r, pgPool)
+		if err != nil {
+			middleware.WriteScopeError(w, err)
 			return
 		}
 		ctx := db.WithTenantID(r.Context(), tenantID)
@@ -190,7 +204,7 @@ func HandleExecuteRunbook(pgPool *pgxpool.Pool) http.HandlerFunc {
 		var name, script, vaultKeyPrefix string
 		var execStatus, output string
 
-		err := db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
+		err = db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
 			// 1. Fetch Runbook details
 			err := tx.QueryRow(ctx, "SELECT name, script, vault_key_host FROM tenant_runbooks WHERE id = $1 AND (tenant_id = $2 OR is_global = TRUE)", req.RunbookID, tenantID).Scan(&name, &script, &vaultKeyPrefix)
 			if err != nil {
@@ -229,7 +243,7 @@ func HandleExecuteRunbook(pgPool *pgxpool.Pool) http.HandlerFunc {
 			log.Printf("[Runbook] Executing runbook '%s' on %s@%s", name, sshUser, sshHost)
 
 			// 3. Execute SSH command
-			output, err = ExecuteSSH(sshHost, sshUser, sshPass, sshPriv, script)
+			output, err = ExecuteSSH(ctx, pgPool, vaultRepo, tenantID, vaultKeyPrefix, sshHost, sshUser, sshPass, sshPriv, script)
 			execStatus = "sucesso"
 			if err != nil {
 				execStatus = "falha"
@@ -273,8 +287,11 @@ func HandleExecuteRunbook(pgPool *pgxpool.Pool) http.HandlerFunc {
 	}
 }
 
-// ExecuteSSH executes script commands on a remote host.
-func ExecuteSSH(host, username, password, privateKey, command string) (string, error) {
+// ExecuteSSH executes script commands on a remote host, pinning the host key on first use
+// (Trust On First Use) and validating it on every subsequent connection to detect MITM or
+// unexpected host reconfiguration. The fingerprint is stored per-tenant, per-runbook-host in
+// the same encrypted vault used for credentials (secret key: "<vaultKeyPrefix>_known_host_fp").
+func ExecuteSSH(ctx context.Context, pgPool *pgxpool.Pool, vaultRepo repository.VaultRepository, tenantID uuid.UUID, vaultKeyPrefix, host, username, password, privateKey, command string) (string, error) {
 	var authMethods []ssh.AuthMethod
 
 	if privateKey != "" {
@@ -292,10 +309,15 @@ func ExecuteSSH(host, username, password, privateKey, command string) (string, e
 		return "", fmt.Errorf("no valid SSH authentication method found in Vault credentials")
 	}
 
+	hostKeyCallback, err := buildTOFUHostKeyCallback(ctx, pgPool, vaultRepo, tenantID, vaultKeyPrefix)
+	if err != nil {
+		return "", fmt.Errorf("failed to prepare host key verification: %w", err)
+	}
+
 	config := &ssh.ClientConfig{
 		User:            username,
 		Auth:            authMethods,
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		HostKeyCallback: hostKeyCallback,
 		Timeout:         15 * time.Second,
 	}
 
@@ -328,6 +350,68 @@ func ExecuteSSH(host, username, password, privateKey, command string) (string, e
 	return output, nil
 }
 
+// buildTOFUHostKeyCallback implements Trust On First Use host key verification: the first
+// connection to a given (tenant, vaultKeyPrefix) pins the host's SHA256 fingerprint in the
+// vault; every later connection must match it exactly, or the dial is rejected — protecting
+// against MITM or an unexpected host swap going unnoticed.
+func buildTOFUHostKeyCallback(ctx context.Context, pgPool *pgxpool.Pool, vaultRepo repository.VaultRepository, tenantID uuid.UUID, vaultKeyPrefix string) (ssh.HostKeyCallback, error) {
+	fingerprintKey := vaultKeyPrefix + "_known_host_fp"
+
+	masterKey, err := security.GetMasterKey()
+	if err != nil {
+		return nil, err
+	}
+
+	tenantCtx := db.WithTenantID(ctx, tenantID)
+	var storedFP string
+	_ = db.ExecuteInTenantTx(tenantCtx, pgPool, func(tx pgx.Tx) error {
+		sec, err := vaultRepo.GetSecretByKey(tenantCtx, tx, fingerprintKey)
+		if err != nil {
+			return nil // Not pinned yet: first connection, handled below.
+		}
+		decrypted, err := security.Decrypt(sec.EncryptedValue, sec.Nonce, masterKey)
+		if err == nil {
+			storedFP = string(decrypted)
+		}
+		return nil
+	})
+
+	return func(hostname string, remote net.Addr, key ssh.PublicKey) error {
+		fp := ssh.FingerprintSHA256(key)
+
+		if storedFP == "" {
+			// Trust On First Use: persist the fingerprint for future connections.
+			encrypted, nonce, err := security.Encrypt([]byte(fp), masterKey)
+			if err != nil {
+				return fmt.Errorf("TOFU: failed to encrypt host fingerprint: %w", err)
+			}
+			secret := &model.VaultSecret{
+				ID:             uuid.New(),
+				TenantID:       tenantID,
+				SecretKey:      fingerprintKey,
+				EncryptedValue: encrypted,
+				Nonce:          nonce,
+				CreatedAt:      time.Now(),
+				UpdatedAt:      time.Now(),
+			}
+			pinErr := db.ExecuteInTenantTx(tenantCtx, pgPool, func(tx pgx.Tx) error {
+				return vaultRepo.CreateSecret(tenantCtx, tx, secret)
+			})
+			if pinErr != nil {
+				log.Printf("[SSH TOFU] Warning: failed to persist host fingerprint for %s (%s): %v", hostname, vaultKeyPrefix, pinErr)
+			} else {
+				log.Printf("[SSH TOFU] Pinned new host key fingerprint for %s (%s): %s", hostname, vaultKeyPrefix, fp)
+			}
+			return nil
+		}
+
+		if fp != storedFP {
+			return fmt.Errorf("SSH host key mismatch for %s: expected %s, got %s (possible MITM or host reconfiguration — to accept the new key, delete vault secret %q for this tenant)", hostname, storedFP, fp, fingerprintKey)
+		}
+		return nil
+	}, nil
+}
+
 type RunbookAuditResponse struct {
 	ID           uuid.UUID `json:"id"`
 	RunbookName  string    `json:"runbook_name"`
@@ -341,15 +425,15 @@ type RunbookAuditResponse struct {
 // HandleGetRunbookAuditLogs returns the list of runbook executions for security audit trail.
 func HandleGetRunbookAuditLogs(pgPool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		tenantID, ok := resolveTenantID(r)
-		if !ok {
-			http.Error(w, "Unauthorized: Tenant context not found", http.StatusUnauthorized)
+		tenantID, err := middleware.ResolveTenantScope(r.Context(), r, pgPool)
+		if err != nil {
+			middleware.WriteScopeError(w, err)
 			return
 		}
 		ctx := db.WithTenantID(r.Context(), tenantID)
 
 		list := make([]RunbookAuditResponse, 0)
-		err := db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
+		err = db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
 			query := `
 				SELECT l.id, r.name, l.operator_name, l.script, l.output, l.status, l.created_at
 				FROM runbook_execution_logs l
@@ -388,9 +472,9 @@ func HandleGetRunbookAuditLogs(pgPool *pgxpool.Pool) http.HandlerFunc {
 // HandleDeleteRunbook removes a runbook configuration.
 func HandleDeleteRunbook(pgPool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		tenantID, ok := resolveTenantID(r)
-		if !ok {
-			http.Error(w, "Unauthorized: Tenant context not found", http.StatusUnauthorized)
+		tenantID, err := middleware.ResolveTenantScope(r.Context(), r, pgPool)
+		if err != nil {
+			middleware.WriteScopeError(w, err)
 			return
 		}
 		ctx := db.WithTenantID(r.Context(), tenantID)
@@ -428,6 +512,239 @@ func HandleDeleteRunbook(pgPool *pgxpool.Pool) http.HandlerFunc {
 		}
 
 		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+type RunbookApprovalResponse struct {
+	ID          uuid.UUID `json:"id"`
+	RunbookID   uuid.UUID `json:"runbook_id"`
+	RunbookName string    `json:"runbook_name"`
+	IncidentID  uuid.UUID `json:"incident_id"`
+	Reason      string    `json:"reason"`
+	Status      string    `json:"status"`
+	RequestedBy string    `json:"requested_by"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
+// HandleGetRunbookApprovals lists SOAR auto-trigger approval requests for the tenant
+// (defaults to status=pending; pass ?status=all for the full history).
+func HandleGetRunbookApprovals(pgPool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tenantID, err := middleware.ResolveTenantScope(r.Context(), r, pgPool)
+		if err != nil {
+			middleware.WriteScopeError(w, err)
+			return
+		}
+		ctx := db.WithTenantID(r.Context(), tenantID)
+
+		statusFilter := r.URL.Query().Get("status")
+		if statusFilter == "" {
+			statusFilter = "pending"
+		}
+
+		list := make([]RunbookApprovalResponse, 0)
+		err = db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
+			rows, err := tx.Query(ctx, `
+				SELECT a.id, a.runbook_id, r.name, a.incident_id, a.reason, a.status, a.requested_by, a.created_at
+				FROM runbook_approval_requests a
+				JOIN tenant_runbooks r ON a.runbook_id = r.id
+				WHERE a.tenant_id = $1 AND ($2 = 'all' OR a.status = $2)
+				ORDER BY a.created_at DESC
+				LIMIT 100
+			`, tenantID, statusFilter)
+			if err != nil {
+				return err
+			}
+			defer rows.Close()
+
+			for rows.Next() {
+				var item RunbookApprovalResponse
+				if err := rows.Scan(&item.ID, &item.RunbookID, &item.RunbookName, &item.IncidentID, &item.Reason, &item.Status, &item.RequestedBy, &item.CreatedAt); err != nil {
+					return err
+				}
+				list = append(list, item)
+			}
+			return rows.Err()
+		})
+
+		if err != nil {
+			http.Error(w, "Failed to query runbook approvals", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(list)
+	}
+}
+
+type RunbookApprovalDecisionRequest struct {
+	ApprovalID uuid.UUID `json:"approval_id"`
+}
+
+// HandleApproveRunbookRequest approves a pending SOAR auto-trigger request and executes it
+// immediately using the same SSH/vault/TOFU path as manual runbook execution.
+func HandleApproveRunbookRequest(pgPool *pgxpool.Pool) http.HandlerFunc {
+	vaultRepo := repository.NewPostgresVaultRepository()
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		tenantID, err := middleware.ResolveTenantScope(r.Context(), r, pgPool)
+		if err != nil {
+			middleware.WriteScopeError(w, err)
+			return
+		}
+		claims, ok := middleware.ClaimsFromContext(r.Context())
+		if !ok {
+			http.Error(w, "Unauthorized: User claims missing", http.StatusUnauthorized)
+			return
+		}
+		ctx := db.WithTenantID(r.Context(), tenantID)
+
+		var req RunbookApprovalDecisionRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid request payload", http.StatusBadRequest)
+			return
+		}
+
+		var runbookID, incidentID uuid.UUID
+		var name, script, vaultKeyPrefix string
+		var execStatus, output string
+
+		err = db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
+			var status string
+			if err := tx.QueryRow(ctx, `
+				SELECT runbook_id, incident_id, status FROM runbook_approval_requests
+				WHERE id = $1 AND tenant_id = $2
+				FOR UPDATE
+			`, req.ApprovalID, tenantID).Scan(&runbookID, &incidentID, &status); err != nil {
+				return err
+			}
+			if status != "pending" {
+				return fmt.Errorf("approval request is no longer pending (status: %s)", status)
+			}
+
+			if err := tx.QueryRow(ctx, "SELECT name, script, vault_key_host FROM tenant_runbooks WHERE id = $1", runbookID).Scan(&name, &script, &vaultKeyPrefix); err != nil {
+				return err
+			}
+
+			masterKey, err := security.GetMasterKey()
+			if err != nil {
+				return fmt.Errorf("failed to retrieve encryption key: %w", err)
+			}
+			getSecret := func(key string) string {
+				sec, err := vaultRepo.GetSecretByKey(ctx, tx, key)
+				if err != nil {
+					return ""
+				}
+				decrypted, err := security.Decrypt(sec.EncryptedValue, sec.Nonce, masterKey)
+				if err != nil {
+					return ""
+				}
+				return string(decrypted)
+			}
+			sshHost := getSecret(vaultKeyPrefix + "_host")
+			sshUser := getSecret(vaultKeyPrefix + "_user")
+			sshPass := getSecret(vaultKeyPrefix + "_password")
+			sshPriv := getSecret(vaultKeyPrefix + "_private_key")
+			if sshHost == "" || sshUser == "" {
+				return fmt.Errorf("missing host or user secret in Vault under prefix: %s", vaultKeyPrefix)
+			}
+
+			log.Printf("[Runbook Approval] Executing approved runbook '%s' on %s@%s", name, sshUser, sshHost)
+			output, err = ExecuteSSH(ctx, pgPool, vaultRepo, tenantID, vaultKeyPrefix, sshHost, sshUser, sshPass, sshPriv, script)
+			execStatus = "sucesso"
+			if err != nil {
+				execStatus = "falha"
+				output = fmt.Sprintf("Execution Error: %v\nLogs:\n%s", err, output)
+			}
+
+			if _, err := tx.Exec(ctx, `
+				UPDATE runbook_approval_requests SET status = 'approved', approved_by = $1, approved_at = NOW() WHERE id = $2
+			`, claims.UserID, req.ApprovalID); err != nil {
+				return err
+			}
+
+			commentText := fmt.Sprintf("✅ **Runbook aprovado e executado [%s]**: Status: %s\n\n```bash\n%s\n```", name, execStatus, output)
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO incident_comments (incident_id, tenant_id, author, comment)
+				VALUES ($1, $2, 'SRE Auto-Healing Co-Pilot', $3)
+			`, incidentID, tenantID, commentText); err != nil {
+				return err
+			}
+
+			_, err = tx.Exec(ctx, `
+				INSERT INTO runbook_execution_logs (tenant_id, runbook_id, incident_id, operator_name, script, output, status)
+				VALUES ($1, $2, $3, $4, $5, $6, $7)
+			`, tenantID, runbookID, incidentID, "SRE Operador (aprovação manual)", script, output, execStatus)
+			return err
+		})
+
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Failed to approve/execute runbook: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": execStatus, "output": output})
+	}
+}
+
+// HandleRejectRunbookRequest rejects a pending SOAR auto-trigger approval request without executing it.
+func HandleRejectRunbookRequest(pgPool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tenantID, err := middleware.ResolveTenantScope(r.Context(), r, pgPool)
+		if err != nil {
+			middleware.WriteScopeError(w, err)
+			return
+		}
+		claims, ok := middleware.ClaimsFromContext(r.Context())
+		if !ok {
+			http.Error(w, "Unauthorized: User claims missing", http.StatusUnauthorized)
+			return
+		}
+		ctx := db.WithTenantID(r.Context(), tenantID)
+
+		var req RunbookApprovalDecisionRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid request payload", http.StatusBadRequest)
+			return
+		}
+
+		err = db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
+			var incidentID uuid.UUID
+			var runbookName string
+			if err := tx.QueryRow(ctx, `
+				SELECT a.incident_id, r.name FROM runbook_approval_requests a
+				JOIN tenant_runbooks r ON a.runbook_id = r.id
+				WHERE a.id = $1 AND a.tenant_id = $2 AND a.status = 'pending'
+			`, req.ApprovalID, tenantID).Scan(&incidentID, &runbookName); err != nil {
+				return err
+			}
+
+			res, err := tx.Exec(ctx, `
+				UPDATE runbook_approval_requests SET status = 'rejected', approved_by = $1, approved_at = NOW() WHERE id = $2
+			`, claims.UserID, req.ApprovalID)
+			if err != nil {
+				return err
+			}
+			if res.RowsAffected() == 0 {
+				return fmt.Errorf("approval request not found or no longer pending")
+			}
+
+			commentText := fmt.Sprintf("🚫 **Runbook rejeitado [%s]**: execução automática cancelada por um operador.", runbookName)
+			_, err = tx.Exec(ctx, `
+				INSERT INTO incident_comments (incident_id, tenant_id, author, comment)
+				VALUES ($1, $2, 'Sistema', $3)
+			`, incidentID, tenantID, commentText)
+			return err
+		})
+
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Failed to reject request: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"success","message":"Runbook rejeitado com sucesso"}`))
 	}
 }
 

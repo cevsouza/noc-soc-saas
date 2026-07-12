@@ -49,8 +49,8 @@ func (r *PostgresAlertRepository) Create(ctx context.Context, q db.Queryer, aler
 	}
 
 	query := `
-		INSERT INTO alerts (id, tenant_id, device_id, event_type, severity, status, summary, payload, ai_analysis, created_at, updated_at, acknowledged_at, ai_diagnostic, itsm_ticket_ref, mitre_tactics, ueba_anomalous)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), $11, $12, $13, $14, $15)
+		INSERT INTO alerts (id, tenant_id, device_id, event_type, severity, status, summary, payload, ai_analysis, created_at, updated_at, acknowledged_at, ai_diagnostic, itsm_ticket_ref, mitre_tactics, ueba_anomalous, fingerprint)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), $11, $12, $13, $14, $15, $16)
 		RETURNING updated_at
 	`
 
@@ -70,6 +70,7 @@ func (r *PostgresAlertRepository) Create(ctx context.Context, q db.Queryer, aler
 		alert.ITSMTicketRef,
 		alert.MitreTactics,
 		alert.UEBAAnomalous,
+		alert.Fingerprint,
 	).Scan(&alert.UpdatedAt)
 
 	if err != nil {
@@ -83,7 +84,7 @@ func (r *PostgresAlertRepository) Create(ctx context.Context, q db.Queryer, aler
 // (searching only the targeted partition instead of doing an expensive global scan).
 func (r *PostgresAlertRepository) GetByID(ctx context.Context, q db.Queryer, id uuid.UUID, createdAt time.Time) (*model.Alert, error) {
 	query := `
-		SELECT id, tenant_id, device_id, event_type, severity, status, summary, payload, ai_analysis, created_at, updated_at, resolved_at, acknowledged_at, ai_diagnostic, itsm_ticket_ref, mitre_tactics, ueba_anomalous
+		SELECT id, tenant_id, device_id, event_type, severity, status, summary, payload, ai_analysis, created_at, updated_at, resolved_at, acknowledged_at, ai_diagnostic, itsm_ticket_ref, mitre_tactics, ueba_anomalous, COALESCE(fingerprint, '')
 		FROM alerts
 		WHERE id = $1 AND created_at = $2
 	`
@@ -110,6 +111,7 @@ func (r *PostgresAlertRepository) GetByID(ctx context.Context, q db.Queryer, id 
 		&a.ITSMTicketRef,
 		&a.MitreTactics,
 		&a.UEBAAnomalous,
+		&a.Fingerprint,
 	)
 
 	if err != nil {
@@ -132,15 +134,20 @@ func (r *PostgresAlertRepository) GetByID(ctx context.Context, q db.Queryer, id 
 	return &a, nil
 }
 
-func (r *PostgresAlertRepository) List(ctx context.Context, q db.Queryer, limit, offset int) ([]*model.Alert, error) {
+// List returns alerts filtered explicitly by tenant_id. This filter is not merely an
+// optimization: it is a defense-in-depth guarantee that this query cannot return
+// cross-tenant data even if the caller forgets to run it inside a tenant-scoped
+// transaction (i.e. even if RLS is not enforced for whatever reason).
+func (r *PostgresAlertRepository) List(ctx context.Context, q db.Queryer, tenantID uuid.UUID, limit, offset int) ([]*model.Alert, error) {
 	query := `
-		SELECT id, tenant_id, device_id, event_type, severity, status, summary, payload, ai_analysis, created_at, updated_at, resolved_at, acknowledged_at, ai_diagnostic, itsm_ticket_ref, mitre_tactics, ueba_anomalous
+		SELECT id, tenant_id, device_id, event_type, severity, status, summary, payload, ai_analysis, created_at, updated_at, resolved_at, acknowledged_at, ai_diagnostic, itsm_ticket_ref, mitre_tactics, ueba_anomalous, COALESCE(fingerprint, '')
 		FROM alerts
+		WHERE tenant_id = $1
 		ORDER BY created_at DESC
-		LIMIT $1 OFFSET $2
+		LIMIT $2 OFFSET $3
 	`
 
-	rows, err := q.Query(ctx, query, limit, offset)
+	rows, err := q.Query(ctx, query, tenantID, limit, offset)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query alerts: %w", err)
 	}
@@ -170,6 +177,7 @@ func (r *PostgresAlertRepository) List(ctx context.Context, q db.Queryer, limit,
 			&a.ITSMTicketRef,
 			&a.MitreTactics,
 			&a.UEBAAnomalous,
+			&a.Fingerprint,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan alert: %w", err)

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"noc-api/internal/db"
+	"noc-api/internal/middleware"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -23,16 +24,16 @@ type VaultSecretMetadata struct {
 // HandleGetVaultSecrets lists all vault secret metadata for a tenant (without actual secret values)
 func HandleGetVaultSecrets(pgPool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		tenantID, ok := resolveTenantID(r)
-		if !ok {
-			http.Error(w, "Unauthorized: Tenant context not found", http.StatusUnauthorized)
+		tenantID, err := middleware.ResolveTenantScope(r.Context(), r, pgPool)
+		if err != nil {
+			middleware.WriteScopeError(w, err)
 			return
 		}
 		ctx := db.WithTenantID(r.Context(), tenantID)
 
 		list := make([]VaultSecretMetadata, 0)
 
-		err := db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
+		err = db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
 			query := `
 				SELECT id, secret_key, description, created_at, updated_at 
 				FROM tenant_vault 

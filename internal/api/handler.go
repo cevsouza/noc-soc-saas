@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -14,9 +15,11 @@ import (
 	"strings"
 	"time"
 
+	"noc-api/internal/connector"
 	"noc-api/internal/db"
 	"noc-api/internal/middleware"
 	"noc-api/internal/model"
+	"noc-api/internal/queue"
 	"noc-api/internal/repository"
 	"noc-api/internal/security"
 	"noc-api/internal/ws"
@@ -28,10 +31,10 @@ import (
 )
 
 type IngestEventRequest struct {
-	DeviceID  *uuid.UUID          `json:"device_id,omitempty"`
-	EventType string              `json:"event_type"`
-	Severity  model.AlertSeverity `json:"severity"`
-	Summary   string              `json:"summary"`
+	DeviceID  *uuid.UUID             `json:"device_id,omitempty"`
+	EventType string                 `json:"event_type"`
+	Severity  model.AlertSeverity    `json:"severity"`
+	Summary   string                 `json:"summary"`
 	Payload   map[string]interface{} `json:"payload"`
 }
 
@@ -49,62 +52,12 @@ type IngestBatchResponse struct {
 	Timestamp time.Time   `json:"timestamp"`
 }
 
-// Structures for Prometheus Alertmanager Webhook Payload
-type AlertmanagerPayload struct {
-	Receiver          string               `json:"receiver"`
-	Status            string               `json:"status"`
-	Alerts            []AlertmanagerAlert  `json:"alerts"`
-	GroupLabels       map[string]string    `json:"groupLabels"`
-	CommonLabels      map[string]string    `json:"commonLabels"`
-	CommonAnnotations map[string]string    `json:"commonAnnotations"`
-	ExternalURL       string               `json:"externalURL"`
-}
-
-type AlertmanagerAlert struct {
-	Status       string            `json:"status"`
-	Labels       map[string]string `json:"labels"`
-	Annotations  map[string]string `json:"annotations"`
-	StartsAt     time.Time         `json:"startsAt"`
-	EndsAt       time.Time         `json:"endsAt"`
-	GeneratorURL string            `json:"generatorURL"`
-	Fingerprint  string            `json:"fingerprint"`
-}
-
-// Structures for Wazuh Alert Webhook Payload
-type WazuhAlertPayload struct {
-	Timestamp string `json:"timestamp"`
-	Rule      struct {
-		Level   int      `json:"level"`
-		Comment string   `json:"comment"`
-		Sid     int      `json:"sid"`
-		ID      string   `json:"id"`
-		Groups  []string `json:"groups"`
-	} `json:"rule"`
-	Agent struct {
-		ID   string `json:"id"`
-		Name string `json:"name"`
-		IP   string `json:"ip"`
-	} `json:"agent"`
-	Location string                 `json:"location"`
-	FullLog  string                 `json:"full_log"`
-	Id       string                 `json:"id"` // optional
-}
-
-type RawWebhookMessage struct {
-	TenantID        uuid.UUID              `json:"tenant_id"`
-	IntegrationType string                 `json:"integration_type"`
-	Payload         map[string]interface{} `json:"payload"`
-}
-
-const (
-	AlertsQueueKey           = "noc:queue:alerts"
-	AlertsRawQueueKey        = "noc:queue:alerts:raw"
-	AlertsNormalizedQueueKey = "noc:queue:alerts:normalized"
-	AlertsDLQQueueKey        = "noc:queue:alerts:dlq"
-)
-
 // HandleGenericWebhook handles POST /api/v1/webhook/{integration_type}/{tenant_id}
-func HandleGenericWebhook(pgPool *pgxpool.Pool, redisClient *redis.Client) http.HandlerFunc {
+// SECURITY: a valid X-Signature HMAC (keyed with the tenant's own webhook_hmac_secret,
+// provisioned via POST /api/v1/integrations/webhook-secret) is always required. Without
+// this, any request naming a tenant's public UUID (exposed via /api/v1/public/tenants)
+// could inject arbitrary alerts into that tenant with no authentication at all.
+func HandleGenericWebhook(pgPool *pgxpool.Pool, redisClient *redis.Client, vaultRepo repository.VaultRepository) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
@@ -134,16 +87,25 @@ func HandleGenericWebhook(pgPool *pgxpool.Pool, redisClient *redis.Client) http.
 		r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 
 		xSignature := r.Header.Get("X-Signature")
-		if xSignature != "" {
-			mac := hmac.New(sha256.New, []byte("itfacil_super_secret_signing_key_9988"))
-			mac.Write(bodyBytes)
-			expected := hex.EncodeToString(mac.Sum(nil))
-			if !hmac.Equal([]byte(expected), []byte(xSignature)) {
-				errMsg := "Unauthorized: HMAC signature verification failed"
-				redisClient.Set(r.Context(), fmt.Sprintf("webhook:error:%s:%s", tenantID.String(), integrationType), errMsg, 24*time.Hour)
-				http.Error(w, errMsg, http.StatusUnauthorized)
-				return
-			}
+		if xSignature == "" {
+			http.Error(w, "Unauthorized: X-Signature header is required", http.StatusUnauthorized)
+			return
+		}
+
+		webhookSecret, err := getTenantWebhookSecret(r.Context(), pgPool, vaultRepo, tenantID)
+		if err != nil || webhookSecret == "" {
+			http.Error(w, "Forbidden: webhook signing secret not configured for this tenant", http.StatusForbidden)
+			return
+		}
+
+		mac := hmac.New(sha256.New, []byte(webhookSecret))
+		mac.Write(bodyBytes)
+		expected := hex.EncodeToString(mac.Sum(nil))
+		if !hmac.Equal([]byte(expected), []byte(xSignature)) {
+			errMsg := "Unauthorized: HMAC signature verification failed"
+			redisClient.Set(r.Context(), fmt.Sprintf("webhook:error:%s:%s", tenantID.String(), integrationType), errMsg, 24*time.Hour)
+			http.Error(w, errMsg, http.StatusUnauthorized)
+			return
 		}
 
 		var payload map[string]interface{}
@@ -154,7 +116,7 @@ func HandleGenericWebhook(pgPool *pgxpool.Pool, redisClient *redis.Client) http.
 			return
 		}
 
-		rawMsg := RawWebhookMessage{
+		rawMsg := queue.RawWebhookMessage{
 			TenantID:        tenantID,
 			IntegrationType: integrationType,
 			Payload:         payload,
@@ -172,7 +134,7 @@ func HandleGenericWebhook(pgPool *pgxpool.Pool, redisClient *redis.Client) http.
 		redisClient.Del(ctx, fmt.Sprintf("webhook:error:%s:%s", tenantID.String(), integrationType))
 
 		// Push to alerts.raw queue
-		err = redisClient.LPush(ctx, AlertsRawQueueKey, rawMsgBytes).Err()
+		err = redisClient.LPush(ctx, queue.AlertsRawQueueKey, rawMsgBytes).Err()
 		if err != nil {
 			http.Error(w, "Internal Server Error: failed to queue raw alert", http.StatusInternalServerError)
 			return
@@ -251,7 +213,7 @@ func HandleIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) http.HandlerF
 			return
 		}
 
-		err = redisClient.LPush(r.Context(), AlertsQueueKey, eventBytes).Err()
+		err = redisClient.LPush(r.Context(), queue.AlertsNormalizedQueueKey, eventBytes).Err()
 		if err != nil {
 			http.Error(w, "Internal Server Error: Failed to queue event", http.StatusInternalServerError)
 			return
@@ -290,8 +252,14 @@ func HandlePrometheusIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) htt
 			return
 		}
 
-		var payload AlertmanagerPayload
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		bodyBytes, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "Bad Request: failed to read body", http.StatusBadRequest)
+			return
+		}
+
+		incidents, err := connector.MustGet(model.SourcePrometheus).MapToUnified(bodyBytes, tenantID)
+		if err != nil {
 			errMsg := fmt.Sprintf("Bad Request: Invalid Alertmanager JSON payload: %v", err)
 			redisClient.Set(r.Context(), fmt.Sprintf("webhook:error:%s:%s", tenantID.String(), "prometheus"), errMsg, 24*time.Hour)
 			http.Error(w, "Bad Request: Invalid Alertmanager JSON payload", http.StatusBadRequest)
@@ -301,8 +269,7 @@ func HandlePrometheusIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) htt
 		var incidentIDs []uuid.UUID
 		var eventBytesList [][]byte
 
-		for _, alert := range payload.Alerts {
-			incident := MapPrometheusToUnified(alert, tenantID)
+		for _, incident := range incidents {
 			incidentIDs = append(incidentIDs, incident.ID)
 
 			bytes, err := json.Marshal(incident)
@@ -317,7 +284,7 @@ func HandlePrometheusIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) htt
 		if len(eventBytesList) > 0 {
 			pipe := redisClient.Pipeline()
 			for _, bytes := range eventBytesList {
-				pipe.LPush(r.Context(), AlertsQueueKey, bytes)
+				pipe.LPush(r.Context(), queue.AlertsNormalizedQueueKey, bytes)
 			}
 			_, err := pipe.Exec(r.Context())
 			if err != nil {
@@ -363,15 +330,20 @@ func HandleWazuhIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) http.Han
 			return
 		}
 
-		var payload WazuhAlertPayload
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		bodyBytes, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "Bad Request: failed to read body", http.StatusBadRequest)
+			return
+		}
+
+		incidents, err := connector.MustGet(model.SourceWazuh).MapToUnified(bodyBytes, tenantID)
+		if err != nil {
 			errMsg := fmt.Sprintf("Bad Request: Invalid Wazuh JSON payload: %v", err)
 			redisClient.Set(r.Context(), fmt.Sprintf("webhook:error:%s:%s", tenantID.String(), "wazuh"), errMsg, 24*time.Hour)
 			http.Error(w, "Bad Request: Invalid Wazuh JSON payload", http.StatusBadRequest)
 			return
 		}
-
-		incident := MapWazuhToUnified(payload, tenantID)
+		incident := incidents[0]
 
 		eventBytes, err := json.Marshal(incident)
 		if err != nil {
@@ -379,7 +351,7 @@ func HandleWazuhIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) http.Han
 			return
 		}
 
-		err = redisClient.LPush(r.Context(), AlertsQueueKey, eventBytes).Err()
+		err = redisClient.LPush(r.Context(), queue.AlertsNormalizedQueueKey, eventBytes).Err()
 		if err != nil {
 			http.Error(w, "Internal Server Error: Failed to queue alert", http.StatusInternalServerError)
 			return
@@ -397,109 +369,6 @@ func HandleWazuhIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) http.Han
 			Message:   "Wazuh security alert successfully normalized and queued",
 			Timestamp: incident.Timestamp,
 		})
-	}
-}
-
-func MapPrometheusToUnified(alert AlertmanagerAlert, tenantID uuid.UUID) model.UnifiedIncident {
-	severity := model.SeverityInfo
-	if sevLabel, ok := alert.Labels["severity"]; ok {
-		switch strings.ToLower(sevLabel) {
-		case "fatal":
-			severity = model.SeverityFatal
-		case "critical":
-			severity = model.SeverityCritical
-		case "warning", "warn":
-			severity = model.SeverityWarning
-		case "info", "debug":
-			severity = model.SeverityInfo
-		}
-	}
-
-	title := alert.Annotations["summary"]
-	if title == "" {
-		title = alert.Labels["alertname"]
-	}
-
-	desc := alert.Annotations["description"]
-	if desc == "" {
-		desc = alert.Annotations["summary"]
-	}
-
-	rawPayload := make(map[string]interface{})
-	rawPayload["labels"] = alert.Labels
-	rawPayload["annotations"] = alert.Annotations
-	rawPayload["generatorURL"] = alert.GeneratorURL
-	rawPayload["status"] = alert.Status
-
-	timestamp := alert.StartsAt
-	if timestamp.IsZero() {
-		timestamp = time.Now()
-	}
-
-	return model.UnifiedIncident{
-		ID:          uuid.New(),
-		TenantID:    tenantID,
-		Source:      model.SourcePrometheus,
-		ExternalID:  alert.Fingerprint,
-		EventType:   alert.Labels["alertname"],
-		Severity:    severity,
-		Title:       title,
-		Description: desc,
-		Host:        alert.Labels["instance"],
-		RawPayload:  rawPayload,
-		Timestamp:   timestamp,
-	}
-}
-
-func MapWazuhToUnified(alert WazuhAlertPayload, tenantID uuid.UUID) model.UnifiedIncident {
-	severity := model.SeverityInfo
-	level := alert.Rule.Level
-	if level >= 12 {
-		severity = model.SeverityFatal
-	} else if level >= 8 {
-		severity = model.SeverityCritical
-	} else if level >= 4 {
-		severity = model.SeverityWarning
-	}
-
-	eventType := "wazuh_security_event"
-	if len(alert.Rule.Groups) > 0 {
-		eventType = alert.Rule.Groups[0]
-	}
-
-	rawPayload := make(map[string]interface{})
-	rawPayload["rule"] = alert.Rule
-	rawPayload["agent"] = alert.Agent
-	rawPayload["location"] = alert.Location
-	rawPayload["full_log"] = alert.FullLog
-
-	timestamp, err := time.Parse(time.RFC3339, alert.Timestamp)
-	if err != nil {
-		timestamp = time.Now()
-	}
-
-	externalID := alert.Id
-	if externalID == "" {
-		externalID = fmt.Sprintf("%s_%d", alert.Rule.ID, timestamp.Unix())
-	}
-
-	host := alert.Agent.IP
-	if host == "" {
-		host = alert.Agent.Name
-	}
-
-	return model.UnifiedIncident{
-		ID:          uuid.New(),
-		TenantID:    tenantID,
-		Source:      model.SourceWazuh,
-		ExternalID:  externalID,
-		EventType:   eventType,
-		Severity:    severity,
-		Title:       alert.Rule.Comment,
-		Description: alert.FullLog,
-		Host:        host,
-		RawPayload:  rawPayload,
-		Timestamp:   timestamp,
 	}
 }
 
@@ -592,22 +461,12 @@ type IncidentResolveRequest struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-// Helper to resolve tenant ID (supports query override for global operators)
-func resolveTenantID(r *http.Request) (uuid.UUID, bool) {
-	if tenantParam := r.URL.Query().Get("tenant_id"); tenantParam != "" {
-		if id, err := uuid.Parse(tenantParam); err == nil {
-			return id, true
-		}
-	}
-	return db.TenantIDFromContext(r.Context())
-}
-
 // HandleAcknowledgeIncident marks an alert/incident as acknowledged and logs the operator action
 func HandleAcknowledgeIncident(pgPool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		tenantID, ok := resolveTenantID(r)
-		if !ok {
-			http.Error(w, "Unauthorized: Tenant context not found", http.StatusUnauthorized)
+		tenantID, err := middleware.ResolveTenantScope(r.Context(), r, pgPool)
+		if err != nil {
+			middleware.WriteScopeError(w, err)
 			return
 		}
 		ctx := db.WithTenantID(r.Context(), tenantID)
@@ -619,7 +478,7 @@ func HandleAcknowledgeIncident(pgPool *pgxpool.Pool) http.HandlerFunc {
 		}
 
 		var rowsAffected int64
-		err := db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
+		err = db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
 			query := `
 				UPDATE alerts
 				SET status = 'acknowledged', acknowledged_at = NOW(), updated_at = NOW()
@@ -659,9 +518,9 @@ func HandleAcknowledgeIncident(pgPool *pgxpool.Pool) http.HandlerFunc {
 // HandleResolveIncident marks an alert/incident as resolved and logs resolution time
 func HandleResolveIncident(pgPool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		tenantID, ok := resolveTenantID(r)
-		if !ok {
-			http.Error(w, "Unauthorized: Tenant context not found", http.StatusUnauthorized)
+		tenantID, err := middleware.ResolveTenantScope(r.Context(), r, pgPool)
+		if err != nil {
+			middleware.WriteScopeError(w, err)
 			return
 		}
 		ctx := db.WithTenantID(r.Context(), tenantID)
@@ -673,7 +532,7 @@ func HandleResolveIncident(pgPool *pgxpool.Pool) http.HandlerFunc {
 		}
 
 		var rowsAffected int64
-		err := db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
+		err = db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
 			query := `
 				UPDATE alerts
 				SET status = 'resolved', resolved_at = NOW(), updated_at = NOW()
@@ -714,17 +573,17 @@ type SLAReportResponse struct {
 	TotalIncidents  int     `json:"total_incidents"`
 	ResolvedCount   int     `json:"resolved_count"`
 	UnresolvedCount int     `json:"unresolved_count"`
-	AverageTTA      float64 `json:"average_tta"` // in minutes
-	AverageTTR      float64 `json:"average_ttr"` // in minutes
+	AverageTTA      float64 `json:"average_tta"`    // in minutes
+	AverageTTR      float64 `json:"average_ttr"`    // in minutes
 	SLACompliance   float64 `json:"sla_compliance"` // percentage
 }
 
 // HandleGetSLAReport calculates averages of response time and resolution time for a tenant.
 func HandleGetSLAReport(pgPool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		tenantID, ok := resolveTenantID(r)
-		if !ok {
-			http.Error(w, "Unauthorized: Tenant context not found", http.StatusUnauthorized)
+		tenantID, err := middleware.ResolveTenantScope(r.Context(), r, pgPool)
+		if err != nil {
+			middleware.WriteScopeError(w, err)
 			return
 		}
 		ctx := db.WithTenantID(r.Context(), tenantID)
@@ -733,7 +592,7 @@ func HandleGetSLAReport(pgPool *pgxpool.Pool) http.HandlerFunc {
 		var avgTTA, avgTTR float64
 		var totalDevices, onlineDevices int
 
-		err := db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
+		err = db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
 			// 1. Fetch SLA statistics from database
 			queryStats := `
 				SELECT 
@@ -783,35 +642,6 @@ func HandleGetSLAReport(pgPool *pgxpool.Pool) http.HandlerFunc {
 	}
 }
 
-// Uptime Kuma Webhook Structures
-type UptimeKumaPayload struct {
-	Heartbeat struct {
-		MonitorID int    `json:"monitorID"`
-		Status    int    `json:"status"` // 0 = Down, 1 = Up
-		Time      string `json:"time"`
-		Msg       string `json:"msg"`
-	} `json:"heartbeat"`
-	Monitor struct {
-		ID       int    `json:"id"`
-		Name     string `json:"name"`
-		Hostname string `json:"hostname"`
-		Url      string `json:"url"`
-		Type     string `json:"type"`
-	} `json:"monitor"`
-	Msg string `json:"msg"`
-}
-
-// Zabbix Webhook Structures
-type ZabbixPayload struct {
-	AlertSubject string `json:"alert_subject"`
-	AlertMessage string `json:"alert_message"`
-	Host         string `json:"host"`
-	Severity     string `json:"severity"`
-	TriggerID    string `json:"trigger_id"`
-	EventID      string `json:"event_id"`
-	EventValue   string `json:"event_value"` // "1" = Problem, "0" = OK
-}
-
 // HandleUptimeKumaIngest ingests and normalizes Uptime Kuma status notifications
 func HandleUptimeKumaIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -834,15 +664,20 @@ func HandleUptimeKumaIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) htt
 			return
 		}
 
-		var payload UptimeKumaPayload
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		bodyBytes, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "Bad Request: failed to read body", http.StatusBadRequest)
+			return
+		}
+
+		incidents, err := connector.MustGet(model.SourceUptimeKuma).MapToUnified(bodyBytes, tenantID)
+		if err != nil {
 			errMsg := fmt.Sprintf("Bad Request: Invalid Uptime Kuma JSON payload: %v", err)
 			redisClient.Set(r.Context(), fmt.Sprintf("webhook:error:%s:%s", tenantID.String(), "uptimekuma"), errMsg, 24*time.Hour)
 			http.Error(w, "Bad Request: Invalid Uptime Kuma JSON payload", http.StatusBadRequest)
 			return
 		}
-
-		incident := MapUptimeKumaToUnified(payload, tenantID)
+		incident := incidents[0]
 
 		eventBytes, err := json.Marshal(incident)
 		if err != nil {
@@ -850,7 +685,7 @@ func HandleUptimeKumaIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) htt
 			return
 		}
 
-		err = redisClient.LPush(r.Context(), AlertsQueueKey, eventBytes).Err()
+		err = redisClient.LPush(r.Context(), queue.AlertsNormalizedQueueKey, eventBytes).Err()
 		if err != nil {
 			http.Error(w, "Internal Server Error: Failed to queue incident", http.StatusInternalServerError)
 			return
@@ -893,8 +728,14 @@ func HandleGrafanaIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) http.H
 			return
 		}
 
-		var payload AlertmanagerPayload // Grafana alert format matches Prometheus Alertmanager structure
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		bodyBytes, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "Bad Request: failed to read body", http.StatusBadRequest)
+			return
+		}
+
+		incidents, err := connector.MustGet(model.SourceGrafana).MapToUnified(bodyBytes, tenantID)
+		if err != nil {
 			errMsg := fmt.Sprintf("Bad Request: Invalid Grafana alert JSON payload: %v", err)
 			redisClient.Set(r.Context(), fmt.Sprintf("webhook:error:%s:%s", tenantID.String(), "grafana"), errMsg, 24*time.Hour)
 			http.Error(w, "Bad Request: Invalid Grafana alert JSON payload", http.StatusBadRequest)
@@ -904,8 +745,7 @@ func HandleGrafanaIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) http.H
 		var incidentIDs []uuid.UUID
 		var eventBytesList [][]byte
 
-		for _, alert := range payload.Alerts {
-			incident := MapGrafanaToUnified(alert, tenantID)
+		for _, incident := range incidents {
 			incidentIDs = append(incidentIDs, incident.ID)
 
 			bytes, err := json.Marshal(incident)
@@ -919,7 +759,7 @@ func HandleGrafanaIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) http.H
 		if len(eventBytesList) > 0 {
 			pipe := redisClient.Pipeline()
 			for _, bytes := range eventBytesList {
-				pipe.LPush(r.Context(), AlertsQueueKey, bytes)
+				pipe.LPush(r.Context(), queue.AlertsNormalizedQueueKey, bytes)
 			}
 			_, err := pipe.Exec(r.Context())
 			if err != nil {
@@ -965,15 +805,20 @@ func HandleZabbixIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) http.Ha
 			return
 		}
 
-		var payload ZabbixPayload
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		bodyBytes, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "Bad Request: failed to read body", http.StatusBadRequest)
+			return
+		}
+
+		incidents, err := connector.MustGet(model.SourceZabbix).MapToUnified(bodyBytes, tenantID)
+		if err != nil {
 			errMsg := fmt.Sprintf("Bad Request: Invalid Zabbix JSON payload: %v", err)
 			redisClient.Set(r.Context(), fmt.Sprintf("webhook:error:%s:%s", tenantID.String(), "zabbix"), errMsg, 24*time.Hour)
 			http.Error(w, "Bad Request: Invalid Zabbix JSON payload", http.StatusBadRequest)
 			return
 		}
-
-		incident := MapZabbixToUnified(payload, tenantID)
+		incident := incidents[0]
 
 		eventBytes, err := json.Marshal(incident)
 		if err != nil {
@@ -981,7 +826,7 @@ func HandleZabbixIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) http.Ha
 			return
 		}
 
-		err = redisClient.LPush(r.Context(), AlertsQueueKey, eventBytes).Err()
+		err = redisClient.LPush(r.Context(), queue.AlertsNormalizedQueueKey, eventBytes).Err()
 		if err != nil {
 			http.Error(w, "Internal Server Error: Failed to queue Zabbix alert", http.StatusInternalServerError)
 			return
@@ -1002,79 +847,323 @@ func HandleZabbixIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) http.Ha
 	}
 }
 
-func MapUptimeKumaToUnified(payload UptimeKumaPayload, tenantID uuid.UUID) model.UnifiedIncident {
-	severity := model.SeverityInfo
-	if payload.Heartbeat.Status == 0 {
-		severity = model.SeverityCritical
-	}
+// HandleOTLPIngest ingests OTLP/HTTP+JSON log records (ExportLogsServiceRequest), surfacing
+// only ERROR/FATAL-severity records as incidents (see internal/connector/otlp.go).
+func HandleOTLPIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+			return
+		}
 
-	rawPayload := make(map[string]interface{})
-	rawPayload["heartbeat"] = payload.Heartbeat
-	rawPayload["monitor"] = payload.Monitor
-	rawPayload["msg"] = payload.Msg
+		tenantID, ok := db.TenantIDFromContext(r.Context())
+		if !ok {
+			http.Error(w, "Unauthorized: Tenant context not found", http.StatusUnauthorized)
+			return
+		}
 
-	// Timestamp layout parsing
-	timestamp, err := time.Parse("2006-01-02 15:04:05.000", payload.Heartbeat.Time)
-	if err != nil {
-		timestamp = time.Now()
-	}
+		var exists bool
+		err := pgPool.QueryRow(r.Context(), "SELECT EXISTS(SELECT 1 FROM tenant_integrations WHERE tenant_id = $1 AND type = $2 AND status = 'active')", tenantID, "otlp").Scan(&exists)
+		if err != nil || !exists {
+			http.Error(w, "Forbidden: OTLP integration not active for this tenant", http.StatusForbidden)
+			return
+		}
 
-	host := payload.Monitor.Hostname
-	if host == "" {
-		host = payload.Monitor.Url
-	}
+		bodyBytes, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "Bad Request: failed to read body", http.StatusBadRequest)
+			return
+		}
 
-	return model.UnifiedIncident{
-		ID:          uuid.New(),
-		TenantID:    tenantID,
-		Source:      model.SourceUptimeKuma,
-		ExternalID:  fmt.Sprintf("%d_%d", payload.Monitor.ID, timestamp.Unix()),
-		EventType:   payload.Monitor.Type,
-		Severity:    severity,
-		Title:       payload.Msg,
-		Description: payload.Heartbeat.Msg,
-		Host:        host,
-		RawPayload:  rawPayload,
-		Timestamp:   timestamp,
+		incidents, err := connector.MustGet(model.SourceOTLP).MapToUnified(bodyBytes, tenantID)
+		if err != nil {
+			errMsg := fmt.Sprintf("Bad Request: Invalid OTLP JSON payload: %v", err)
+			redisClient.Set(r.Context(), fmt.Sprintf("webhook:error:%s:%s", tenantID.String(), "otlp"), errMsg, 24*time.Hour)
+			http.Error(w, "Bad Request: Invalid OTLP JSON payload", http.StatusBadRequest)
+			return
+		}
+
+		var incidentIDs []uuid.UUID
+		if len(incidents) > 0 {
+			pipe := redisClient.Pipeline()
+			for _, incident := range incidents {
+				incidentIDs = append(incidentIDs, incident.ID)
+				bytes, err := json.Marshal(incident)
+				if err != nil {
+					http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+					return
+				}
+				pipe.LPush(r.Context(), queue.AlertsNormalizedQueueKey, bytes)
+			}
+			if _, err := pipe.Exec(r.Context()); err != nil {
+				http.Error(w, "Internal Server Error: Failed to queue OTLP incidents", http.StatusInternalServerError)
+				return
+			}
+		}
+
+		redisClient.Set(r.Context(), fmt.Sprintf("heartbeat:connector:%s:%s", tenantID.String(), "otlp"), time.Now().Unix(), 24*time.Hour)
+		redisClient.Del(r.Context(), fmt.Sprintf("webhook:error:%s:%s", tenantID.String(), "otlp"))
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(IngestBatchResponse{
+			Status:    "accepted",
+			IDs:       incidentIDs,
+			Message:   fmt.Sprintf("Successfully normalized and queued %d OTLP log-derived alerts", len(incidentIDs)),
+			Timestamp: time.Now(),
+		})
 	}
 }
 
-func MapGrafanaToUnified(alert AlertmanagerAlert, tenantID uuid.UUID) model.UnifiedIncident {
-	incident := MapPrometheusToUnified(alert, tenantID)
-	incident.Source = model.SourceGrafana
-	return incident
+// HandleIcingaIngest ingests Icinga2/Nagios notification-script webhooks (a JSON contract we
+// define, since neither tool has a native webhook — see internal/connector/icinga.go).
+func HandleIcingaIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		tenantID, ok := db.TenantIDFromContext(r.Context())
+		if !ok {
+			http.Error(w, "Unauthorized: Tenant context not found", http.StatusUnauthorized)
+			return
+		}
+
+		var exists bool
+		err := pgPool.QueryRow(r.Context(), "SELECT EXISTS(SELECT 1 FROM tenant_integrations WHERE tenant_id = $1 AND type = $2 AND status = 'active')", tenantID, "icinga").Scan(&exists)
+		if err != nil || !exists {
+			http.Error(w, "Forbidden: Icinga/Nagios integration not active for this tenant", http.StatusForbidden)
+			return
+		}
+
+		bodyBytes, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "Bad Request: failed to read body", http.StatusBadRequest)
+			return
+		}
+
+		incidents, err := connector.MustGet(model.SourceIcinga).MapToUnified(bodyBytes, tenantID)
+		if err != nil {
+			errMsg := fmt.Sprintf("Bad Request: Invalid Icinga/Nagios JSON payload: %v", err)
+			redisClient.Set(r.Context(), fmt.Sprintf("webhook:error:%s:%s", tenantID.String(), "icinga"), errMsg, 24*time.Hour)
+			http.Error(w, "Bad Request: Invalid Icinga/Nagios JSON payload", http.StatusBadRequest)
+			return
+		}
+		incident := incidents[0]
+
+		eventBytes, err := json.Marshal(incident)
+		if err != nil {
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return
+		}
+
+		err = redisClient.LPush(r.Context(), queue.AlertsNormalizedQueueKey, eventBytes).Err()
+		if err != nil {
+			http.Error(w, "Internal Server Error: Failed to queue Icinga/Nagios alert", http.StatusInternalServerError)
+			return
+		}
+
+		redisClient.Set(r.Context(), fmt.Sprintf("heartbeat:connector:%s:%s", tenantID.String(), "icinga"), time.Now().Unix(), 24*time.Hour)
+		redisClient.Del(r.Context(), fmt.Sprintf("webhook:error:%s:%s", tenantID.String(), "icinga"))
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(IngestResponse{
+			Status:    "accepted",
+			ID:        incident.ID,
+			Message:   "Icinga/Nagios notification successfully normalized and queued",
+			Timestamp: incident.Timestamp,
+		})
+	}
 }
 
-func MapZabbixToUnified(payload ZabbixPayload, tenantID uuid.UUID) model.UnifiedIncident {
-	severity := model.SeverityInfo
-	switch strings.ToLower(payload.Severity) {
-	case "warning", "average":
-		severity = model.SeverityWarning
-	case "high":
-		severity = model.SeverityCritical
-	case "disaster":
-		severity = model.SeverityFatal
+// HandleAzureMonitorIngest ingests Azure Monitor Action Group webhook alerts (Common Alert
+// Schema — see internal/connector/azuremonitor.go).
+func HandleAzureMonitorIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		tenantID, ok := db.TenantIDFromContext(r.Context())
+		if !ok {
+			http.Error(w, "Unauthorized: Tenant context not found", http.StatusUnauthorized)
+			return
+		}
+
+		var exists bool
+		err := pgPool.QueryRow(r.Context(), "SELECT EXISTS(SELECT 1 FROM tenant_integrations WHERE tenant_id = $1 AND type = $2 AND status = 'active')", tenantID, "azuremonitor").Scan(&exists)
+		if err != nil || !exists {
+			http.Error(w, "Forbidden: Azure Monitor integration not active for this tenant", http.StatusForbidden)
+			return
+		}
+
+		bodyBytes, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "Bad Request: failed to read body", http.StatusBadRequest)
+			return
+		}
+
+		incidents, err := connector.MustGet(model.SourceAzureMonitor).MapToUnified(bodyBytes, tenantID)
+		if err != nil {
+			errMsg := fmt.Sprintf("Bad Request: Invalid Azure Monitor JSON payload: %v", err)
+			redisClient.Set(r.Context(), fmt.Sprintf("webhook:error:%s:%s", tenantID.String(), "azuremonitor"), errMsg, 24*time.Hour)
+			http.Error(w, "Bad Request: Invalid Azure Monitor JSON payload", http.StatusBadRequest)
+			return
+		}
+		incident := incidents[0]
+
+		eventBytes, err := json.Marshal(incident)
+		if err != nil {
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return
+		}
+
+		err = redisClient.LPush(r.Context(), queue.AlertsNormalizedQueueKey, eventBytes).Err()
+		if err != nil {
+			http.Error(w, "Internal Server Error: Failed to queue Azure Monitor alert", http.StatusInternalServerError)
+			return
+		}
+
+		redisClient.Set(r.Context(), fmt.Sprintf("heartbeat:connector:%s:%s", tenantID.String(), "azuremonitor"), time.Now().Unix(), 24*time.Hour)
+		redisClient.Del(r.Context(), fmt.Sprintf("webhook:error:%s:%s", tenantID.String(), "azuremonitor"))
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(IngestResponse{
+			Status:    "accepted",
+			ID:        incident.ID,
+			Message:   "Azure Monitor alert successfully normalized and queued",
+			Timestamp: incident.Timestamp,
+		})
 	}
+}
 
-	rawPayload := make(map[string]interface{})
-	rawPayload["subject"] = payload.AlertSubject
-	rawPayload["message"] = payload.AlertMessage
-	rawPayload["trigger_id"] = payload.TriggerID
-	rawPayload["event_id"] = payload.EventID
-	rawPayload["event_value"] = payload.EventValue
+// HandlePagerDutyIngest ingests PagerDuty Webhooks V3 events (inbound — surfaces PD-native
+// incidents as NOC alerts; independent of outbound escalation, see internal/notifier).
+func HandlePagerDutyIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+			return
+		}
 
-	return model.UnifiedIncident{
-		ID:          uuid.New(),
-		TenantID:    tenantID,
-		Source:      model.SourceZabbix,
-		ExternalID:  payload.EventID,
-		EventType:   "zabbix_trigger",
-		Severity:    severity,
-		Title:       payload.AlertSubject,
-		Description: payload.AlertMessage,
-		Host:        payload.Host,
-		RawPayload:  rawPayload,
-		Timestamp:   time.Now(),
+		tenantID, ok := db.TenantIDFromContext(r.Context())
+		if !ok {
+			http.Error(w, "Unauthorized: Tenant context not found", http.StatusUnauthorized)
+			return
+		}
+
+		var exists bool
+		err := pgPool.QueryRow(r.Context(), "SELECT EXISTS(SELECT 1 FROM tenant_integrations WHERE tenant_id = $1 AND type = $2 AND status = 'active')", tenantID, "pagerduty").Scan(&exists)
+		if err != nil || !exists {
+			http.Error(w, "Forbidden: PagerDuty integration not active for this tenant", http.StatusForbidden)
+			return
+		}
+
+		bodyBytes, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "Bad Request: failed to read body", http.StatusBadRequest)
+			return
+		}
+
+		incidents, err := connector.MustGet(model.SourcePagerDuty).MapToUnified(bodyBytes, tenantID)
+		if err != nil {
+			errMsg := fmt.Sprintf("Bad Request: Invalid PagerDuty JSON payload: %v", err)
+			redisClient.Set(r.Context(), fmt.Sprintf("webhook:error:%s:%s", tenantID.String(), "pagerduty"), errMsg, 24*time.Hour)
+			http.Error(w, "Bad Request: Invalid PagerDuty JSON payload", http.StatusBadRequest)
+			return
+		}
+		incident := incidents[0]
+
+		eventBytes, err := json.Marshal(incident)
+		if err != nil {
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return
+		}
+
+		err = redisClient.LPush(r.Context(), queue.AlertsNormalizedQueueKey, eventBytes).Err()
+		if err != nil {
+			http.Error(w, "Internal Server Error: Failed to queue PagerDuty alert", http.StatusInternalServerError)
+			return
+		}
+
+		redisClient.Set(r.Context(), fmt.Sprintf("heartbeat:connector:%s:%s", tenantID.String(), "pagerduty"), time.Now().Unix(), 24*time.Hour)
+		redisClient.Del(r.Context(), fmt.Sprintf("webhook:error:%s:%s", tenantID.String(), "pagerduty"))
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(IngestResponse{
+			Status:    "accepted",
+			ID:        incident.ID,
+			Message:   "PagerDuty event successfully normalized and queued",
+			Timestamp: incident.Timestamp,
+		})
+	}
+}
+
+// HandleOpsgenieIngest ingests Opsgenie's generic Webhook integration payloads (inbound —
+// independent of outbound escalation, see internal/notifier).
+func HandleOpsgenieIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		tenantID, ok := db.TenantIDFromContext(r.Context())
+		if !ok {
+			http.Error(w, "Unauthorized: Tenant context not found", http.StatusUnauthorized)
+			return
+		}
+
+		var exists bool
+		err := pgPool.QueryRow(r.Context(), "SELECT EXISTS(SELECT 1 FROM tenant_integrations WHERE tenant_id = $1 AND type = $2 AND status = 'active')", tenantID, "opsgenie").Scan(&exists)
+		if err != nil || !exists {
+			http.Error(w, "Forbidden: Opsgenie integration not active for this tenant", http.StatusForbidden)
+			return
+		}
+
+		bodyBytes, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "Bad Request: failed to read body", http.StatusBadRequest)
+			return
+		}
+
+		incidents, err := connector.MustGet(model.SourceOpsgenie).MapToUnified(bodyBytes, tenantID)
+		if err != nil {
+			errMsg := fmt.Sprintf("Bad Request: Invalid Opsgenie JSON payload: %v", err)
+			redisClient.Set(r.Context(), fmt.Sprintf("webhook:error:%s:%s", tenantID.String(), "opsgenie"), errMsg, 24*time.Hour)
+			http.Error(w, "Bad Request: Invalid Opsgenie JSON payload", http.StatusBadRequest)
+			return
+		}
+		incident := incidents[0]
+
+		eventBytes, err := json.Marshal(incident)
+		if err != nil {
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return
+		}
+
+		err = redisClient.LPush(r.Context(), queue.AlertsNormalizedQueueKey, eventBytes).Err()
+		if err != nil {
+			http.Error(w, "Internal Server Error: Failed to queue Opsgenie alert", http.StatusInternalServerError)
+			return
+		}
+
+		redisClient.Set(r.Context(), fmt.Sprintf("heartbeat:connector:%s:%s", tenantID.String(), "opsgenie"), time.Now().Unix(), 24*time.Hour)
+		redisClient.Del(r.Context(), fmt.Sprintf("webhook:error:%s:%s", tenantID.String(), "opsgenie"))
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(IngestResponse{
+			Status:    "accepted",
+			ID:        incident.ID,
+			Message:   "Opsgenie alert successfully normalized and queued",
+			Timestamp: incident.Timestamp,
+		})
 	}
 }
 
@@ -1093,17 +1182,8 @@ func HandleSaveSecret(pgPool *pgxpool.Pool, vaultRepo repository.VaultRepository
 
 		tenantID, ok := db.TenantIDFromContext(r.Context())
 		if !ok {
-			token := r.URL.Query().Get("token")
-			if token == "" {
-				http.Error(w, "Unauthorized: Missing token", http.StatusUnauthorized)
-				return
-			}
-			parsedUUID, err := uuid.Parse(token)
-			if err != nil {
-				http.Error(w, "Unauthorized: Invalid token format", http.StatusUnauthorized)
-				return
-			}
-			tenantID = parsedUUID
+			http.Error(w, "Unauthorized: Tenant context not found", http.StatusUnauthorized)
+			return
 		}
 
 		var req SaveSecretRequest
@@ -1178,17 +1258,17 @@ func HandleGetActiveUsers(hub *ws.Hub) http.HandlerFunc {
 // HandleListAlerts returns the last 100 alerts for a tenant.
 func HandleListAlerts(pgPool *pgxpool.Pool, alertRepo repository.AlertRepository) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		tenantID, ok := resolveTenantID(r)
-		if !ok {
-			http.Error(w, "Unauthorized: Tenant context not found", http.StatusUnauthorized)
+		tenantID, err := middleware.ResolveTenantScope(r.Context(), r, pgPool)
+		if err != nil {
+			middleware.WriteScopeError(w, err)
 			return
 		}
 		ctx := db.WithTenantID(r.Context(), tenantID)
 
 		var alerts []*model.Alert
-		err := db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
+		err = db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
 			var err error
-			alerts, err = alertRepo.List(ctx, tx, 100, 0)
+			alerts, err = alertRepo.List(ctx, tx, tenantID, 100, 0)
 			return err
 		})
 		if err != nil {
@@ -1214,17 +1294,17 @@ func HandleCleanupAlerts(pgPool *pgxpool.Pool) http.HandlerFunc {
 			return
 		}
 
-		tenantID, ok := resolveTenantID(r)
-		if !ok {
-			http.Error(w, "Unauthorized: Tenant context not found", http.StatusUnauthorized)
+		tenantID, err := middleware.ResolveTenantScope(r.Context(), r, pgPool)
+		if err != nil {
+			middleware.WriteScopeError(w, err)
 			return
 		}
 		ctx := db.WithTenantID(r.Context(), tenantID)
 
 		var rowsAffected int64
-		err := db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
+		err = db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
 			query := `
-				DELETE FROM alerts 
+				DELETE FROM alerts
 				WHERE (ai_analysis->>'host' IN ('watchdog', 'azure-sentinel-vm', 'web-server-99', 'db-node-03', 'auth-gateway', 'ad-domain-controller-01', 'simulado') 
 				   OR payload->>'host' IN ('watchdog', 'azure-sentinel-vm', 'web-server-99', 'db-node-03', 'auth-gateway', 'ad-domain-controller-01', 'simulado') 
 				   OR summary LIKE '%Mock%' 
@@ -1254,5 +1334,28 @@ func HandleCleanupAlerts(pgPool *pgxpool.Pool) http.HandlerFunc {
 	}
 }
 
+// getTenantWebhookSecret fetches and decrypts the tenant's webhook_hmac_secret from the vault,
+// provisioned via HandleGenerateWebhookSecret. Returns an empty string (no error surfaced to
+// caller distinctly) if the tenant hasn't configured one yet.
+func getTenantWebhookSecret(ctx context.Context, pgPool *pgxpool.Pool, vaultRepo repository.VaultRepository, tenantID uuid.UUID) (string, error) {
+	masterKey, err := security.GetMasterKey()
+	if err != nil {
+		return "", err
+	}
 
-
+	tenantCtx := db.WithTenantID(ctx, tenantID)
+	var secretPlain string
+	err = db.ExecuteInTenantTx(tenantCtx, pgPool, func(tx pgx.Tx) error {
+		sec, err := vaultRepo.GetSecretByKey(tenantCtx, tx, "webhook_hmac_secret")
+		if err != nil {
+			return err
+		}
+		decrypted, err := security.Decrypt(sec.EncryptedValue, sec.Nonce, masterKey)
+		if err != nil {
+			return err
+		}
+		secretPlain = string(decrypted)
+		return nil
+	})
+	return secretPlain, err
+}

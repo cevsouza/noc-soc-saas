@@ -19,6 +19,7 @@ import (
 	"noc-api/internal/model"
 	redisclient "noc-api/internal/redis"
 	"noc-api/internal/repository"
+	"noc-api/internal/security"
 	"noc-api/internal/worker"
 	"noc-api/internal/ws"
 
@@ -29,15 +30,33 @@ import (
 func main() {
 	log.Println("Initializing NOC SaaS Core Engine (Resilience Mode Active)...")
 
+	// SECURITY: no fallback secret. A guessable/committed JWT secret lets anyone forge
+	// admin-level tokens for any tenant, so we refuse to boot without a real one.
 	jwtSecret := []byte(os.Getenv("JWT_SECRET"))
-	if len(jwtSecret) == 0 {
-		jwtSecret = []byte("noc-secret-key-1234567890-super-safe")
+	if len(jwtSecret) < 32 {
+		log.Fatalf("Fatal: JWT_SECRET environment variable must be set to a value of at least 32 bytes before boot.")
+	}
+
+	// SECURITY: fail fast if the vault master key is missing, instead of only failing the
+	// first time a request tries to encrypt/decrypt a tenant secret.
+	if _, err := security.GetMasterKey(); err != nil {
+		log.Fatalf("Fatal: %v (VAULT_MASTER_KEY must be a 32-byte value set before boot).", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	// 1. Load PostgreSQL Connection (Support direct DATABASE_URL or fallback to parameters)
+	dbPort, _ := strconv.Atoi(getEnv("DB_PORT", "5432"))
+	fallbackDBCfg := db.Config{
+		Host:     getEnv("DB_HOST", "localhost"),
+		Port:     dbPort,
+		User:     getEnv("DB_USER", "postgres"),
+		Password: getEnv("DB_PASSWORD", "postgres"),
+		DBName:   getEnv("DB_NAME", "noc"),
+		SSLMode:  getEnv("DB_SSLMODE", "disable"),
+	}
+
 	var pgPool *pgxpool.Pool
 	var err error
 	databaseURL := getEnv("DATABASE_URL", "")
@@ -61,21 +80,53 @@ func main() {
 		}
 	} else {
 		log.Println("No DATABASE_URL detected. Falling back to individual DB_HOST variables...")
-		dbPort, _ := strconv.Atoi(getEnv("DB_PORT", "5432"))
-		dbCfg := db.Config{
-			Host:     getEnv("DB_HOST", "localhost"),
-			Port:     dbPort,
-			User:     getEnv("DB_USER", "postgres"),
-			Password: getEnv("DB_PASSWORD", "postgres"),
-			DBName:   getEnv("DB_NAME", "noc"),
-			SSLMode:  getEnv("DB_SSLMODE", "disable"),
-		}
-		pgPool, err = db.NewConnectionPool(ctx, dbCfg)
+		pgPool, err = db.NewConnectionPool(ctx, fallbackDBCfg)
 		if err != nil {
 			log.Fatalf("Fatal: Database initialization failed: %v", err)
 		}
 	}
 	defer pgPool.Close()
+
+	// pgPool above is the "admin" pool (table owner — runs migrations, can bypass RLS).
+	// appPool is what all request handlers/workers actually use for tenant-scoped queries.
+	// It defaults to the same admin pool, but if APP_DB_PASSWORD is configured we switch to
+	// the non-superuser "noc_app_runtime" role (see migration 000012 + db.SetupAppRuntimeRole),
+	// so FORCE ROW LEVEL SECURITY is actually meaningful rather than bypassed by table ownership.
+	appPool := pgPool
+	appDBPassword := os.Getenv("APP_DB_PASSWORD")
+	dbRoleSeparationRequired := getEnv("DB_ROLE_SEPARATION_REQUIRED", "false") == "true"
+
+	if appDBPassword != "" {
+		log.Println("[DB ROLE SEPARATION] APP_DB_PASSWORD detected — running migrations and role setup synchronously before continuing boot...")
+		setupCtx, cancelSetup := context.WithTimeout(ctx, 60*time.Second)
+		if err := pgPool.Ping(setupCtx); err != nil {
+			log.Fatalf("Fatal: could not reach PostgreSQL to configure role separation: %v", err)
+		}
+		if err := db.RunMigrations(setupCtx, pgPool); err != nil {
+			log.Fatalf("Fatal: migrations failed while configuring role separation: %v", err)
+		}
+		if err := db.SetupAppRuntimeRole(setupCtx, pgPool, appDBPassword); err != nil {
+			if dbRoleSeparationRequired {
+				log.Fatalf("Fatal: DB_ROLE_SEPARATION_REQUIRED=true but role separation setup failed: %v", err)
+			}
+			log.Printf("[DB ROLE SEPARATION WARNING] %v — continuing with single-pool mode; tenant isolation depends entirely on explicit tenant_id filters in application code.", err)
+		} else {
+			newAppPool, err := db.NewAppRolePool(setupCtx, databaseURL, fallbackDBCfg, "noc_app_runtime", appDBPassword)
+			if err != nil {
+				if dbRoleSeparationRequired {
+					log.Fatalf("Fatal: DB_ROLE_SEPARATION_REQUIRED=true but could not connect as noc_app_runtime: %v", err)
+				}
+				log.Printf("[DB ROLE SEPARATION WARNING] Failed to connect as noc_app_runtime (%v). Continuing with single-pool mode.", err)
+			} else {
+				appPool = newAppPool
+				log.Println("[DB ROLE SEPARATION] Runtime now using non-superuser role 'noc_app_runtime' for defense-in-depth RLS enforcement.")
+			}
+		}
+		cancelSetup()
+	} else {
+		log.Println("[DB ROLE SEPARATION] APP_DB_PASSWORD not set — skipping second-layer role separation (isolation relies on FORCE ROW LEVEL SECURITY plus explicit tenant_id filters).")
+	}
+	defer appPool.Close()
 
 	// 2. Load Redis Connection (Support direct REDIS_URL or fallback to parameters)
 	var redisClient *redis.Client
@@ -131,24 +182,30 @@ func main() {
 			if err := db.RunMigrations(context.Background(), pgPool); err != nil {
 				log.Printf("[DATABASE WARN] Database migration failed: %v", err)
 			}
-			// One-time startup database fix
-			log.Println("[DATABASE INFO] Running background default admin accounts verification fix...")
-			fixCtx, cancelFix := context.WithTimeout(context.Background(), 20*time.Second)
-			defer cancelFix()
-			_, errVerifyFix := pgPool.Exec(fixCtx, `
-				UPDATE users 
-				SET is_verified = TRUE, global_role = 'admin' 
-				WHERE email IN (
-					'cadu.souza@itfacilservicos.com.br',
-					'felipe.gomes@itfacilservicos.com.br',
-					'cevsouza@hotmail.com',
-					'admin@itfacil.com.br'
-				)
-			`)
-			if errVerifyFix != nil {
-				log.Printf("[DATABASE WARN] Failed to auto-verify default admin accounts: %v", errVerifyFix)
+			// Ensure the current+next month's alerts partitions exist (see migration 000015) —
+			// the range-partitioned table has no auto-creation otherwise, so this must run on
+			// every boot, not just once at migration time.
+			if err := db.EnsureAlertPartitions(context.Background(), pgPool); err != nil {
+				log.Printf("[DATABASE WARN] Failed to ensure alerts partitions: %v", err)
+			}
+			// One-time startup fix: promote configured initial admin(s), if any.
+			adminEmails := security.InitialAdminEmails()
+			if len(adminEmails) > 0 {
+				log.Println("[DATABASE INFO] Running background initial admin accounts verification fix...")
+				fixCtx, cancelFix := context.WithTimeout(context.Background(), 20*time.Second)
+				defer cancelFix()
+				_, errVerifyFix := pgPool.Exec(fixCtx, `
+					UPDATE users
+					SET is_verified = TRUE, global_role = 'admin'
+					WHERE email = ANY($1)
+				`, adminEmails)
+				if errVerifyFix != nil {
+					log.Printf("[DATABASE WARN] Failed to auto-verify initial admin accounts: %v", errVerifyFix)
+				} else {
+					log.Println("[DATABASE INFO] Initial admin accounts verified successfully in background.")
+				}
 			} else {
-				log.Println("[DATABASE INFO] Default admin accounts verified successfully in background.")
+				log.Println("[DATABASE INFO] INITIAL_ADMIN_EMAILS not set — skipping automatic admin promotion.")
 			}
 		}
 
@@ -173,7 +230,7 @@ func main() {
 	numWorkers, _ := strconv.Atoi(getEnv("WORKER_POOL_SIZE", "10"))
 
 	// 4. Initialize & Start Concurrent Worker Pool
-	wp := worker.NewWorkerPool(pgPool, redisClient, numWorkers)
+	wp := worker.NewWorkerPool(appPool, redisClient, numWorkers)
 	wp.Start(ctx)
 	wp.StartWatchdog(ctx)
 	wp.StartMappingEngine(ctx)
@@ -185,7 +242,7 @@ func main() {
 	go ws.StartGlobalPubSubMultiplexer(ctx, redisClient, hub)
 
 	// 5.5 Start Microsoft Sentinel Background Connector
-	sentinelConn := connector.NewSentinelConnector(pgPool, redisClient)
+	sentinelConn := connector.NewSentinelConnector(appPool, redisClient)
 	sentinelConn.Start(ctx, 30*time.Second)
 	defer sentinelConn.Stop()
 
@@ -337,58 +394,94 @@ func main() {
 	})
 
 	// High-Performance Ingestion endpoint (protected by API Key auth middleware & rate limiter)
-	ingestHandler := api.HandleIngest(pgPool, redisClient)
-	protectedIngest := middleware.APIKeyAuth(pgPool, redisClient, jwtSecret)(middleware.RateLimiter(redisClient, 500)(ingestHandler))
+	ingestHandler := api.HandleIngest(appPool, redisClient)
+	protectedIngest := middleware.APIKeyAuth(appPool, redisClient, jwtSecret)(middleware.RateLimiter(redisClient, 500)(ingestHandler))
 	mux.Handle("/api/v1/ingest", protectedIngest)
 
 	// High-Performance Prometheus Alertmanager & Wazuh Webhook Ingestion
-	promHandler := api.HandlePrometheusIngest(pgPool, redisClient)
-	protectedProm := middleware.APIKeyAuth(pgPool, redisClient, jwtSecret)(middleware.RateLimiter(redisClient, 500)(promHandler))
+	promHandler := api.HandlePrometheusIngest(appPool, redisClient)
+	protectedProm := middleware.APIKeyAuth(appPool, redisClient, jwtSecret)(middleware.RateLimiter(redisClient, 500)(promHandler))
 	mux.Handle("/api/v1/ingest/prometheus", protectedProm)
 
-	wazuhHandler := api.HandleWazuhIngest(pgPool, redisClient)
-	protectedWazuh := middleware.APIKeyAuth(pgPool, redisClient, jwtSecret)(middleware.RateLimiter(redisClient, 500)(wazuhHandler))
+	wazuhHandler := api.HandleWazuhIngest(appPool, redisClient)
+	protectedWazuh := middleware.APIKeyAuth(appPool, redisClient, jwtSecret)(middleware.RateLimiter(redisClient, 500)(wazuhHandler))
 	mux.Handle("/api/v1/ingest/wazuh", protectedWazuh)
 
 	// High-Performance Uptime Kuma, Grafana & Zabbix Webhook Ingestions
-	uptimekumaHandler := api.HandleUptimeKumaIngest(pgPool, redisClient)
-	protectedUptimeKuma := middleware.APIKeyAuth(pgPool, redisClient, jwtSecret)(middleware.RateLimiter(redisClient, 500)(uptimekumaHandler))
+	uptimekumaHandler := api.HandleUptimeKumaIngest(appPool, redisClient)
+	protectedUptimeKuma := middleware.APIKeyAuth(appPool, redisClient, jwtSecret)(middleware.RateLimiter(redisClient, 500)(uptimekumaHandler))
 	mux.Handle("/api/v1/ingest/uptimekuma", protectedUptimeKuma)
 
-	grafanaHandler := api.HandleGrafanaIngest(pgPool, redisClient)
-	protectedGrafana := middleware.APIKeyAuth(pgPool, redisClient, jwtSecret)(middleware.RateLimiter(redisClient, 500)(grafanaHandler))
+	grafanaHandler := api.HandleGrafanaIngest(appPool, redisClient)
+	protectedGrafana := middleware.APIKeyAuth(appPool, redisClient, jwtSecret)(middleware.RateLimiter(redisClient, 500)(grafanaHandler))
 	mux.Handle("/api/v1/ingest/grafana", protectedGrafana)
 
-	zabbixHandler := api.HandleZabbixIngest(pgPool, redisClient)
-	protectedZabbix := middleware.APIKeyAuth(pgPool, redisClient, jwtSecret)(middleware.RateLimiter(redisClient, 500)(zabbixHandler))
+	zabbixHandler := api.HandleZabbixIngest(appPool, redisClient)
+	protectedZabbix := middleware.APIKeyAuth(appPool, redisClient, jwtSecret)(middleware.RateLimiter(redisClient, 500)(zabbixHandler))
 	mux.Handle("/api/v1/ingest/zabbix", protectedZabbix)
 
-	// Ingestion webhook endpoint (POST /api/v1/webhook/{integration_type}/{tenant_id})
-	webhookHandler := api.HandleGenericWebhook(pgPool, redisClient)
+	// OTLP/HTTP+JSON logs, Icinga/Nagios, Azure Monitor, PagerDuty, Opsgenie (inbound), and
+	// CloudWatch (via SNS) ingestion — same auth/rate-limit wrapping as the connectors above.
+	otlpHandler := api.HandleOTLPIngest(appPool, redisClient)
+	protectedOTLP := middleware.APIKeyAuth(appPool, redisClient, jwtSecret)(middleware.RateLimiter(redisClient, 500)(otlpHandler))
+	mux.Handle("/api/v1/ingest/otlp", protectedOTLP)
+
+	icingaHandler := api.HandleIcingaIngest(appPool, redisClient)
+	protectedIcinga := middleware.APIKeyAuth(appPool, redisClient, jwtSecret)(middleware.RateLimiter(redisClient, 500)(icingaHandler))
+	mux.Handle("/api/v1/ingest/icinga", protectedIcinga)
+
+	azureMonitorHandler := api.HandleAzureMonitorIngest(appPool, redisClient)
+	protectedAzureMonitor := middleware.APIKeyAuth(appPool, redisClient, jwtSecret)(middleware.RateLimiter(redisClient, 500)(azureMonitorHandler))
+	mux.Handle("/api/v1/ingest/azuremonitor", protectedAzureMonitor)
+
+	pagerDutyHandler := api.HandlePagerDutyIngest(appPool, redisClient)
+	protectedPagerDuty := middleware.APIKeyAuth(appPool, redisClient, jwtSecret)(middleware.RateLimiter(redisClient, 500)(pagerDutyHandler))
+	mux.Handle("/api/v1/ingest/pagerduty", protectedPagerDuty)
+
+	opsgenieHandler := api.HandleOpsgenieIngest(appPool, redisClient)
+	protectedOpsgenie := middleware.APIKeyAuth(appPool, redisClient, jwtSecret)(middleware.RateLimiter(redisClient, 500)(opsgenieHandler))
+	mux.Handle("/api/v1/ingest/opsgenie", protectedOpsgenie)
+
+	cloudwatchHandler := api.HandleCloudWatchIngest(appPool, redisClient)
+	protectedCloudWatch := middleware.APIKeyAuth(appPool, redisClient, jwtSecret)(middleware.RateLimiter(redisClient, 500)(cloudwatchHandler))
+	mux.Handle("/api/v1/ingest/cloudwatch", protectedCloudWatch)
+
+	// Secure Vault Credentials Storage Endpoint (Postgres Vault with RLS & GCM Ciphers, protected by JWT & Admin Role check)
+	vaultRepo := repository.NewPostgresVaultRepository()
+
+	// Ingestion webhook endpoint (POST /api/v1/webhook/{integration_type}/{tenant_id}) — requires
+	// a valid X-Signature HMAC keyed with the tenant's own webhook_hmac_secret (see /webhook-secret below).
+	webhookHandler := api.HandleGenericWebhook(appPool, redisClient, vaultRepo)
 	protectedWebhook := middleware.RateLimiter(redisClient, 500)(webhookHandler)
 	mux.Handle("/api/v1/webhook/", protectedWebhook)
 
 	// User authentication endpoints (unauthenticated)
-	mux.Handle("/api/v1/auth/register", api.HandleRegister(pgPool))
-	mux.Handle("/api/v1/auth/verify", api.HandleVerify(pgPool))
-	mux.Handle("/api/v1/auth/login", api.HandleLogin(pgPool, jwtSecret))
-	mux.Handle("/api/v1/public/tenants", api.HandleGetPublicTenants(pgPool))
-	mux.Handle("/api/v1/tenants/update_style", middleware.JWTAuth(jwtSecret)(api.HandleUpdateTenantStyle(pgPool)))
-
-	// Administrator endpoints (protected by JWT and Admin Role check)
-	protectedAdminUsers := middleware.JWTAuth(jwtSecret)(
+	mux.Handle("/api/v1/auth/register", api.HandleRegister(appPool))
+	mux.Handle("/api/v1/auth/verify", api.HandleVerify(appPool))
+	mux.Handle("/api/v1/auth/login", api.HandleLogin(appPool, jwtSecret))
+	mux.Handle("/api/v1/public/tenants", api.HandleGetPublicTenants(appPool))
+	mux.Handle("/api/v1/tenants/update_style", middleware.JWTAuth(jwtSecret)(
 		middleware.RequireRole(model.RoleAdmin)(
-			api.HandleAdminCreateUser(pgPool),
+			api.HandleUpdateTenantStyle(appPool),
+		),
+	))
+
+	// Administrator endpoints (these act on the platform's entire user base with no tenant
+	// scoping at all — "Users are global" per HandleAdminCreateUser — so they require
+	// GlobalRole==admin, not just Role==admin in the caller's own tenant).
+	protectedAdminUsers := middleware.JWTAuth(jwtSecret)(
+		middleware.RequireGlobalRole(model.RoleAdmin)(
+			api.HandleAdminCreateUser(appPool),
 		),
 	)
 	protectedGetAdminUsers := middleware.JWTAuth(jwtSecret)(
-		middleware.RequireRole(model.RoleAdmin)(
-			api.HandleGetUsers(pgPool),
+		middleware.RequireGlobalRole(model.RoleAdmin)(
+			api.HandleGetUsers(appPool),
 		),
 	)
 	protectedDeleteAdminUsers := middleware.JWTAuth(jwtSecret)(
-		middleware.RequireRole(model.RoleAdmin)(
-			api.HandleDeleteUser(pgPool),
+		middleware.RequireGlobalRole(model.RoleAdmin)(
+			api.HandleDeleteUser(appPool),
 		),
 	)
 	mux.Handle("/api/v1/admin/users", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -403,29 +496,40 @@ func main() {
 		}
 	}))
 
-	// SLA PDF Report Download Endpoint (Resolves auth token via URL query parameter for browser compatibility)
-	mux.Handle("/api/v1/reports/sla", api.HandleDownloadSLAReport(pgPool, jwtSecret))
-	mux.Handle("/api/v1/reports/sla/debug", api.HandleSLADebug(pgPool))
+	// SLA PDF Report Download Endpoint (resolves auth via ?token= — kept unauthenticated at the
+	// route level since browser downloads can't set an Authorization header; security instead
+	// comes from ResolveTenantFromToken now only accepting a signed JWT or a real API key, never
+	// a raw tenant UUID)
+	mux.Handle("/api/v1/reports/sla", api.HandleDownloadSLAReport(appPool, jwtSecret))
+	mux.Handle("/api/v1/reports/sla/debug", api.HandleSLADebug(appPool))
 
-	// Secure Vault Credentials Storage Endpoint (Postgres Vault with RLS & GCM Ciphers, protected by JWT & Admin Role check)
-	vaultRepo := repository.NewPostgresVaultRepository()
 	protectedVault := middleware.JWTAuth(jwtSecret)(
 		middleware.RequireRole(model.RoleAdmin)(
-			api.HandleSaveSecret(pgPool, vaultRepo),
+			api.HandleSaveSecret(appPool, vaultRepo),
 		),
 	)
 	mux.Handle("/api/v1/vault/secret", protectedVault)
 
-	// Tenant management routes (GET for listing active tenants, POST for admin-only creation)
-	protectedGetTenants := middleware.JWTAuth(jwtSecret)(api.HandleGetTenants(pgPool))
-	protectedPostTenants := middleware.JWTAuth(jwtSecret)(
+	// Per-tenant webhook signing secret provisioning (admin only)
+	protectedWebhookSecret := middleware.JWTAuth(jwtSecret)(
 		middleware.RequireRole(model.RoleAdmin)(
-			api.HandleCreateTenant(pgPool),
+			api.HandleGenerateWebhookSecret(appPool, vaultRepo),
+		),
+	)
+	mux.Handle("/api/v1/integrations/webhook-secret", protectedWebhookSecret)
+
+	// Tenant management routes (GET for listing active tenants, POST/DELETE are platform-wide
+	// actions not scoped to the caller's own tenant, so they require GlobalRole==admin —
+	// a tenant-level admin (Role==admin) must NOT be able to create or delete other tenants).
+	protectedGetTenants := middleware.JWTAuth(jwtSecret)(api.HandleGetTenants(appPool))
+	protectedPostTenants := middleware.JWTAuth(jwtSecret)(
+		middleware.RequireGlobalRole(model.RoleAdmin)(
+			api.HandleCreateTenant(appPool),
 		),
 	)
 	protectedDeleteTenant := middleware.JWTAuth(jwtSecret)(
-		middleware.RequireRole(model.RoleAdmin)(
-			api.HandleDeleteTenant(pgPool),
+		middleware.RequireGlobalRole(model.RoleAdmin)(
+			api.HandleDeleteTenant(appPool),
 		),
 	)
 	mux.Handle("/api/v1/tenants", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -441,15 +545,15 @@ func main() {
 	}))
 
 	// Integration management routes (GET to list active tenant integrations, POST to add, DELETE to remove)
-	protectedGetIntegrations := middleware.JWTAuth(jwtSecret)(api.HandleGetIntegrations(pgPool))
+	protectedGetIntegrations := middleware.JWTAuth(jwtSecret)(api.HandleGetIntegrations(appPool))
 	protectedPostIntegrations := middleware.JWTAuth(jwtSecret)(
 		middleware.RequireRole(model.RoleAdmin)(
-			api.HandleCreateIntegration(pgPool),
+			api.HandleCreateIntegration(appPool),
 		),
 	)
 	protectedDeleteIntegrations := middleware.JWTAuth(jwtSecret)(
 		middleware.RequireRole(model.RoleAdmin)(
-			api.HandleDeleteIntegration(pgPool),
+			api.HandleDeleteIntegration(appPool),
 		),
 	)
 	mux.Handle("/api/v1/integrations", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -464,44 +568,44 @@ func main() {
 		}
 	}))
 
-	protectedGetIntegrationStatus := middleware.JWTAuth(jwtSecret)(api.HandleGetIntegrationStatus(pgPool, redisClient))
+	protectedGetIntegrationStatus := middleware.JWTAuth(jwtSecret)(api.HandleGetIntegrationStatus(appPool, redisClient))
 	mux.Handle("/api/v1/integrations/status", protectedGetIntegrationStatus)
 
 	// Alerts list endpoint
 	alertRepo := repository.NewPostgresAlertRepository()
-	protectedListAlerts := middleware.JWTAuth(jwtSecret)(api.HandleListAlerts(pgPool, alertRepo))
+	protectedListAlerts := middleware.JWTAuth(jwtSecret)(api.HandleListAlerts(appPool, alertRepo))
 	mux.Handle("/api/v1/alerts", protectedListAlerts)
 
 	protectedCleanupAlerts := middleware.JWTAuth(jwtSecret)(
 		middleware.RequireRole(model.RoleAdmin)(
-			api.HandleCleanupAlerts(pgPool),
+			api.HandleCleanupAlerts(appPool),
 		),
 	)
 	mux.Handle("/api/v1/alerts/cleanup", protectedCleanupAlerts)
 
 	// Incident action endpoints (Acknowledge and Resolve)
-	protectedAcknowledgeIncident := middleware.JWTAuth(jwtSecret)(api.HandleAcknowledgeIncident(pgPool))
-	protectedResolveIncident := middleware.JWTAuth(jwtSecret)(api.HandleResolveIncident(pgPool))
+	protectedAcknowledgeIncident := middleware.JWTAuth(jwtSecret)(api.HandleAcknowledgeIncident(appPool))
+	protectedResolveIncident := middleware.JWTAuth(jwtSecret)(api.HandleResolveIncident(appPool))
 	mux.Handle("/api/v1/incidents/acknowledge", protectedAcknowledgeIncident)
 	mux.Handle("/api/v1/incidents/resolve", protectedResolveIncident)
 
 	// SLA dynamic report endpoint
-	protectedGetSLAReport := middleware.JWTAuth(jwtSecret)(api.HandleGetSLAReport(pgPool))
+	protectedGetSLAReport := middleware.JWTAuth(jwtSecret)(api.HandleGetSLAReport(appPool))
 	mux.Handle("/api/v1/reports/sla/stats", protectedGetSLAReport)
 
 	// Runbook management and execution routes
-	protectedGetRunbooks := middleware.JWTAuth(jwtSecret)(api.HandleGetRunbooks(pgPool))
+	protectedGetRunbooks := middleware.JWTAuth(jwtSecret)(api.HandleGetRunbooks(appPool))
 	protectedPostRunbooks := middleware.JWTAuth(jwtSecret)(
 		middleware.RequireRole(model.RoleAdmin)(
-			api.HandleCreateRunbook(pgPool),
+			api.HandleCreateRunbook(appPool),
 		),
 	)
 	protectedDeleteRunbooks := middleware.JWTAuth(jwtSecret)(
 		middleware.RequireRole(model.RoleAdmin)(
-			api.HandleDeleteRunbook(pgPool),
+			api.HandleDeleteRunbook(appPool),
 		),
 	)
-	protectedExecuteRunbook := middleware.JWTAuth(jwtSecret)(api.HandleExecuteRunbook(pgPool))
+	protectedExecuteRunbook := middleware.JWTAuth(jwtSecret)(api.HandleExecuteRunbook(appPool))
 
 	mux.Handle("/api/v1/runbooks", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
@@ -516,46 +620,79 @@ func main() {
 	}))
 	mux.Handle("/api/v1/runbooks/execute", protectedExecuteRunbook)
 
+	// SOAR auto-trigger approval queue (operators/admins review and approve/reject)
+	protectedGetApprovals := middleware.JWTAuth(jwtSecret)(api.HandleGetRunbookApprovals(appPool))
+	protectedApproveRunbook := middleware.JWTAuth(jwtSecret)(
+		middleware.RequireRole(model.RoleAdmin, model.RoleOperator)(
+			api.HandleApproveRunbookRequest(appPool),
+		),
+	)
+	protectedRejectRunbook := middleware.JWTAuth(jwtSecret)(
+		middleware.RequireRole(model.RoleAdmin, model.RoleOperator)(
+			api.HandleRejectRunbookRequest(appPool),
+		),
+	)
+	mux.Handle("/api/v1/runbooks/approvals", protectedGetApprovals)
+	mux.Handle("/api/v1/runbooks/approvals/approve", protectedApproveRunbook)
+	mux.Handle("/api/v1/runbooks/approvals/reject", protectedRejectRunbook)
+
 	// Incident chat & timeline endpoints
-	protectedIncidentChat := middleware.JWTAuth(jwtSecret)(api.HandleIncidentChat(pgPool))
-	protectedIncidentComments := middleware.JWTAuth(jwtSecret)(api.HandleGetIncidentComments(pgPool))
+	protectedIncidentChat := middleware.JWTAuth(jwtSecret)(api.HandleIncidentChat(appPool))
+	protectedIncidentComments := middleware.JWTAuth(jwtSecret)(api.HandleGetIncidentComments(appPool))
 	mux.Handle("/api/v1/incidents/chat", protectedIncidentChat)
 	mux.Handle("/api/v1/incidents/comments", protectedIncidentComments)
 
 	// Runbooks execution audit logs endpoint
-	protectedRunbookAudit := middleware.JWTAuth(jwtSecret)(api.HandleGetRunbookAuditLogs(pgPool))
+	protectedRunbookAudit := middleware.JWTAuth(jwtSecret)(api.HandleGetRunbookAuditLogs(appPool))
 	mux.Handle("/api/v1/runbooks/audit", protectedRunbookAudit)
 
 	// Secure Vault metadata list endpoint
 	protectedVaultList := middleware.JWTAuth(jwtSecret)(
 		middleware.RequireRole(model.RoleAdmin)(
-			api.HandleGetVaultSecrets(pgPool),
+			api.HandleGetVaultSecrets(appPool),
 		),
 	)
 	mux.Handle("/api/v1/vault/list", protectedVaultList)
 
 	// ITSM Ticket Synchronization simulator endpoint
-	protectedITSMSync := middleware.JWTAuth(jwtSecret)(api.HandleSyncITSM(pgPool))
+	protectedITSMSync := middleware.JWTAuth(jwtSecret)(api.HandleSyncITSM(appPool))
 	mux.Handle("/api/v1/itsm/sync", protectedITSMSync)
 
 	// Shift Handover Endpoints
-	protectedCreateHandover := middleware.JWTAuth(jwtSecret)(api.HandleCreateShiftHandover(pgPool))
-	protectedGetCurrentHandover := middleware.JWTAuth(jwtSecret)(api.HandleGetCurrentShiftHandover(pgPool))
-	protectedAckHandover := middleware.JWTAuth(jwtSecret)(api.HandleAcknowledgeShiftHandover(pgPool))
-	
+	protectedCreateHandover := middleware.JWTAuth(jwtSecret)(api.HandleCreateShiftHandover(appPool))
+	protectedGetCurrentHandover := middleware.JWTAuth(jwtSecret)(api.HandleGetCurrentShiftHandover(appPool))
+	protectedAckHandover := middleware.JWTAuth(jwtSecret)(api.HandleAcknowledgeShiftHandover(appPool))
+
 	mux.Handle("/api/v1/shift/handover", protectedCreateHandover)
 	mux.Handle("/api/v1/shift/handover/current", protectedGetCurrentHandover)
 	mux.Handle("/api/v1/shift/handover/ack", protectedAckHandover)
 
-	// Real-Time Operator WebSocket Subscription endpoint (Multiplexed, resolved by JWT/APIKey/UUID)
-	mux.Handle("/api/v1/ws", ws.ServeWS(hub, pgPool, jwtSecret))
+	// Real-Time Operator WebSocket Subscription endpoint (Multiplexed; requires a valid JWT —
+	// see internal/ws/ws_handler.go for the tenant membership validation on ?tenants=)
+	mux.Handle("/api/v1/ws", ws.ServeWS(hub, appPool, jwtSecret))
 
-	// Active operator sessions endpoint (Admin only)
+	// Active operator sessions endpoint — lists connected clients across ALL tenants with no
+	// tenant filter, so it requires GlobalRole==admin rather than tenant-scoped Role==admin.
 	protectedActiveUsers := middleware.JWTAuth(jwtSecret)(
-		middleware.RequireRole(model.RoleAdmin)(
+		middleware.RequireGlobalRole(model.RoleAdmin)(
 			api.HandleGetActiveUsers(hub),
 		),
 	)
+
+	// Dead-letter queue inspection/replay — platform-wide, not tenant-scoped, so it requires
+	// GlobalRole==admin.
+	protectedGetDLQ := middleware.JWTAuth(jwtSecret)(
+		middleware.RequireGlobalRole(model.RoleAdmin)(
+			api.HandleGetDLQ(redisClient),
+		),
+	)
+	protectedReplayDLQ := middleware.JWTAuth(jwtSecret)(
+		middleware.RequireGlobalRole(model.RoleAdmin)(
+			api.HandleReplayDLQ(redisClient),
+		),
+	)
+	mux.Handle("/api/v1/dlq", protectedGetDLQ)
+	mux.Handle("/api/v1/dlq/replay", protectedReplayDLQ)
 	mux.Handle("/api/v1/ws/active_users", protectedActiveUsers)
 
 	// 6. Define & Launch Server with Timeout Controls (SRE Best Practice)

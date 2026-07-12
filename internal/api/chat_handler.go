@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"noc-api/internal/db"
+	"noc-api/internal/middleware"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -27,9 +28,9 @@ type IncidentChatResponse struct {
 // queries Gemini with context and message history, saves both to incident_comments and returns response.
 func HandleIncidentChat(pgPool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		tenantID, ok := resolveTenantID(r)
-		if !ok {
-			http.Error(w, "Unauthorized: Tenant context not found", http.StatusUnauthorized)
+		tenantID, err := middleware.ResolveTenantScope(r.Context(), r, pgPool)
+		if err != nil {
+			middleware.WriteScopeError(w, err)
 			return
 		}
 		ctx := db.WithTenantID(r.Context(), tenantID)
@@ -47,7 +48,7 @@ func HandleIncidentChat(pgPool *pgxpool.Pool) http.HandlerFunc {
 
 		var geminiResponse string
 
-		err := db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
+		err = db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
 			// 1. Fetch incident details for context
 			var title, payloadBytes, aiAnalysisBytes []byte
 			queryIncident := `
@@ -121,9 +122,9 @@ func HandleIncidentChat(pgPool *pgxpool.Pool) http.HandlerFunc {
 // HandleGetIncidentComments returns the chat timeline / comments for a specific incident.
 func HandleGetIncidentComments(pgPool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		tenantID, ok := resolveTenantID(r)
-		if !ok {
-			http.Error(w, "Unauthorized: Tenant context not found", http.StatusUnauthorized)
+		tenantID, err := middleware.ResolveTenantScope(r.Context(), r, pgPool)
+		if err != nil {
+			middleware.WriteScopeError(w, err)
 			return
 		}
 		ctx := db.WithTenantID(r.Context(), tenantID)

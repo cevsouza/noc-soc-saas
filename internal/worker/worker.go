@@ -11,11 +11,15 @@ import (
 	"time"
 
 	"noc-api/internal/api"
+	"noc-api/internal/connector"
 	"noc-api/internal/db"
 	"noc-api/internal/executor"
 	"noc-api/internal/loki"
 	"noc-api/internal/model"
+	"noc-api/internal/notifier"
+	"noc-api/internal/queue"
 	"noc-api/internal/repository"
+	"noc-api/internal/security"
 
 	"strings"
 
@@ -26,31 +30,40 @@ import (
 )
 
 const (
-	DebounceKeyPrefix = "noc:debounce:"
+	// v2: bumped from "noc:debounce:" so any leftover keys in the old
+	// tenant:device:event_type format age out harmlessly during rollout instead of ever being
+	// compared against the new fingerprint-keyed, JSON-envelope-valued format.
+	DebounceKeyPrefix = "noc:debounce:v2:"
 	DebounceTTL       = 5 * time.Minute
 	PubSubChannel     = "noc:pubsub:tenant:"
 )
 
 type WorkerPool struct {
-	pgPool      *pgxpool.Pool
-	redisClient *redis.Client
-	alertRepo   repository.AlertRepository
-	numWorkers  int
-	wg          sync.WaitGroup
-	stopChan    chan struct{}
-	executor    *executor.SelfHealingExecutor
-	lokiClient  *loki.LokiClient
+	pgPool            *pgxpool.Pool
+	redisClient       *redis.Client
+	alertRepo         repository.AlertRepository
+	vaultRepo         repository.VaultRepository
+	numWorkers        int
+	wg                sync.WaitGroup
+	stopChan          chan struct{}
+	executor          *executor.SelfHealingExecutor
+	lokiClient        *loki.LokiClient
+	pagerDutyNotifier *notifier.PagerDutyNotifier
+	opsgenieNotifier  *notifier.OpsgenieNotifier
 }
 
 func NewWorkerPool(pgPool *pgxpool.Pool, redisClient *redis.Client, numWorkers int) *WorkerPool {
 	return &WorkerPool{
-		pgPool:      pgPool,
-		redisClient: redisClient,
-		alertRepo:   repository.NewPostgresAlertRepository(),
-		numWorkers:  numWorkers,
-		stopChan:    make(chan struct{}),
-		executor:    executor.NewSelfHealingExecutor(pgPool),
-		lokiClient:  loki.NewLokiClient(pgPool),
+		pgPool:            pgPool,
+		redisClient:       redisClient,
+		alertRepo:         repository.NewPostgresAlertRepository(),
+		vaultRepo:         repository.NewPostgresVaultRepository(),
+		numWorkers:        numWorkers,
+		stopChan:          make(chan struct{}),
+		executor:          executor.NewSelfHealingExecutor(pgPool),
+		lokiClient:        loki.NewLokiClient(pgPool),
+		pagerDutyNotifier: notifier.NewPagerDutyNotifier(),
+		opsgenieNotifier:  notifier.NewOpsgenieNotifier(),
 	}
 }
 
@@ -82,7 +95,7 @@ func (wp *WorkerPool) worker(ctx context.Context, id int) {
 		default:
 			// BRPOP: Blocking POP from the right (LPUSH put it on the left)
 			// Timeout is set to 2 seconds to allow regular checking of stopChan
-			result, err := wp.redisClient.BRPop(ctx, 2*time.Second, api.AlertsNormalizedQueueKey).Result()
+			result, err := wp.redisClient.BRPop(ctx, 2*time.Second, queue.AlertsNormalizedQueueKey).Result()
 			if err != nil {
 				if err == redis.Nil {
 					// Queue empty, continue polling
@@ -129,30 +142,28 @@ func (wp *WorkerPool) processEvent(ctx context.Context, event model.UnifiedIncid
 		event.Severity = model.AlertSeverity(severityOverride)
 	}
 
-	var deviceIDStr string
-	if event.DeviceID != nil {
-		deviceIDStr = event.DeviceID.String()
-	} else {
-		deviceIDStr = "nil_device"
-	}
+	// 1. Dedupe by content fingerprint (tenant+source+external_id, or a fallback seed when
+	// external_id is absent — see computeFingerprint in fingerprint.go).
+	fingerprint := computeFingerprint(event)
+	debounceKey := DebounceKeyPrefix + fingerprint
 
-	// 1. Debounce checking key signature: noc:debounce:<tenant_id>:<device_id>:<event_type>
-	debounceKey := fmt.Sprintf("%s%s:%s:%s", DebounceKeyPrefix, event.TenantID, deviceIDStr, event.EventType)
-
-	// Try reading debounce pointer from Redis
-	existingAlertIDStr, err := wp.redisClient.Get(ctx, debounceKey).Result()
-	if err == nil && existingAlertIDStr != "" {
-		// DEBOUNCE HIT: An active alert of this exact type exists in the last 5 minutes.
-		existingAlertID, parseErr := uuid.Parse(existingAlertIDStr)
-		if parseErr == nil {
-			log.Printf("[Debounce Engine] Hit! Agrouping event type '%s' for tenant %s into alert %s", event.EventType, event.TenantID, existingAlertID)
+	// Try reading the debounce pointer from Redis. It's a JSON envelope carrying both the
+	// alert's ID and its real created_at: GetByID needs an exact created_at match for
+	// partition pruning, so the pointer must record the value actually written at creation,
+	// not the new (duplicate) event's own timestamp.
+	pointerStr, err := wp.redisClient.Get(ctx, debounceKey).Result()
+	if err == nil && pointerStr != "" {
+		var ptr debouncePointer
+		if unmarshalErr := json.Unmarshal([]byte(pointerStr), &ptr); unmarshalErr == nil {
+			// DEBOUNCE HIT: An active alert with this fingerprint exists in the last 5 minutes.
+			log.Printf("[Debounce Engine] Hit! Grouping fingerprint '%s' for tenant %s into alert %s", fingerprint, event.TenantID, ptr.AlertID)
 
 			// Increment occurrences and update existing alert inside tenant context transaction
 			return db.ExecuteInTenantTx(tenantCtx, wp.pgPool, func(tx pgx.Tx) error {
-				existingAlert, getErr := wp.alertRepo.GetByID(tenantCtx, tx, existingAlertID, event.Timestamp)
+				existingAlert, getErr := wp.alertRepo.GetByID(tenantCtx, tx, ptr.AlertID, ptr.CreatedAt)
 				if getErr != nil {
-					// If not found in current partition (or resolved/archived), fallthrough to create a new one
-					return wp.createNewAlert(tenantCtx, tx, event, debounceKey)
+					// If not found (resolved/archived/pruned), fall through to create a new one
+					return wp.createNewAlert(tenantCtx, tx, event, debounceKey, fingerprint)
 				}
 
 				// Increment duplication counters inside the payload map
@@ -192,21 +203,22 @@ func (wp *WorkerPool) processEvent(ctx context.Context, event model.UnifiedIncid
 
 	// DEBOUNCE MISS: This is a brand new alert. Insert and track it in Redis.
 	return db.ExecuteInTenantTx(tenantCtx, wp.pgPool, func(tx pgx.Tx) error {
-		return wp.createNewAlert(tenantCtx, tx, event, debounceKey)
+		return wp.createNewAlert(tenantCtx, tx, event, debounceKey, fingerprint)
 	})
 }
 
-func (wp *WorkerPool) createNewAlert(ctx context.Context, tx pgx.Tx, event model.UnifiedIncident, debounceKey string) error {
+func (wp *WorkerPool) createNewAlert(ctx context.Context, tx pgx.Tx, event model.UnifiedIncident, debounceKey string, fingerprint string) error {
 	newAlert := &model.Alert{
-		ID:         event.ID,
-		TenantID:   event.TenantID,
-		DeviceID:   event.DeviceID,
-		EventType:  event.EventType,
-		Severity:   event.Severity,
-		Status:     model.AlertTriggered,
-		Summary:    event.Title,
-		Payload:    event.RawPayload,
-		CreatedAt:  event.Timestamp,
+		ID:          event.ID,
+		TenantID:    event.TenantID,
+		DeviceID:    event.DeviceID,
+		EventType:   event.EventType,
+		Severity:    event.Severity,
+		Status:      model.AlertTriggered,
+		Summary:     event.Title,
+		Payload:     event.RawPayload,
+		CreatedAt:   event.Timestamp,
+		Fingerprint: fingerprint,
 		AIAnalysis: map[string]interface{}{
 			"noise_filter_applied": true,
 			"source":               string(event.Source),
@@ -247,9 +259,15 @@ func (wp *WorkerPool) createNewAlert(ctx context.Context, tx pgx.Tx, event model
 		_ = wp.redisClient.LPush(ctx, "noc:queue:ai_evaluation", aiBytes).Err()
 	}
 
-	// Store key pointer in Redis to debounce subsequent events for the next 5 minutes
-	err = wp.redisClient.Set(ctx, debounceKey, newAlert.ID.String(), DebounceTTL).Err()
-	if err != nil {
+	// Store the debounce pointer as a JSON envelope carrying the alert's real created_at (as
+	// actually persisted, which may differ slightly from event.Timestamp) — GetByID requires
+	// an exact match on this value for partition pruning, and using the wrong value here was a
+	// real bug: dedupe hits silently fell through to creating a duplicate alert whenever the
+	// new event's own timestamp didn't exactly match the original row's created_at.
+	ptr := debouncePointer{AlertID: newAlert.ID, CreatedAt: newAlert.CreatedAt}
+	if ptrBytes, err := json.Marshal(ptr); err != nil {
+		log.Printf("[Warning] Failed to marshal debounce pointer: %v", err)
+	} else if err := wp.redisClient.Set(ctx, debounceKey, ptrBytes, DebounceTTL).Err(); err != nil {
 		log.Printf("[Warning] Failed to write debounce TTL in Redis: %v", err)
 	}
 
@@ -303,6 +321,7 @@ func (wp *WorkerPool) createNewAlert(ctx context.Context, tx pgx.Tx, event model
 	// Trigger self healing remote script (SOAR Playbook Auto-Healing Engine) if CRITICAL/FATAL
 	if newAlert.Severity == model.SeverityCritical || newAlert.Severity == model.SeverityFatal {
 		wp.triggerSOARPlaybooks(ctx, newAlert)
+		wp.triggerEscalations(ctx, newAlert)
 	}
 
 	return nil
@@ -320,11 +339,11 @@ func (wp *WorkerPool) publishToPubSub(ctx context.Context, tenantID uuid.UUID, a
 
 func (wp *WorkerPool) triggerSOARPlaybooks(ctx context.Context, alert *model.Alert) {
 	tenantCtx := db.WithTenantID(ctx, alert.TenantID)
-	
+
 	// Query auto-trigger runbooks for this tenant
 	query := `
-		SELECT id, name, script, vault_key_host 
-		FROM tenant_runbooks 
+		SELECT id, name, script, vault_key_host, is_safe
+		FROM tenant_runbooks
 		WHERE tenant_id = $1 AND auto_trigger = TRUE
 	`
 	rows, err := wp.pgPool.Query(tenantCtx, query, alert.TenantID)
@@ -334,58 +353,76 @@ func (wp *WorkerPool) triggerSOARPlaybooks(ctx context.Context, alert *model.Ale
 	}
 	defer rows.Close()
 
+	type candidate struct {
+		id           uuid.UUID
+		name         string
+		script       string
+		vaultKeyHost string
+		isSafe       bool
+	}
+	var candidates []candidate
 	for rows.Next() {
-		var runbookID uuid.UUID
-		var name, script, vaultKeyHost string
-		if err := rows.Scan(&runbookID, &name, &script, &vaultKeyHost); err != nil {
+		var c candidate
+		if err := rows.Scan(&c.id, &c.name, &c.script, &c.vaultKeyHost, &c.isSafe); err != nil {
+			continue
+		}
+		candidates = append(candidates, c)
+	}
+	rows.Close()
+
+	for _, c := range candidates {
+		// SECURITY: severity fatal always requires human approval, regardless of is_safe.
+		// Severity critical only auto-executes if the runbook has been explicitly reviewed
+		// and marked is_safe=true; otherwise it also becomes an approval request. This is
+		// secure-by-default — existing runbooks default to is_safe=false until an admin
+		// reviews and opts them in.
+		requiresApproval := alert.Severity == model.SeverityFatal || !c.isSafe
+		if requiresApproval {
+			wp.createRunbookApprovalRequest(tenantCtx, c.id, c.name, alert)
 			continue
 		}
 
-		log.Printf("[SOAR Engine] Auto-triggering SOAR playbook [%s] for alert %s", name, alert.ID)
+		log.Printf("[SOAR Engine] Auto-triggering SOAR playbook [%s] for alert %s", c.name, alert.ID)
 
 		// Execute the SOAR playbook in a background goroutine
 		go func(rID uuid.UUID, rbName, rbScript, vkHost string) {
 			ctxBg := db.WithTenantID(context.Background(), alert.TenantID)
-			
-			// 1. Fetch host SSH credentials from the Vault
-			hostKey := vkHost + "_host"
-			userKey := vkHost + "_user"
-			passKey := vkHost + "_password"
-			privKey := vkHost + "_private_key"
 
-			var sshHost, sshUser, sshPass, sshPriv string
-			
-			secretQuery := `
-				SELECT secret_key, decrypted_value 
-				FROM decrypted_vault 
-				WHERE tenant_id = $1 AND secret_key IN ($2, $3, $4, $5)
-			`
-			secRows, err := wp.pgPool.Query(ctxBg, secretQuery, alert.TenantID, hostKey, userKey, passKey, privKey)
-			if err == nil {
-				for secRows.Next() {
-					var k, val string
-					if err := secRows.Scan(&k, &val); err == nil {
-						if k == hostKey {
-							sshHost = val
-						} else if k == userKey {
-							sshUser = val
-						} else if k == passKey {
-							sshPass = val
-						} else if k == privKey {
-							sshPriv = val
-						}
-					}
-				}
-				secRows.Close()
+			// 1. Fetch host SSH credentials from the Vault (decrypted in application code —
+			// there is no "decrypted_vault" view/table; secrets are AES-GCM encrypted at rest).
+			masterKey, err := security.GetMasterKey()
+			if err != nil {
+				log.Printf("[SOAR Error] Failed to retrieve vault master key: %v", err)
+				return
 			}
 
-			if sshHost == "" || sshUser == "" {
+			var sshHost, sshUser, sshPass, sshPriv string
+			err = db.ExecuteInTenantTx(ctxBg, wp.pgPool, func(tx pgx.Tx) error {
+				getSecret := func(key string) string {
+					sec, err := wp.vaultRepo.GetSecretByKey(ctxBg, tx, key)
+					if err != nil {
+						return ""
+					}
+					decrypted, err := security.Decrypt(sec.EncryptedValue, sec.Nonce, masterKey)
+					if err != nil {
+						return ""
+					}
+					return string(decrypted)
+				}
+				sshHost = getSecret(vkHost + "_host")
+				sshUser = getSecret(vkHost + "_user")
+				sshPass = getSecret(vkHost + "_password")
+				sshPriv = getSecret(vkHost + "_private_key")
+				return nil
+			})
+
+			if err != nil || sshHost == "" || sshUser == "" {
 				log.Printf("[SOAR Error] SSH host or user credentials missing in Vault for key %s", vkHost)
 				return
 			}
 
 			// 2. Execute remote SSH script
-			output, err := api.ExecuteSSH(sshHost, sshUser, sshPass, sshPriv, rbScript)
+			output, err := api.ExecuteSSH(ctxBg, wp.pgPool, wp.vaultRepo, alert.TenantID, vkHost, sshHost, sshUser, sshPass, sshPriv, rbScript)
 			execStatus := "sucesso"
 			if err != nil {
 				execStatus = "falha"
@@ -480,8 +517,121 @@ func (wp *WorkerPool) triggerSOARPlaybooks(ctx context.Context, alert *model.Ale
 				}
 				wp.publishToPubSub(ctxBg, alert.TenantID, &a)
 			}
-		}(runbookID, name, script, vaultKeyHost)
+		}(c.id, c.name, c.script, c.vaultKeyHost)
 	}
+}
+
+// escalationVaultKeys maps a tenant_integrations.type value to the vault secret_key holding
+// its outbound escalation credential (routing key / API key). A single "pagerduty"/"opsgenie"
+// integration type covers both inbound webhook ingestion (see internal/connector) and this
+// outbound escalation — confirmed with the user as the simpler default for v1.
+var escalationVaultKeys = map[string]string{
+	"pagerduty": "pagerduty_routing_key",
+	"opsgenie":  "opsgenie_api_key",
+}
+
+// triggerEscalations pages out via PagerDuty/Opsgenie for any tenant that has one of those
+// integrations active, mirroring triggerSOARPlaybooks' shape (a synchronous candidate query,
+// then one goroutine per candidate doing vault decrypt + the actual outbound call). A failed
+// escalation only logs — v1 has no retry queue, since the alert stays fully visible in the
+// cockpit regardless of whether the page went out.
+func (wp *WorkerPool) triggerEscalations(ctx context.Context, alert *model.Alert) {
+	tenantCtx := db.WithTenantID(ctx, alert.TenantID)
+
+	rows, err := wp.pgPool.Query(tenantCtx,
+		`SELECT type FROM tenant_integrations WHERE tenant_id = $1 AND type IN ('pagerduty', 'opsgenie') AND status = 'active'`,
+		alert.TenantID)
+	if err != nil {
+		log.Printf("[Escalation Warning] Failed to query active escalation integrations: %v", err)
+		return
+	}
+	var activeTypes []string
+	for rows.Next() {
+		var t string
+		if err := rows.Scan(&t); err != nil {
+			continue
+		}
+		activeTypes = append(activeTypes, t)
+	}
+	rows.Close()
+
+	for _, integrationType := range activeTypes {
+		go func(itype string) {
+			ctxBg := db.WithTenantID(context.Background(), alert.TenantID)
+
+			vaultKey, ok := escalationVaultKeys[itype]
+			if !ok {
+				return
+			}
+
+			masterKey, err := security.GetMasterKey()
+			if err != nil {
+				log.Printf("[Escalation Error] Failed to retrieve vault master key: %v", err)
+				return
+			}
+
+			var secretVal string
+			err = db.ExecuteInTenantTx(ctxBg, wp.pgPool, func(tx pgx.Tx) error {
+				sec, err := wp.vaultRepo.GetSecretByKey(ctxBg, tx, vaultKey)
+				if err != nil {
+					return err
+				}
+				decrypted, err := security.Decrypt(sec.EncryptedValue, sec.Nonce, masterKey)
+				if err != nil {
+					return err
+				}
+				secretVal = string(decrypted)
+				return nil
+			})
+			if err != nil || secretVal == "" {
+				log.Printf("[Escalation Error] Missing/undecryptable %s credential for tenant %s: %v", vaultKey, alert.TenantID, err)
+				return
+			}
+
+			var notifyErr error
+			switch itype {
+			case "pagerduty":
+				notifyErr = wp.pagerDutyNotifier.Notify(ctxBg, secretVal, alert)
+			case "opsgenie":
+				notifyErr = wp.opsgenieNotifier.Notify(ctxBg, secretVal, alert)
+			}
+			if notifyErr != nil {
+				log.Printf("[Escalation Error] %s escalation failed for alert %s (tenant %s): %v", itype, alert.ID, alert.TenantID, notifyErr)
+			} else {
+				log.Printf("[Escalation] %s escalation sent for alert %s (tenant %s)", itype, alert.ID, alert.TenantID)
+			}
+		}(integrationType)
+	}
+}
+
+// createRunbookApprovalRequest records that an auto-trigger runbook was withheld pending
+// human review (because the alert is fatal, or the runbook isn't marked is_safe), and posts
+// a timeline comment so operators see it needs attention in Runbooks > Aprovações.
+func (wp *WorkerPool) createRunbookApprovalRequest(ctx context.Context, runbookID uuid.UUID, runbookName string, alert *model.Alert) {
+	reason := fmt.Sprintf("Auto-trigger de severidade %s exige aprovação humana antes da execução.", alert.Severity)
+
+	err := db.ExecuteInTenantTx(ctx, wp.pgPool, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `
+			INSERT INTO runbook_approval_requests (tenant_id, runbook_id, incident_id, reason, requested_by)
+			VALUES ($1, $2, $3, $4, 'SOAR Auto-Healing Engine')
+		`, alert.TenantID, runbookID, alert.ID, reason)
+		if err != nil {
+			return err
+		}
+
+		commentText := fmt.Sprintf("⏸️ **Aprovação necessária**: o runbook [%s] seria auto-executado, mas requer aprovação humana (severidade %s ou runbook ainda não marcado como seguro). Revise em Runbooks > Aprovações.", runbookName, alert.Severity)
+		_, err = tx.Exec(ctx, `
+			INSERT INTO incident_comments (incident_id, tenant_id, author, comment)
+			VALUES ($1, $2, '🤖 SOAR Auto-Healing Engine', $3)
+		`, alert.ID, alert.TenantID, commentText)
+		return err
+	})
+
+	if err != nil {
+		log.Printf("[SOAR Approval] Failed to create approval request for runbook %s: %v", runbookID, err)
+		return
+	}
+	log.Printf("[SOAR Approval] Runbook '%s' for alert %s requires human approval before execution", runbookName, alert.ID)
 }
 
 // StartWatchdog initializes the background heartbeat ticker checker.
@@ -567,7 +717,7 @@ func (wp *WorkerPool) StartMappingEngine(ctx context.Context) {
 				return
 			default:
 				// BRPOP raw events
-				result, err := wp.redisClient.BRPop(ctx, 2*time.Second, api.AlertsRawQueueKey).Result()
+				result, err := wp.redisClient.BRPop(ctx, 2*time.Second, queue.AlertsRawQueueKey).Result()
 				if err != nil {
 					if err == redis.Nil {
 						continue
@@ -582,95 +732,54 @@ func (wp *WorkerPool) StartMappingEngine(ctx context.Context) {
 				}
 
 				rawBytes := []byte(result[1])
-				var rawMsg api.RawWebhookMessage
+				var rawMsg queue.RawWebhookMessage
 				if err := json.Unmarshal(rawBytes, &rawMsg); err != nil {
 					// Parse failure: write to DLQ
 					log.Printf("[Mapping Engine] Malformed JSON raw message, writing to DLQ")
-					_ = wp.redisClient.LPush(ctx, api.AlertsDLQQueueKey, rawBytes).Err()
+					wp.pushToDLQ(ctx, rawBytes, "malformed_json", err)
 					continue
 				}
 
 				// Map to universal incident schema based on integration type
-				incident, err := wp.mapToUniversalSchema(ctx, rawMsg)
+				incidents, err := wp.mapToUniversalSchema(rawMsg)
 				if err != nil {
 					// Mapping failure: write to DLQ
 					log.Printf("[Mapping Engine] Mapping failed: %v. Writing to DLQ.", err)
-					_ = wp.redisClient.LPush(ctx, api.AlertsDLQQueueKey, rawBytes).Err()
+					wp.pushToDLQ(ctx, rawBytes, "mapping_failed", err)
 					continue
 				}
 
-				// Push mapped incident to alerts.normalized queue
-				incidentBytes, _ := json.Marshal(incident)
-				err = wp.redisClient.LPush(ctx, api.AlertsNormalizedQueueKey, incidentBytes).Err()
-				if err != nil {
-					log.Printf("[Mapping Engine] Failed to push normalized event: %v", err)
+				// Push each mapped incident to alerts.normalized queue (usually one, but a
+				// tenant posting a full Alertmanager batch through the generic webhook yields
+				// several from a single raw message).
+				for _, incident := range incidents {
+					incidentBytes, _ := json.Marshal(incident)
+					if err := wp.redisClient.LPush(ctx, queue.AlertsNormalizedQueueKey, incidentBytes).Err(); err != nil {
+						log.Printf("[Mapping Engine] Failed to push normalized event: %v", err)
+					}
 				}
 			}
 		}
 	}()
 }
 
-func (wp *WorkerPool) mapToUniversalSchema(ctx context.Context, rawMsg api.RawWebhookMessage) (model.UnifiedIncident, error) {
-	payloadBytes, err := json.Marshal(rawMsg.Payload)
-	if err != nil {
-		return model.UnifiedIncident{}, err
+// pushToDLQ wraps the raw bytes in a queue.DLQEntry and pushes it to the DLQ, logging (but not
+// failing the caller) if the Redis write itself errors.
+func (wp *WorkerPool) pushToDLQ(ctx context.Context, rawBytes []byte, reason string, cause error) {
+	entry := queue.DLQEntry{
+		Payload:  json.RawMessage(rawBytes),
+		Reason:   reason,
+		Error:    cause.Error(),
+		FailedAt: time.Now(),
 	}
-
-	var incident model.UnifiedIncident
-
-	switch strings.ToLower(rawMsg.IntegrationType) {
-	case "prometheus":
-		var pPayload api.AlertmanagerPayload
-		if err := json.Unmarshal(payloadBytes, &pPayload); err == nil && len(pPayload.Alerts) > 0 {
-			incident = api.MapPrometheusToUnified(pPayload.Alerts[0], rawMsg.TenantID)
-		} else {
-			var alert api.AlertmanagerAlert
-			if err := json.Unmarshal(payloadBytes, &alert); err != nil {
-				return model.UnifiedIncident{}, err
-			}
-			incident = api.MapPrometheusToUnified(alert, rawMsg.TenantID)
-		}
-	case "wazuh":
-		var wPayload api.WazuhAlertPayload
-		if err := json.Unmarshal(payloadBytes, &wPayload); err != nil {
-			return model.UnifiedIncident{}, err
-		}
-		incident = api.MapWazuhToUnified(wPayload, rawMsg.TenantID)
-	case "uptimekuma":
-		var uPayload api.UptimeKumaPayload
-		if err := json.Unmarshal(payloadBytes, &uPayload); err != nil {
-			return model.UnifiedIncident{}, err
-		}
-		incident = api.MapUptimeKumaToUnified(uPayload, rawMsg.TenantID)
-	case "grafana":
-		var gPayload api.AlertmanagerPayload
-		if err := json.Unmarshal(payloadBytes, &gPayload); err == nil && len(gPayload.Alerts) > 0 {
-			incident = api.MapGrafanaToUnified(gPayload.Alerts[0], rawMsg.TenantID)
-		} else {
-			var alert api.AlertmanagerAlert
-			if err := json.Unmarshal(payloadBytes, &alert); err != nil {
-				return model.UnifiedIncident{}, err
-			}
-			incident = api.MapGrafanaToUnified(alert, rawMsg.TenantID)
-		}
-	case "zabbix":
-		var zPayload api.ZabbixPayload
-		if err := json.Unmarshal(payloadBytes, &zPayload); err != nil {
-			return model.UnifiedIncident{}, err
-		}
-		incident = api.MapZabbixToUnified(zPayload, rawMsg.TenantID)
-	default:
-		incident = model.UnifiedIncident{
-			ID:        uuid.New(),
-			TenantID:  rawMsg.TenantID,
-			Source:    model.IncidentSource(rawMsg.IntegrationType),
-			EventType: "generic_webhook_event",
-			Severity:  model.SeverityInfo,
-			Title:     "Generic Ingested Alert",
-			Timestamp: time.Now(),
-			RawPayload: rawMsg.Payload,
-		}
+	if err := queue.PushToDLQ(ctx, wp.redisClient, entry); err != nil {
+		log.Printf("[Mapping Engine] Failed to write DLQ entry: %v", err)
 	}
+}
 
-	return incident, nil
+// mapToUniversalSchema resolves a WebhookConnector for the raw message's integration type and
+// delegates the actual mapping to it (shared with internal/api's DLQ replay endpoint via
+// connector.MapRawPayload, so both go through identical dispatch logic).
+func (wp *WorkerPool) mapToUniversalSchema(rawMsg queue.RawWebhookMessage) ([]model.UnifiedIncident, error) {
+	return connector.MapRawPayload(rawMsg.IntegrationType, rawMsg.Payload, rawMsg.TenantID)
 }

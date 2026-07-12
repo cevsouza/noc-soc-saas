@@ -26,9 +26,9 @@ type AckShiftHandoverRequest struct {
 // HandleCreateShiftHandover registers outgoing operator notes for shift change.
 func HandleCreateShiftHandover(pgPool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		tenantID, ok := resolveTenantID(r)
-		if !ok {
-			http.Error(w, "Unauthorized: Tenant context not found", http.StatusUnauthorized)
+		tenantID, err := middleware.ResolveTenantScope(r.Context(), r, pgPool)
+		if err != nil {
+			middleware.WriteScopeError(w, err)
 			return
 		}
 		ctx := db.WithTenantID(r.Context(), tenantID)
@@ -50,7 +50,7 @@ func HandleCreateShiftHandover(pgPool *pgxpool.Pool) http.HandlerFunc {
 			return
 		}
 
-		err := db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
+		err = db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
 			// 1. Fetch msp_id of the tenant
 			var mspID uuid.UUID
 			queryMSP := `SELECT msp_id FROM tenants WHERE id = $1`
@@ -81,9 +81,9 @@ func HandleCreateShiftHandover(pgPool *pgxpool.Pool) http.HandlerFunc {
 // HandleGetCurrentShiftHandover fetches latest active handover notes for the operator entering.
 func HandleGetCurrentShiftHandover(pgPool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		tenantID, ok := resolveTenantID(r)
-		if !ok {
-			http.Error(w, "Unauthorized: Tenant context not found", http.StatusUnauthorized)
+		tenantID, err := middleware.ResolveTenantScope(r.Context(), r, pgPool)
+		if err != nil {
+			middleware.WriteScopeError(w, err)
 			return
 		}
 		ctx := db.WithTenantID(r.Context(), tenantID)
@@ -91,7 +91,7 @@ func HandleGetCurrentShiftHandover(pgPool *pgxpool.Pool) http.HandlerFunc {
 		var handover model.ShiftHandover
 		var mspID uuid.UUID
 
-		err := db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
+		err = db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
 			// 1. Get msp_id
 			queryMSP := `SELECT msp_id FROM tenants WHERE id = $1`
 			err := tx.QueryRow(ctx, queryMSP, tenantID).Scan(&mspID)
@@ -138,9 +138,9 @@ func HandleGetCurrentShiftHandover(pgPool *pgxpool.Pool) http.HandlerFunc {
 // HandleAcknowledgeShiftHandover confirms active handover and unlocks cockpit dashboard.
 func HandleAcknowledgeShiftHandover(pgPool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		tenantID, ok := resolveTenantID(r)
-		if !ok {
-			http.Error(w, "Unauthorized: Tenant context not found", http.StatusUnauthorized)
+		tenantID, err := middleware.ResolveTenantScope(r.Context(), r, pgPool)
+		if err != nil {
+			middleware.WriteScopeError(w, err)
 			return
 		}
 		ctx := db.WithTenantID(r.Context(), tenantID)
@@ -157,7 +157,7 @@ func HandleAcknowledgeShiftHandover(pgPool *pgxpool.Pool) http.HandlerFunc {
 			return
 		}
 
-		err := db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
+		err = db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
 			queryUpdate := `
 				UPDATE shift_handovers 
 				SET status = 'acknowledged', incoming_operator_id = $1, acknowledged_at = NOW() 

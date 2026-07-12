@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"noc-api/internal/middleware"
+	"noc-api/internal/model"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -157,11 +158,22 @@ type UpdateTenantStyleRequest struct {
 }
 
 // HandleUpdateTenantStyle updates logo URL and primary brand color for a tenant.
+// Requires the caller to be a platform-wide admin, or an admin of the tenant being modified.
 func HandleUpdateTenantStyle(pgPool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req UpdateTenantStyleRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "Invalid request payload", http.StatusBadRequest)
+			return
+		}
+
+		claims, ok := middleware.ClaimsFromContext(r.Context())
+		if !ok {
+			http.Error(w, "Unauthorized: User claims missing", http.StatusUnauthorized)
+			return
+		}
+		if claims.GlobalRole != model.RoleAdmin && (claims.TenantID != req.TenantID || claims.Role != model.RoleAdmin) {
+			http.Error(w, "Forbidden: cannot modify another tenant's style", http.StatusForbidden)
 			return
 		}
 

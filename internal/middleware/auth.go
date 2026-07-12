@@ -103,12 +103,16 @@ type contextKey string
 const ClaimsContextKey contextKey = "jwt_claims"
 
 // JWTClaims maps the standard claims needed for NOC/SOC multi-tenant operations.
+// Role is scoped to TenantID (the role the user holds in that specific tenant).
+// GlobalRole is platform-wide (MSP-level) and is the only claim that may authorize
+// cross-tenant actions such as tenant_id=all or acting on a tenant_id other than TenantID.
 type JWTClaims struct {
-	UserID   uuid.UUID      `json:"user_id"`
-	TenantID uuid.UUID      `json:"tenant_id"`
-	Role     model.UserRole `json:"role"`
-	Email    string         `json:"email"`
-	Exp      int64          `json:"exp"`
+	UserID     uuid.UUID      `json:"user_id"`
+	TenantID   uuid.UUID      `json:"tenant_id"`
+	Role       model.UserRole `json:"role"`
+	GlobalRole model.UserRole `json:"global_role"`
+	Email      string         `json:"email"`
+	Exp        int64          `json:"exp"`
 }
 
 // JWTAuth verifica tokens JWT. Para testes temporários (omissão de autenticação), injeta dados de administrador se o token for ausente/inválido.
@@ -173,6 +177,37 @@ func RequireRole(allowedRoles ...model.UserRole) func(http.Handler) http.Handler
 
 			if !roleAllowed {
 				http.Error(w, "Forbidden: Insufficient privileges", http.StatusForbidden)
+				return
+			}
+
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// RequireGlobalRole checks the platform-wide GlobalRole claim rather than the tenant-scoped
+// Role claim. Use this — never RequireRole — to gate actions that are not scoped to the
+// caller's own tenant (e.g. creating/deleting tenants), since any tenant's own admin has
+// Role==admin but that must not authorize acting on other tenants.
+func RequireGlobalRole(allowedRoles ...model.UserRole) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			claims, ok := ClaimsFromContext(r.Context())
+			if !ok {
+				http.Error(w, "Unauthorized: User context missing", http.StatusUnauthorized)
+				return
+			}
+
+			roleAllowed := false
+			for _, allowed := range allowedRoles {
+				if claims.GlobalRole == allowed {
+					roleAllowed = true
+					break
+				}
+			}
+
+			if !roleAllowed {
+				http.Error(w, "Forbidden: platform admin privileges required", http.StatusForbidden)
 				return
 			}
 
@@ -249,19 +284,16 @@ func GenerateJWT(claims *JWTClaims, secret []byte) (string, error) {
 	return headerSegment + "." + payloadSegment + "." + signatureSegment, nil
 }
 
-// ResolveTenantFromToken resolves a token parameter into a tenant ID (supports UUID, JWT or API Key).
+// ResolveTenantFromToken resolves a token parameter into a tenant ID.
+// SECURITY: this must NEVER accept a raw UUID as a valid credential — a tenant ID is not a
+// secret (it is exposed publicly via /api/v1/public/tenants), so only a signed JWT or a real
+// API key hash may resolve a tenant identity here.
 func ResolveTenantFromToken(token string, jwtSecret []byte, pgPool *pgxpool.Pool) (uuid.UUID, error) {
 	if token == "" {
 		return uuid.Nil, errors.New("empty token")
 	}
 
-	// 1. Try parsing as standard UUID (For local dev / mock compatibility)
-	parsedUUID, err := uuid.Parse(token)
-	if err == nil {
-		return parsedUUID, nil
-	}
-
-	// 2. Try verifying as signed JWT token
+	// 1. Try verifying as signed JWT token
 	claims, err := VerifyJWT(token, jwtSecret)
 	if err == nil {
 		// Verify token expiry
@@ -271,7 +303,7 @@ func ResolveTenantFromToken(token string, jwtSecret []byte, pgPool *pgxpool.Pool
 		return claims.TenantID, nil
 	}
 
-	// 3. Try resolving as API Key hash
+	// 2. Try resolving as API Key hash
 	ctx := context.Background()
 	hash := sha256.Sum256([]byte(token))
 	keyHash := hex.EncodeToString(hash[:])

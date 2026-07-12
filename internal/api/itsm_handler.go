@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"noc-api/internal/db"
+	"noc-api/internal/middleware"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -27,9 +28,9 @@ type ITSMSyncResponse struct {
 // HandleSyncITSM simulates a bidirectional ticket creation and association with Jira/ServiceNow.
 func HandleSyncITSM(pgPool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		tenantID, ok := resolveTenantID(r)
-		if !ok {
-			http.Error(w, "Unauthorized: Tenant context not found", http.StatusUnauthorized)
+		tenantID, err := middleware.ResolveTenantScope(r.Context(), r, pgPool)
+		if err != nil {
+			middleware.WriteScopeError(w, err)
 			return
 		}
 		ctx := db.WithTenantID(r.Context(), tenantID)
@@ -54,7 +55,7 @@ func HandleSyncITSM(pgPool *pgxpool.Pool) http.HandlerFunc {
 			ticketRef = fmt.Sprintf("JIRA-%d", num)
 		}
 
-		err := db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
+		err = db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
 			// 1. Update the alert ticket reference
 			queryUpdate := `
 				UPDATE alerts 

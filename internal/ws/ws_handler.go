@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"noc-api/internal/middleware"
+	"noc-api/internal/model"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
@@ -91,62 +92,60 @@ func (c *Client) writePump() {
 }
 
 // ServeWS handles WebSocket upgrading and client connection setup.
+// SECURITY: a valid, non-expired JWT is always required. Requesting to subscribe to
+// tenants other than the caller's own (via ?tenants=) requires either platform-wide
+// admin privileges (GlobalRole) or explicit membership in tenant_users — unauthorized
+// tenant IDs in the list are silently dropped rather than granted. There is no longer
+// a fallback that subscribes to every active tenant when no parameters are supplied.
 func ServeWS(hub *Hub, pgPool *pgxpool.Pool, jwtSecret []byte) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		tokenStr := r.URL.Query().Get("token")
 		tenantsStr := r.URL.Query().Get("tenants")
-		var tenantIDs []uuid.UUID
 
-		var operatorClaims *middleware.JWTClaims
-		var errVerify error
-		if tokenStr != "" {
-			operatorClaims, errVerify = middleware.VerifyJWT(tokenStr, jwtSecret)
+		if tokenStr == "" {
+			http.Error(w, "Unauthorized: missing token", http.StatusUnauthorized)
+			return
 		}
 
-		if errVerify == nil && operatorClaims != nil {
-			if tenantsStr != "" {
-				tokens := strings.Split(tenantsStr, ",")
-				for _, tok := range tokens {
-					tok = strings.TrimSpace(tok)
-					if parsed, err := uuid.Parse(tok); err == nil {
-						tenantIDs = append(tenantIDs, parsed)
-					}
-				}
-			} else {
-				tenantIDs = append(tenantIDs, operatorClaims.TenantID)
-			}
-		} else if tokenStr != "" {
-			// Fallback: support old direct-token parameter mappings (backwards compatibility)
-			tokens := strings.Split(tokenStr, ",")
-			for _, tok := range tokens {
+		operatorClaims, err := middleware.VerifyJWT(tokenStr, jwtSecret)
+		if err != nil {
+			http.Error(w, "Unauthorized: invalid token", http.StatusUnauthorized)
+			return
+		}
+		if time.Now().Unix() > operatorClaims.Exp {
+			http.Error(w, "Unauthorized: token expired", http.StatusUnauthorized)
+			return
+		}
+
+		var tenantIDs []uuid.UUID
+		if tenantsStr != "" {
+			requested := strings.Split(tenantsStr, ",")
+			for _, tok := range requested {
 				tok = strings.TrimSpace(tok)
 				if tok == "" {
 					continue
 				}
-				tenantID, err := middleware.ResolveTenantFromToken(tok, jwtSecret, pgPool)
-				if err == nil {
-					tenantIDs = append(tenantIDs, tenantID)
+				parsed, err := uuid.Parse(tok)
+				if err != nil {
+					continue
+				}
+				if parsed == operatorClaims.TenantID || operatorClaims.GlobalRole == model.RoleAdmin {
+					tenantIDs = append(tenantIDs, parsed)
+					continue
+				}
+				member, err := isWSTenantMember(r.Context(), pgPool, operatorClaims.UserID, parsed)
+				if err == nil && member {
+					tenantIDs = append(tenantIDs, parsed)
 				} else {
-					parsed, err := uuid.Parse(tok)
-					if err == nil {
-						tenantIDs = append(tenantIDs, parsed)
-					}
+					log.Printf("[WS Security] User %s denied subscription to unauthorized tenant %s", operatorClaims.UserID, parsed)
 				}
 			}
-		}
-
-		if len(tenantIDs) == 0 {
-			// Fallback: subscribe to all active tenants
-			rows, err := pgPool.Query(r.Context(), "SELECT id FROM tenants WHERE status = 'active'")
-			if err == nil {
-				defer rows.Close()
-				for rows.Next() {
-					var tid uuid.UUID
-					if err := rows.Scan(&tid); err == nil {
-						tenantIDs = append(tenantIDs, tid)
-					}
-				}
+			if len(tenantIDs) == 0 {
+				http.Error(w, "Forbidden: not authorized for any of the requested tenants", http.StatusForbidden)
+				return
 			}
+		} else {
+			tenantIDs = append(tenantIDs, operatorClaims.TenantID)
 		}
 
 		// Upgrade HTTP connection to WebSocket
@@ -156,26 +155,15 @@ func ServeWS(hub *Hub, pgPool *pgxpool.Pool, jwtSecret []byte) http.HandlerFunc 
 			return
 		}
 
-		var userID uuid.UUID
-		var email string
-		var name string
-		var role string
-		if operatorClaims != nil {
-			userID = operatorClaims.UserID
-			email = operatorClaims.Email
-			name = strings.Split(operatorClaims.Email, "@")[0]
-			role = string(operatorClaims.Role)
-		}
-
 		client := &Client{
 			ID:          uuid.New(),
 			TenantIDs:   tenantIDs,
 			Conn:        conn,
 			Send:        make(chan []byte, 256),
-			UserID:      userID,
-			Email:       email,
-			Name:        name,
-			Role:        role,
+			UserID:      operatorClaims.UserID,
+			Email:       operatorClaims.Email,
+			Name:        strings.Split(operatorClaims.Email, "@")[0],
+			Role:        string(operatorClaims.Role),
 			ConnectedAt: time.Now(),
 		}
 
@@ -185,6 +173,15 @@ func ServeWS(hub *Hub, pgPool *pgxpool.Pool, jwtSecret []byte) http.HandlerFunc 
 		go client.writePump()
 		go client.readPump(hub)
 	}
+}
+
+func isWSTenantMember(ctx context.Context, pgPool *pgxpool.Pool, userID, tenantID uuid.UUID) (bool, error) {
+	var exists bool
+	err := pgPool.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM tenant_users WHERE user_id = $1 AND tenant_id = $2)", userID, tenantID).Scan(&exists)
+	if err != nil {
+		return false, err
+	}
+	return exists, nil
 }
 
 // StartGlobalPubSubMultiplexer runs a single global subscription using PSUBSCRIBE

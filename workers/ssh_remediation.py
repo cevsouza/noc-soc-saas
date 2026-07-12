@@ -18,6 +18,11 @@ DB_USER = os.environ.get("DB_USER", "postgres")
 DB_PASSWORD = os.environ.get("DB_PASSWORD", "postgres")
 DB_NAME = os.environ.get("DB_NAME", "noc")
 
+# Trust-On-First-Use host key store: the first successful connection to a given
+# tenant pins the remote host's key; later connections must match it exactly, or
+# paramiko raises BadHostKeyException (protects against MITM / silent host swaps).
+SSH_KNOWN_HOSTS_DIR = os.environ.get("SSH_KNOWN_HOSTS_DIR", "/tmp/noc_known_hosts")
+
 def get_db_connection():
     return psycopg2.connect(
         host=DB_HOST,
@@ -80,6 +85,30 @@ def fetch_alert_details(tenant_id: str, alert_id: str):
         conn.close()
     return alert
 
+def connect_ssh_with_tofu(tenant_id: str, host: str, port: int, username: str, password: str, pkey_str: str):
+    """Connects via SSH pinning the host key on first use. Subsequent connections for the
+    same tenant must match the pinned key exactly, or paramiko raises BadHostKeyException —
+    this is what actually protects against MITM, replacing the previous AutoAddPolicy (which
+    trusted any host key unconditionally on every connection)."""
+    os.makedirs(SSH_KNOWN_HOSTS_DIR, exist_ok=True)
+    known_hosts_path = os.path.join(SSH_KNOWN_HOSTS_DIR, f"{tenant_id}.known_hosts")
+
+    ssh = paramiko.SSHClient()
+    if os.path.exists(known_hosts_path):
+        ssh.load_host_keys(known_hosts_path)
+    # Only used for hosts with no pinned key yet (first-ever connection for this tenant+host).
+    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+    if pkey_str:
+        from io import StringIO
+        pkey = paramiko.RSAKey.from_private_key(StringIO(pkey_str))
+        ssh.connect(host, port=port, username=username, pkey=pkey, timeout=10)
+    else:
+        ssh.connect(host, port=port, username=username, password=password, timeout=10)
+
+    ssh.save_host_keys(known_hosts_path)
+    return ssh
+
 def execute_remediation(tenant_id: str, alert_id: str):
     logger.info(f"Initializing SSH Remediation for Alert {alert_id} (Tenant: {tenant_id})")
     
@@ -124,20 +153,20 @@ def execute_remediation(tenant_id: str, alert_id: str):
 
     logger.info(f"Executing command via SSH: '{command}' on target host {host}:{port}")
 
-    # Establish Paramiko connection
-    ssh = paramiko.SSHClient()
-    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    # Establish Paramiko connection with Trust-On-First-Use host key pinning
+    try:
+        ssh = connect_ssh_with_tofu(tenant_id, host, port, username, password, pkey_str)
+    except paramiko.BadHostKeyException as e:
+        logger.error(
+            f"SSH host key mismatch for {host} (possible MITM or host reconfiguration): {e}. "
+            f"To accept the new key, remove its entry from {SSH_KNOWN_HOSTS_DIR}."
+        )
+        sys.exit(1)
+    except Exception as e:
+        logger.error(f"SSH connection failed: {e}")
+        sys.exit(1)
 
     try:
-        if pkey_str:
-            # Authenticate using private key
-            from io import StringIO
-            pkey = paramiko.RSAKey.from_private_key(StringIO(pkey_str))
-            ssh.connect(host, port=port, username=username, pkey=pkey, timeout=10)
-        else:
-            # Authenticate using password
-            ssh.connect(host, port=port, username=username, password=password, timeout=10)
-
         stdin, stdout, stderr = ssh.exec_command(command)
         exit_status = stdout.channel.recv_exit_status()
 
