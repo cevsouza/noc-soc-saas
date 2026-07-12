@@ -101,7 +101,10 @@ func TestJWTAuthMiddleware(t *testing.T) {
 
 	// Request with missing token
 	reqMissing, _ := http.NewRequest("GET", server.URL, nil)
-	respMissing, _ := http.DefaultClient.Do(reqMissing)
+	respMissing, err := http.DefaultClient.Do(reqMissing)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
 	defer respMissing.Body.Close()
 	if respMissing.StatusCode != http.StatusUnauthorized {
 		t.Errorf("expected 401 Unauthorized for missing token, got %d", respMissing.StatusCode)
@@ -118,7 +121,10 @@ func TestJWTAuthMiddleware(t *testing.T) {
 	expiredToken, _ := middleware.GenerateJWT(expiredClaims, secret)
 	reqExpired, _ := http.NewRequest("GET", server.URL, nil)
 	reqExpired.Header.Set("Authorization", "Bearer "+expiredToken)
-	respExpired, _ := http.DefaultClient.Do(reqExpired)
+	respExpired, err := http.DefaultClient.Do(reqExpired)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
 	defer respExpired.Body.Close()
 	if respExpired.StatusCode != http.StatusUnauthorized {
 		t.Errorf("expected 401 Unauthorized for expired token, got %d", respExpired.StatusCode)
