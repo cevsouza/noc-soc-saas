@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 
 	"noc-api/internal/middleware"
 
@@ -31,6 +32,31 @@ type GrantAccessRequest struct {
 // The single role every grant created through this endpoint receives. Per-tenant role
 // granularity is a deliberate future extension, not part of this slice.
 const grantedTenantRole = "operator"
+
+// parseTenantIDList parses and de-duplicates a list of tenant-ID strings into UUIDs, erroring
+// on any malformed entry. Empty/blank entries are skipped. Used by HandleAdminCreateUser to
+// bind a freshly-created user to its tenants in the same transaction. Split out for unit testing
+// without a database.
+func parseTenantIDList(raw []string) ([]uuid.UUID, error) {
+	seen := make(map[uuid.UUID]struct{}, len(raw))
+	out := make([]uuid.UUID, 0, len(raw))
+	for _, s := range raw {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		id, err := uuid.Parse(s)
+		if err != nil {
+			return nil, errors.New("invalid tenant_id in list")
+		}
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out, nil
+}
 
 // parseGrantAccessRequest validates and parses a GrantAccessRequest into concrete UUIDs.
 // Split out from the handler so it can be unit-tested without a database (mirrors the

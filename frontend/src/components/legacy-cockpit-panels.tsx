@@ -71,6 +71,7 @@ export function LegacyCockpitPanels({ cockpitTab, alerts, onSearchTermChange }: 
   const [adminUserPassword, setAdminUserPassword] = useState('');
   const [adminUserName, setAdminUserName] = useState('');
   const [adminUserRole, setAdminUserRole] = useState('operator');
+  const [adminUserTenantIds, setAdminUserTenantIds] = useState<string[]>([]);
   const [adminUserStatus, setAdminUserStatus] = useState<AsyncStatus>({ status: 'idle' });
   const [showAdminUserPassword, setShowAdminUserPassword] = useState(false);
   const [adminUsers, setAdminUsers] = useState<any[]>([]);
@@ -238,16 +239,19 @@ export function LegacyCockpitPanels({ cockpitTab, alerts, onSearchTermChange }: 
     e.preventDefault();
     setAdminUserStatus({ status: 'saving' });
     try {
+      // Admins see every tenant regardless, so tenant bindings only matter for operator/viewer.
+      const tenantIds = adminUserRole === 'admin' ? [] : adminUserTenantIds;
       const response = await apiFetch('/api/v1/admin/users', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: adminUserEmail, password: adminUserPassword, name: adminUserName, role: adminUserRole }),
+        body: JSON.stringify({ email: adminUserEmail, password: adminUserPassword, name: adminUserName, role: adminUserRole, tenant_ids: tenantIds }),
       });
       if (response.ok) {
         setAdminUserStatus({ status: 'success', message: 'Novo usuário cadastrado e e-mail enviado!' });
         setAdminUserEmail('');
         setAdminUserPassword('');
         setAdminUserName('');
+        setAdminUserTenantIds([]);
         fetchAdminUsers();
       } else {
         const msg = await response.text();
@@ -1641,6 +1645,49 @@ export function LegacyCockpitPanels({ cockpitTab, alerts, onSearchTermChange }: 
                             <option value="viewer">Viewer (Visualizador - Apenas Leitura de Painéis)</option>
                           </select>
                         </div>
+
+                        {adminUserRole === 'admin' ? (
+                          <div className="p-3 rounded-lg bg-blue-950/20 border border-blue-500/15 text-blue-300 text-[11px] flex items-center gap-2">
+                            <ShieldCheck className="w-3.5 h-3.5 shrink-0" />
+                            Admin de plataforma acessa todos os tenants — não é preciso selecionar.
+                          </div>
+                        ) : (
+                          <div className="flex flex-col gap-1.5">
+                            <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">
+                              Tenants Autorizados ({adminUserTenantIds.length} selecionado{adminUserTenantIds.length === 1 ? '' : 's'})
+                            </label>
+                            <p className="text-[10px] text-slate-500">
+                              Selecione um a um os clientes que este usuário poderá acessar. Sem nenhum, ele não conseguirá logar.
+                            </p>
+                            <div className="flex flex-col gap-1.5 max-h-[180px] overflow-y-auto pr-1 mt-1 rounded-lg border border-white/5 bg-black/30 p-2">
+                              {tenants.length === 0 ? (
+                                <span className="text-[10px] text-amber-500 font-medium px-1 py-2">Nenhum tenant cadastrado.</span>
+                              ) : (
+                                tenants.map((t) => {
+                                  const checked = adminUserTenantIds.includes(t.id);
+                                  return (
+                                    <label
+                                      key={t.id}
+                                      className="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-white/[0.03] cursor-pointer transition-all"
+                                    >
+                                      <input
+                                        type="checkbox"
+                                        checked={checked}
+                                        onChange={(e) =>
+                                          setAdminUserTenantIds((prev) =>
+                                            e.target.checked ? [...prev, t.id] : prev.filter((id) => id !== t.id)
+                                          )
+                                        }
+                                        className="accent-violet-500 w-3.5 h-3.5 cursor-pointer"
+                                      />
+                                      <span className="text-xs text-slate-200 truncate">{t.name}</span>
+                                    </label>
+                                  );
+                                })
+                              )}
+                            </div>
+                          </div>
+                        )}
 
                         <button
                           type="submit"

@@ -381,7 +381,11 @@ type AdminCreateUserRequest struct {
 	Password string         `json:"password"`
 	Name     string         `json:"name"`
 	Role     model.UserRole `json:"role"`
-	TenantID string         `json:"tenant_id,omitempty"`
+	// TenantIDs are the tenants the new user is granted access to, created as tenant_users rows
+	// in the same transaction as the user. For an operator/viewer this is what makes the account
+	// usable (a non-admin with zero tenant grants is blocked at login — see HandleLogin). Empty
+	// is allowed (e.g. when creating another platform admin, who sees all tenants regardless).
+	TenantIDs []string `json:"tenant_ids,omitempty"`
 }
 
 // HandleAdminCreateUser allows admins to create/register new users (including other admins).
@@ -439,6 +443,14 @@ func HandleAdminCreateUser(pgPool *pgxpool.Pool) http.HandlerFunc {
 			return
 		}
 
+		// Parse and de-duplicate the requested tenant IDs up front so an invalid one fails the
+		// request before we create the user.
+		tenantIDs, perr := parseTenantIDList(req.TenantIDs)
+		if perr != nil {
+			http.Error(w, "Bad Request: "+perr.Error(), http.StatusBadRequest)
+			return
+		}
+
 		var userID uuid.UUID
 		queryInsertUser := `
 			INSERT INTO users (email, name, password_hash, is_verified, verification_token, global_role)
@@ -451,7 +463,28 @@ func HandleAdminCreateUser(pgPool *pgxpool.Pool) http.HandlerFunc {
 			return
 		}
 
-		// No tenant binding for created user. Users are global.
+		// Bind the new user to each requested tenant in the same transaction, with the tenant-scoped
+		// role matching the user's role. Any invalid/nonexistent tenant rolls back the whole
+		// creation (foreign key on tenant_users.tenant_id), so we never leave a half-created user.
+		for _, tid := range tenantIDs {
+			var tenantExists bool
+			if err := tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM tenants WHERE id = $1)", tid).Scan(&tenantExists); err != nil {
+				http.Error(w, "Internal Server Error: Failed to verify tenant", http.StatusInternalServerError)
+				return
+			}
+			if !tenantExists {
+				http.Error(w, "Bad Request: one of the provided tenant_ids does not exist", http.StatusBadRequest)
+				return
+			}
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO tenant_users (tenant_id, user_id, role, created_at)
+				VALUES ($1, $2, $3, NOW())
+				ON CONFLICT (tenant_id, user_id) DO NOTHING
+			`, tid, userID, string(req.Role)); err != nil {
+				http.Error(w, "Internal Server Error: Failed to bind user to tenant", http.StatusInternalServerError)
+				return
+			}
+		}
 
 		if err := tx.Commit(ctx); err != nil {
 			http.Error(w, "Internal Server Error: Failed to commit transaction", http.StatusInternalServerError)
