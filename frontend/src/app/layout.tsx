@@ -1,5 +1,7 @@
 import type { Metadata } from 'next'
 import './globals.css'
+import { ThemeProvider } from '@/lib/theme-provider'
+import { AuthProvider } from '@/lib/auth-context'
 
 export const metadata: Metadata = {
   title: 'ITFácil NOC // Real-Time Cockpit',
@@ -12,9 +14,11 @@ export default function RootLayout({
   children: React.ReactNode
 }) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
       <body className="antialiased selection:bg-slate-800 selection:text-cyan-400">
-        {children}
+        <ThemeProvider attribute="class" defaultTheme="dark" enableSystem>
+          <AuthProvider>{children}</AuthProvider>
+        </ThemeProvider>
       </body>
     </html>
   )
