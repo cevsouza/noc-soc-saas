@@ -593,6 +593,10 @@ func main() {
 	protectedGetSLAReport := middleware.JWTAuth(jwtSecret)(api.HandleGetSLAReport(appPool))
 	mux.Handle("/api/v1/reports/sla/stats", protectedGetSLAReport)
 
+	// Global search (alerts/runbooks/tenants), scoped to whatever tenants the caller has access to
+	protectedSearch := middleware.JWTAuth(jwtSecret)(api.HandleGlobalSearch(appPool))
+	mux.Handle("/api/v1/search", protectedSearch)
+
 	// Runbook management and execution routes
 	protectedGetRunbooks := middleware.JWTAuth(jwtSecret)(api.HandleGetRunbooks(appPool))
 	protectedPostRunbooks := middleware.JWTAuth(jwtSecret)(

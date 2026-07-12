@@ -12,7 +12,8 @@ import { AlertsSearchBar } from '@/components/alerts/alerts-search-bar';
 import { AlertsTable } from '@/components/alerts/alerts-table';
 import { AlertDetailSheet } from '@/components/alerts/alert-detail-sheet';
 import { LegacyCockpitPanels } from '@/components/legacy-cockpit-panels';
-import type { Alert, AlertStatus } from '@/types';
+import { GlobalSearchPalette } from '@/components/global-search-palette';
+import type { Alert, AlertSeverity, AlertStatus, SearchAlertResult, SearchTenantResult } from '@/types';
 
 type CockpitTab = 'alerts' | 'topology' | 'settings';
 type SeverityFilterValue = 'all' | 'fatal' | 'critical' | 'warning' | 'info';
@@ -35,6 +36,18 @@ export default function CockpitPage() {
   const [searchTerm, setSearchTerm] = useState('');
   const [severityFilter, setSeverityFilter] = useState<SeverityFilterValue>('all');
   const [selectedAlert, setSelectedAlert] = useState<Alert | null>(null);
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setIsSearchOpen((prev) => !prev);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   const stats = {
     total: alerts.filter((a) => selectedTenantIds.includes(a.tenant_id) && a.status !== 'resolved' && a.status !== 'suppressed').length,
@@ -62,6 +75,34 @@ export default function CockpitPage() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [alerts[0]?.id]);
+
+  const handleSearchSelectAlert = (result: SearchAlertResult) => {
+    const existing = alerts.find((a) => a.id === result.id);
+    setSelectedAlert(
+      existing || {
+        id: result.id,
+        tenant_id: result.tenant_id,
+        event_type: '',
+        severity: result.severity as AlertSeverity,
+        status: 'triggered',
+        summary: result.summary,
+        payload: {},
+        created_at: result.created_at,
+        updated_at: result.created_at,
+      }
+    );
+    setCockpitTab('alerts');
+  };
+
+  const handleSearchSelectTenant = (result: SearchTenantResult) => {
+    setSelectedTenantIds([result.id]);
+  };
+
+  const handleSearchSelectRunbook = () => {
+    // v1 simplification: just switch to Settings — selectedIntegrationTool (which sub-panel
+    // is showing) is internal state of LegacyCockpitPanels, not worth a prop path for this.
+    setCockpitTab('settings');
+  };
 
   const handleStatusChange = (alertId: string, newStatus: AlertStatus) => {
     const now = new Date().toISOString();
@@ -165,6 +206,15 @@ export default function CockpitPage() {
           userRole={user?.role}
         />
       )}
+
+      <GlobalSearchPalette
+        open={isSearchOpen}
+        onOpenChange={setIsSearchOpen}
+        tenantIds={selectedTenantIds}
+        onSelectAlert={handleSearchSelectAlert}
+        onSelectTenant={handleSearchSelectTenant}
+        onSelectRunbook={handleSearchSelectRunbook}
+      />
     </div>
   );
 }
