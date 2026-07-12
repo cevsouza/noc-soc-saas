@@ -543,6 +543,37 @@ func main() {
 		}
 	}))
 
+	// Tenant access-grant management (Fase 5 fatia 1): an admin authorizes an operator on
+	// specific tenants, one by one, populating tenant_users (the table every tenant-scope
+	// authorization check already consumes). Platform-level, so GlobalRole==admin only.
+	protectedGetAccess := middleware.JWTAuth(jwtSecret)(
+		middleware.RequireGlobalRole(model.RoleAdmin)(
+			api.HandleGetUserAccess(appPool),
+		),
+	)
+	protectedGrantAccess := middleware.JWTAuth(jwtSecret)(
+		middleware.RequireGlobalRole(model.RoleAdmin)(
+			api.HandleGrantUserAccess(appPool),
+		),
+	)
+	protectedRevokeAccess := middleware.JWTAuth(jwtSecret)(
+		middleware.RequireGlobalRole(model.RoleAdmin)(
+			api.HandleRevokeUserAccess(appPool),
+		),
+	)
+	mux.Handle("/api/v1/admin/access", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			protectedGetAccess.ServeHTTP(w, r)
+		case http.MethodPost:
+			protectedGrantAccess.ServeHTTP(w, r)
+		case http.MethodDelete:
+			protectedRevokeAccess.ServeHTTP(w, r)
+		default:
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	}))
+
 	// SLA PDF Report Download Endpoint (resolves auth via ?token= — kept unauthenticated at the
 	// route level since browser downloads can't set an Authorization header; security instead
 	// comes from ResolveTenantFromToken now only accepting a signed JWT or a real API key, never

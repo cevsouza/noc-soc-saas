@@ -8,3 +8,12 @@ export interface Tenant {
   logo_url?: string;
   primary_color?: string;
 }
+
+// One tenant a user is authorized on. Matches internal/api/access_handler.go's
+// TenantAccessGrant (GET /api/v1/admin/access?user_id=). role is the user's role in that
+// tenant (always 'operator' for grants created through the admin access screen).
+export interface TenantAccessGrant {
+  tenant_id: string;
+  tenant_name: string;
+  role: string;
+}

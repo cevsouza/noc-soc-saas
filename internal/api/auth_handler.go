@@ -309,11 +309,21 @@ func HandleLogin(pgPool *pgxpool.Pool, jwtSecret []byte) http.HandlerFunc {
 			FROM tenant_users tu
 			JOIN tenants t ON t.id = tu.tenant_id
 			WHERE tu.user_id = $1
+			ORDER BY t.name
 			LIMIT 1
 		`
 		err = pgPool.QueryRow(ctx, queryTenant, userID).Scan(&tenantID, &tenantName, &tenantRoleStr)
 		if err != nil {
-			// Find first active tenant in database
+			// No tenant membership. A platform admin (GlobalRole==admin) legitimately sees every
+			// tenant, so we fall back to the first active tenant as their "home". A non-admin with
+			// zero grants, however, has no authorized tenant at all — rather than silently dropping
+			// them into an arbitrary tenant they aren't a member of (the old behavior), we refuse
+			// the login so an admin must explicitly grant access via /api/v1/admin/access first.
+			// (Fase 5 fatia 1 decision.)
+			if globalRole != string(model.RoleAdmin) {
+				http.Error(w, "Forbidden: nenhum tenant autorizado para esta conta. Contate um administrador para liberar seu acesso.", http.StatusForbidden)
+				return
+			}
 			err = pgPool.QueryRow(ctx, "SELECT id, name FROM tenants WHERE status = 'active' LIMIT 1").Scan(&tenantID, &tenantName)
 			if err != nil {
 				// Bootstrap default tenant

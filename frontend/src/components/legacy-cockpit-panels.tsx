@@ -16,6 +16,7 @@ import {
   Palette,
   RefreshCw,
   ShieldAlert,
+  ShieldCheck,
   Terminal,
   TrendingUp,
   User,
@@ -25,6 +26,7 @@ import { useTenantSelection } from '@/lib/tenant-context';
 import { apiFetch } from '@/lib/api-client';
 import { API_BASE_URL } from '@/lib/env';
 import { RunbookApprovalsPanel } from '@/components/settings/runbook-approvals-panel';
+import { AccessControlPanel } from '@/components/settings/access-control-panel';
 import type { Alert, SLAExecutiveStats } from '@/types';
 
 type AsyncStatus = { status: 'idle' | 'saving' | 'success' | 'error'; message?: string };
@@ -668,6 +670,18 @@ export function LegacyCockpitPanels({ cockpitTab, alerts, onSearchTermChange }: 
                     >
                       <User className="w-3.5 h-3.5 text-violet-400" />
                       <span>Usuários (RBAC)</span>
+                    </button>
+                    <button
+                      onClick={() => {
+                        setSelectedIntegrationTool('access_admin');
+                        setValidationResult(null);
+                      }}
+                      className={`w-full px-3 py-2 rounded-lg text-left text-xs font-bold transition-all flex items-center gap-2 ${
+                        selectedIntegrationTool === 'access_admin' ? 'bg-white/5 text-white border-l-2 border-cyan-400' : 'text-slate-400 hover:bg-white/[0.02] hover:text-slate-200'
+                      }`}
+                    >
+                      <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>Segurança de Acessos</span>
                     </button>
                     <button
                       onClick={() => {
@@ -1555,6 +1569,8 @@ export function LegacyCockpitPanels({ cockpitTab, alerts, onSearchTermChange }: 
                   </div>
                 ) : selectedIntegrationTool === 'approvals_admin' ? (
                   <RunbookApprovalsPanel />
+                ) : selectedIntegrationTool === 'access_admin' ? (
+                  <AccessControlPanel />
                 ) : selectedIntegrationTool === 'users_admin' ? (
                   // 4. Admin Users Form
                   <div className="flex flex-col gap-4">
