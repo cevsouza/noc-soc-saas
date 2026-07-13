@@ -74,8 +74,11 @@ func TestClassifyDevice(t *testing.T) {
 	}
 }
 
-// fakeScanner answers only for the IPs in its map.
-type fakeScanner struct{ live map[string]DiscoveredDevice }
+// fakeScanner answers only for the IPs in its map, and reports a canned neighbour per responder.
+type fakeScanner struct {
+	live  map[string]DiscoveredDevice
+	nbrs  map[string][]NeighborLink
+}
 
 func (f fakeScanner) Probe(_ DiscoveryTarget, ip string) (DiscoveredDevice, bool) {
 	if d, ok := f.live[ip]; ok {
@@ -85,17 +88,26 @@ func (f fakeScanner) Probe(_ DiscoveryTarget, ip string) (DiscoveredDevice, bool
 	return DiscoveredDevice{}, false
 }
 
+func (f fakeScanner) Neighbors(_ DiscoveryTarget, ip string) []NeighborLink {
+	return f.nbrs[ip]
+}
+
 func TestDiscover(t *testing.T) {
 	scanner := fakeScanner{live: map[string]DiscoveredDevice{
 		"192.168.1.1": {SysName: "gw", Vendor: "MikroTik", DeviceType: "router"},
 		"192.168.1.2": {SysName: "sw", Vendor: "Cisco", DeviceType: "switch"},
+	}, nbrs: map[string][]NeighborLink{
+		"192.168.1.2": {{LocalIP: "192.168.1.2", LocalPort: "1", RemoteSysName: "gw", Protocol: "lldp"}},
 	}}
-	devices, err := Discover(scanner, []DiscoveryTarget{{CIDR: "192.168.1.0/29"}})
+	devices, links, err := Discover(scanner, []DiscoveryTarget{{CIDR: "192.168.1.0/29"}})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(devices) != 2 {
 		t.Fatalf("got %d devices, want 2", len(devices))
+	}
+	if len(links) != 1 || links[0].RemoteSysName != "gw" {
+		t.Errorf("got links %+v, want 1 link to gw", links)
 	}
 	sort.Slice(devices, func(i, j int) bool { return devices[i].IP < devices[j].IP })
 	if devices[0].IP != "192.168.1.1" || devices[0].Vendor != "MikroTik" {
@@ -106,7 +118,7 @@ func TestDiscover(t *testing.T) {
 	}
 
 	// A bad CIDR is skipped with an aggregated error, but good targets still return.
-	devices, err = Discover(scanner, []DiscoveryTarget{{CIDR: "bad"}, {CIDR: "192.168.1.0/29"}})
+	devices, _, err = Discover(scanner, []DiscoveryTarget{{CIDR: "bad"}, {CIDR: "192.168.1.0/29"}})
 	if err == nil {
 		t.Error("expected aggregated error for bad CIDR")
 	}

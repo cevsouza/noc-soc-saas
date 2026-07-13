@@ -20,3 +20,15 @@ export interface DiscoveredDevice {
   first_seen: string;
   last_seen: string;
 }
+
+// One physical neighbour edge (topology slice B), walked from a device's LLDP/CDP table.
+export interface DiscoveredLink {
+  id: string;
+  local_ip: string;
+  local_port: string;
+  remote_sysname: string;
+  remote_chassis_id: string;
+  remote_port_id: string;
+  protocol: string;
+  last_seen: string;
+}

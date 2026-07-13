@@ -520,6 +520,7 @@ func main() {
 		discoMutate.ServeHTTP(w, r)
 	})))
 	mux.Handle("/api/v1/discovered-devices", middleware.JWTAuth(jwtSecret)(api.HandleGetDiscoveredDevices(appPool)))
+	mux.Handle("/api/v1/discovered-links", middleware.JWTAuth(jwtSecret)(api.HandleGetDiscoveredLinks(appPool)))
 
 	// Secure Vault Credentials Storage Endpoint (Postgres Vault with RLS & GCM Ciphers, protected by JWT & Admin Role check)
 	vaultRepo := repository.NewPostgresVaultRepository()

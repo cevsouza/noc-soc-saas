@@ -126,18 +126,19 @@ func main() {
 		}
 		log.Printf("[agent] cycle ok (snmp_targets=%d, events=%d accepted=%d, metrics=%d accepted=%d, next in %s)", len(cfg.SNMPTargets), len(events), accepted, len(samples), metricsAccepted, pollInterval)
 
-		// Active discovery: sweep configured CIDRs when the slower cadence is due.
+		// Active discovery: sweep configured CIDRs when the slower cadence is due. Each responder is
+		// also walked for LLDP/CDP neighbours (physical edges).
 		if len(cfg.DiscoveryTargets) > 0 && time.Since(lastDiscovery) >= discoveryInterval {
 			lastDiscovery = time.Now()
-			devices, derr := agent.Discover(scanner, cfg.DiscoveryTargets)
+			devices, links, derr := agent.Discover(scanner, cfg.DiscoveryTargets)
 			if derr != nil {
 				log.Printf("[agent] discovery partial error: %v", derr)
 			}
-			if len(devices) > 0 {
-				if n, serr := client.SendDiscovery(st.AgentID, devices); serr != nil {
+			if len(devices) > 0 || len(links) > 0 {
+				if n, serr := client.SendDiscovery(st.AgentID, devices, links); serr != nil {
 					log.Printf("[agent] discovery push failed: %v", serr)
 				} else {
-					log.Printf("[agent] discovery ok (ranges=%d, found=%d, upserted=%d)", len(cfg.DiscoveryTargets), len(devices), n)
+					log.Printf("[agent] discovery ok (ranges=%d, found=%d, upserted=%d, links=%d)", len(cfg.DiscoveryTargets), len(devices), n, len(links))
 				}
 			} else {
 				log.Printf("[agent] discovery ok (ranges=%d, found=0)", len(cfg.DiscoveryTargets))

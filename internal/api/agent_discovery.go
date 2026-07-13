@@ -244,10 +244,22 @@ type DiscoveredDeviceIn struct {
 	DeviceType  string `json:"device_type"`
 }
 
-// AgentDiscoveryRequest is the agent's discovery push batch.
+// DiscoveredLinkIn is one physical neighbour edge the agent reports (LLDP/CDP).
+type DiscoveredLinkIn struct {
+	LocalIP         string `json:"local_ip"`
+	LocalPort       string `json:"local_port"`
+	RemoteSysName   string `json:"remote_sysname"`
+	RemoteChassisID string `json:"remote_chassis_id"`
+	RemotePortID    string `json:"remote_port_id"`
+	Protocol        string `json:"protocol"`
+}
+
+// AgentDiscoveryRequest is the agent's discovery push batch: identified devices plus the physical
+// neighbour edges walked from them.
 type AgentDiscoveryRequest struct {
 	AgentID uuid.UUID            `json:"agent_id"`
 	Devices []DiscoveredDeviceIn `json:"devices"`
+	Links   []DiscoveredLinkIn   `json:"links"`
 }
 
 // HandleAgentDiscovery upserts the batch of discovered devices into the tenant inventory. API-key auth
@@ -287,6 +299,29 @@ func HandleAgentDiscovery(pgPool *pgxpool.Pool) http.HandlerFunc {
 					return e
 				}
 				accepted++
+			}
+			// Physical neighbour edges (topology slice B): upsert on the stable identity so re-walking
+			// refreshes last_seen instead of duplicating.
+			for _, l := range req.Links {
+				if net.ParseIP(l.LocalIP) == nil {
+					continue
+				}
+				proto := l.Protocol
+				if proto != "cdp" {
+					proto = "lldp"
+				}
+				_, e := tx.Exec(ctx, `
+					INSERT INTO discovered_links (tenant_id, local_ip, local_port, remote_sysname, remote_chassis_id, remote_port_id, protocol, first_seen, last_seen)
+					VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
+					ON CONFLICT (tenant_id, local_ip, local_port, remote_chassis_id, remote_port_id) DO UPDATE SET
+						remote_sysname = EXCLUDED.remote_sysname,
+						remote_port_id = EXCLUDED.remote_port_id,
+						protocol = EXCLUDED.protocol,
+						last_seen = NOW()
+				`, tenantID, l.LocalIP, l.LocalPort, l.RemoteSysName, l.RemoteChassisID, l.RemotePortID, proto)
+				if e != nil {
+					return e
+				}
 			}
 			return nil
 		})
@@ -348,6 +383,56 @@ func HandleGetDiscoveredDevices(pgPool *pgxpool.Pool) http.HandlerFunc {
 		})
 		if err != nil {
 			http.Error(w, "Failed to list discovered devices", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(list)
+	}
+}
+
+// DiscoveredLink is the console view of one physical neighbour edge (topology slice B).
+type DiscoveredLink struct {
+	ID              uuid.UUID `json:"id"`
+	LocalIP         string    `json:"local_ip"`
+	LocalPort       string    `json:"local_port"`
+	RemoteSysName   string    `json:"remote_sysname"`
+	RemoteChassisID string    `json:"remote_chassis_id"`
+	RemotePortID    string    `json:"remote_port_id"`
+	Protocol        string    `json:"protocol"`
+	LastSeen        time.Time `json:"last_seen"`
+}
+
+// HandleGetDiscoveredLinks returns the tenant's physical neighbour edges (JWT, tenant-scoped).
+func HandleGetDiscoveredLinks(pgPool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tenantID, err := middleware.ResolveTenantScope(r.Context(), r, pgPool)
+		if err != nil {
+			middleware.WriteScopeError(w, err)
+			return
+		}
+		ctx := db.WithTenantID(r.Context(), tenantID)
+
+		list := make([]DiscoveredLink, 0)
+		err = db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
+			rows, e := tx.Query(ctx, `
+				SELECT id, local_ip, local_port, remote_sysname, remote_chassis_id, remote_port_id, protocol, last_seen
+				FROM discovered_links WHERE tenant_id = $1 ORDER BY local_ip, local_port LIMIT 1000
+			`, tenantID)
+			if e != nil {
+				return e
+			}
+			defer rows.Close()
+			for rows.Next() {
+				var l DiscoveredLink
+				if e := rows.Scan(&l.ID, &l.LocalIP, &l.LocalPort, &l.RemoteSysName, &l.RemoteChassisID, &l.RemotePortID, &l.Protocol, &l.LastSeen); e != nil {
+					return e
+				}
+				list = append(list, l)
+			}
+			return rows.Err()
+		})
+		if err != nil {
+			http.Error(w, "Failed to list discovered links", http.StatusInternalServerError)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")

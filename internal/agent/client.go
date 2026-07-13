@@ -150,11 +150,11 @@ func (c *Client) SendMetrics(agentID string, samples []Sample) (int, error) {
 	return out.Accepted, nil
 }
 
-// SendDiscovery pushes the batch of discovered devices from a network sweep. Returns the number the
-// SaaS upserted into the tenant inventory.
-func (c *Client) SendDiscovery(agentID string, devices []DiscoveredDevice) (int, error) {
+// SendDiscovery pushes the batch of discovered devices AND their physical neighbour links from a
+// network sweep. Returns the number of devices the SaaS upserted into the tenant inventory.
+func (c *Client) SendDiscovery(agentID string, devices []DiscoveredDevice, links []NeighborLink) (int, error) {
 	resp, err := c.postJSON("/api/v1/agent/discovery?agent_id="+agentID, map[string]interface{}{
-		"agent_id": agentID, "devices": devices,
+		"agent_id": agentID, "devices": devices, "links": links,
 	}, true)
 	if err != nil {
 		return 0, err

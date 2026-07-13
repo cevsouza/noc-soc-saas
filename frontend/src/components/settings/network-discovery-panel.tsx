@@ -1,10 +1,10 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { RefreshCw, Radar, Plus, Trash2, Router, ShieldQuestion } from 'lucide-react';
+import { RefreshCw, Radar, Plus, Trash2, Router, ShieldQuestion, Share2 } from 'lucide-react';
 import { apiFetch, apiFetchJson } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth-context';
-import type { DiscoveryTarget, DiscoveredDevice } from '@/types';
+import type { DiscoveryTarget, DiscoveredDevice, DiscoveredLink } from '@/types';
 
 // Active network discovery (topology slice A). A tenant admin registers CIDR ranges (with an SNMP
 // community) to sweep; the agent probes every host with SNMP and reports back the responders, which
@@ -15,6 +15,7 @@ export function NetworkDiscoveryPanel({ tenantId }: { tenantId?: string }) {
 
   const [targets, setTargets] = useState<DiscoveryTarget[]>([]);
   const [devices, setDevices] = useState<DiscoveredDevice[]>([]);
+  const [links, setLinks] = useState<DiscoveredLink[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -30,12 +31,14 @@ export function NetworkDiscoveryPanel({ tenantId }: { tenantId?: string }) {
     setIsLoading(true);
     setError(null);
     try {
-      const [t, d] = await Promise.all([
+      const [t, d, l] = await Promise.all([
         apiFetchJson<DiscoveryTarget[]>(`/api/v1/agent/discovery-targets${qs}`),
         apiFetchJson<DiscoveredDevice[]>(`/api/v1/discovered-devices${qs}`),
+        apiFetchJson<DiscoveredLink[]>(`/api/v1/discovered-links${qs}`),
       ]);
       setTargets(t ?? []);
       setDevices(d ?? []);
+      setLinks(l ?? []);
     } catch (err) {
       console.error('Failed to load network discovery:', err);
       setError('Não foi possível carregar a descoberta de rede.');
@@ -222,6 +225,50 @@ export function NetworkDiscoveryPanel({ tenantId }: { tenantId?: string }) {
                       </span>
                     </td>
                     <td className="py-2 px-2 text-slate-500">{new Date(d.last_seen).toLocaleString()}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* Physical neighbourhood (LLDP/CDP edges) */}
+      <div className="glass-card rounded-xl border border-white/5 p-6 bg-[#040812]">
+        <div className="flex items-center gap-2 mb-3">
+          <Share2 className="w-4 h-4 text-cyan-400" />
+          <h4 className="text-sm font-extrabold text-slate-200 uppercase tracking-wider">Vizinhança física (LLDP/CDP)</h4>
+          <span className="text-[10px] font-bold text-slate-500 bg-white/5 px-2 py-0.5 rounded-full">{links.length}</span>
+        </div>
+        {links.length === 0 ? (
+          <p className="text-[11px] text-slate-500 py-4">
+            Nenhuma adjacência descoberta ainda. As arestas aparecem quando os dispositivos varridos expõem
+            vizinhos por LLDP ou CDP no próximo ciclo de descoberta.
+          </p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="text-[10px] uppercase tracking-wider text-slate-500 border-b border-white/5">
+                  <th className="text-left font-bold py-2 px-2">Dispositivo local</th>
+                  <th className="text-left font-bold py-2 px-2">Porta local</th>
+                  <th className="text-left font-bold py-2 px-2">Vizinho</th>
+                  <th className="text-left font-bold py-2 px-2">Porta remota</th>
+                  <th className="text-left font-bold py-2 px-2">Protocolo</th>
+                </tr>
+              </thead>
+              <tbody>
+                {links.map((l) => (
+                  <tr key={l.id} className="border-b border-white/[0.03] hover:bg-white/[0.02]">
+                    <td className="py-2 px-2 font-mono text-slate-300">{l.local_ip}</td>
+                    <td className="py-2 px-2 text-slate-400">{l.local_port || '—'}</td>
+                    <td className="py-2 px-2 text-slate-200">{l.remote_sysname || l.remote_chassis_id || '—'}</td>
+                    <td className="py-2 px-2 text-slate-400">{l.remote_port_id || '—'}</td>
+                    <td className="py-2 px-2">
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-violet-500/10 text-violet-300 border border-violet-500/20 uppercase">
+                        {l.protocol}
+                      </span>
+                    </td>
                   </tr>
                 ))}
               </tbody>

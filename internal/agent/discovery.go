@@ -52,9 +52,12 @@ type DiscoveredDevice struct {
 	DeviceType  string `json:"device_type"`
 }
 
-// Scanner probes a single host for its SNMP identity. ok is false when the host doesn't answer.
+// Scanner probes a single host for its SNMP identity and its physical neighbours. Probe's ok is false
+// when the host doesn't answer; Neighbors returns the host's LLDP/CDP adjacencies (topology slice B),
+// empty when it speaks neither.
 type Scanner interface {
 	Probe(target DiscoveryTarget, ip string) (DiscoveredDevice, bool)
+	Neighbors(target DiscoveryTarget, ip string) []NeighborLink
 }
 
 // expandCIDR returns the host addresses inside a CIDR, excluding the network and broadcast addresses
@@ -146,10 +149,12 @@ func classifyByRole(d string) string {
 }
 
 // Discover sweeps every target's CIDR, probing each host with bounded concurrency, and returns the
-// deduplicated set of responders (last-writer-wins per IP across overlapping targets). A target whose
-// CIDR can't be expanded is skipped (its error is returned aggregated) rather than aborting the run.
-func Discover(scanner Scanner, targets []DiscoveryTarget) ([]DiscoveredDevice, error) {
+// deduplicated set of responders (last-writer-wins per IP across overlapping targets) plus the
+// physical neighbour links walked from each responder (topology slice B). A target whose CIDR can't be
+// expanded is skipped (its error is returned aggregated) rather than aborting the run.
+func Discover(scanner Scanner, targets []DiscoveryTarget) ([]DiscoveredDevice, []NeighborLink, error) {
 	found := map[string]DiscoveredDevice{}
+	var links []NeighborLink
 	var mu sync.Mutex
 	var errs []string
 
@@ -170,11 +175,16 @@ func Discover(scanner Scanner, targets []DiscoveryTarget) ([]DiscoveredDevice, e
 			go func() {
 				defer wg.Done()
 				for ip := range jobs {
-					if dev, ok := scanner.Probe(t, ip); ok {
-						mu.Lock()
-						found[dev.IP] = dev
-						mu.Unlock()
+					dev, ok := scanner.Probe(t, ip)
+					if !ok {
+						continue
 					}
+					// Only responders get a neighbour walk (skipping dead hosts keeps the sweep cheap).
+					nbrs := scanner.Neighbors(t, ip)
+					mu.Lock()
+					found[dev.IP] = dev
+					links = append(links, nbrs...)
+					mu.Unlock()
 				}
 			}()
 		}
@@ -190,9 +200,9 @@ func Discover(scanner Scanner, targets []DiscoveryTarget) ([]DiscoveredDevice, e
 		out = append(out, d)
 	}
 	if len(errs) > 0 {
-		return out, fmt.Errorf("discovery: %s", strings.Join(errs, "; "))
+		return out, links, fmt.Errorf("discovery: %s", strings.Join(errs, "; "))
 	}
-	return out, nil
+	return out, links, nil
 }
 
 // snmpScanner is the real SNMP v2c probe.
