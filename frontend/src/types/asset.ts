@@ -13,6 +13,7 @@ export interface AssetView {
   location: string;
   tags: string[];
   notes: string;
+  aliases: string[];
   managed: boolean;
   discovered: boolean;
   sysname?: string;
@@ -30,4 +31,5 @@ export interface AssetInput {
   location?: string;
   tags?: string[];
   notes?: string;
+  aliases?: string[];
 }

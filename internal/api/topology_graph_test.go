@@ -29,7 +29,7 @@ func TestBuildTopologyGraph(t *testing.T) {
 		{Host: "app-prod-01", UnresolvedAlerts: 1, WorstSeverity: "warning"},
 	}
 
-	g := buildTopologyGraph(devices, links, hosts)
+	g := buildTopologyGraph(devices, links, hosts, nil)
 
 	// Nodes: 2 devices + 1 telemetry host + 1 neighbour = 4.
 	if len(g.Nodes) != 4 {
@@ -78,8 +78,54 @@ func TestBuildTopologyGraphDedupEdges(t *testing.T) {
 		{LocalIP: "10.0.0.1", RemoteSysName: "b", RemoteChassisID: "x", Protocol: "lldp"},
 		{LocalIP: "10.0.0.1", RemoteSysName: "b", RemoteChassisID: "x", Protocol: "lldp"},
 	}
-	g := buildTopologyGraph(devices, links, nil)
+	g := buildTopologyGraph(devices, links, nil, nil)
 	if len(g.Edges) != 1 {
 		t.Errorf("got %d edges, want 1 (deduped)", len(g.Edges))
+	}
+}
+
+func TestBuildTopologyGraphRobustMatching(t *testing.T) {
+	devices := []GraphNodeIn{
+		{IP: "192.168.1.1", SysName: "edge-fw", Vendor: "Fortinet", DeviceType: "firewall"},
+		{IP: "192.168.1.2", SysName: "core-sw", Vendor: "Cisco", DeviceType: "switch"},
+	}
+	hosts := []GraphHostIn{
+		// FQDN of edge-fw: must fold onto the device by short-name, not become a separate node.
+		{Host: "EDGE-FW.corp.example.com", UnresolvedAlerts: 1, WorstSeverity: "critical"},
+		// A DNS alias the monitoring tool uses for core-sw, mapped manually via the CMDB.
+		{Host: "switch01.mon", UnresolvedAlerts: 2, WorstSeverity: "warning"},
+	}
+	aliases := []AssetAlias{
+		{Identifier: "192.168.1.2", Aliases: []string{"switch01.mon", "sw-core"}},
+	}
+
+	g := buildTopologyGraph(devices, nil, hosts, aliases)
+
+	// Both hosts collapse onto their devices → only 2 nodes, no telemetry duplicates.
+	if len(g.Nodes) != 2 {
+		t.Fatalf("got %d nodes, want 2 (no duplicates): %+v", len(g.Nodes), g.Nodes)
+	}
+	fw := findNode(g, "192.168.1.1")
+	if fw == nil || fw.Origin != "both" || fw.WorstSeverity != "critical" {
+		t.Errorf("edge-fw should merge via FQDN short-name: %+v", fw)
+	}
+	sw := findNode(g, "192.168.1.2")
+	if sw == nil || sw.Origin != "both" || sw.UnresolvedAlerts != 2 {
+		t.Errorf("core-sw should merge via CMDB alias: %+v", sw)
+	}
+}
+
+func TestBuildTopologyGraphAmbiguousShortName(t *testing.T) {
+	// Two devices share the short-name "fw" (different domains). An ambiguous short-name must NOT be
+	// guessed — the host stays a separate telemetry node rather than merging onto the wrong device.
+	devices := []GraphNodeIn{
+		{IP: "10.0.0.1", SysName: "fw.site-a"},
+		{IP: "10.0.0.2", SysName: "fw.site-b"},
+	}
+	hosts := []GraphHostIn{{Host: "fw", UnresolvedAlerts: 1, WorstSeverity: "warning"}}
+
+	g := buildTopologyGraph(devices, nil, hosts, nil)
+	if len(g.Nodes) != 3 {
+		t.Fatalf("got %d nodes, want 3 (ambiguous short-name not guessed): %+v", len(g.Nodes), g.Nodes)
 	}
 }

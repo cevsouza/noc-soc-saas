@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"sort"
 	"strings"
@@ -14,15 +15,14 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Topology graph (discovery slice C). Merges the three real sources into one node/edge graph:
-//   - discovered_devices  (slice A): every SNMP responder found by the active sweep — including gear
-//     that never sent an alert.
-//   - alert-derived hosts (existing /topology): assets that have reported telemetry (alerts) in the
-//     window, carrying current severity.
+// Topology graph (discovery slice C; robust matching in slice T3). Merges the three real sources into
+// one node/edge graph:
+//   - discovered_devices  (slice A): every SNMP responder found by the active sweep.
+//   - alert-derived hosts (existing /topology): assets that have reported telemetry in the window.
 //   - discovered_links    (slice B): the physical LLDP/CDP edges between devices.
-// A device and an alert-host are the same node when the host string matches the device's IP or
-// sysName (origin "both"); LLDP/CDP neighbours that aren't themselves discovered become light
-// "neighbour" nodes so the edge still has a target.
+// A device and an alert-host collapse to one node when the host resolves to the device — by exact IP,
+// by sysName, by short-name (FQDN vs bare hostname), or by a CMDB alias the operator set (slice T3).
+// Without this, a box shows up twice: once discovered, once as a telemetry-only host.
 
 // GraphNodeIn is a discovered device fed to the pure builder.
 type GraphNodeIn struct {
@@ -47,6 +47,13 @@ type GraphHostIn struct {
 	Host             string
 	UnresolvedAlerts int
 	WorstSeverity    string
+}
+
+// AssetAlias carries the manual host↔device mapping from the CMDB (slice T3): an asset identifier and
+// the alternate hostnames a monitoring tool uses for it.
+type AssetAlias struct {
+	Identifier string
+	Aliases    []string
 }
 
 // GraphNode is one asset in the merged topology graph.
@@ -75,14 +82,69 @@ type TopologyGraph struct {
 	Edges []GraphEdge `json:"edges"`
 }
 
-// buildTopologyGraph merges devices, physical links, and alert hosts into one graph. Pure and
-// unit-tested (no DB). Node ids are stable: a discovered device's id is its IP; a telemetry-only host's
-// id is the host string; a neighbour-only node's id is "nbr:"+identity.
-func buildTopologyGraph(devices []GraphNodeIn, links []GraphLinkIn, hosts []GraphHostIn) TopologyGraph {
+// normalizeHost lowercases, trims, and drops a trailing dot (FQDN root) so "Edge-FW.corp." and
+// "edge-fw.corp" compare equal.
+func normalizeHost(s string) string {
+	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(s)), ".")
+}
+
+// shortName returns the first DNS label ("edge-fw.corp.example.com" -> "edge-fw"). Assumes a normalized
+// input. Callers must not apply this to IP addresses.
+func shortName(s string) string {
+	if i := strings.IndexByte(s, '.'); i >= 0 {
+		return s[:i]
+	}
+	return s
+}
+
+// hostResolver folds an alert-host / neighbour name onto an existing device (or telemetry) node id.
+type hostResolver struct {
+	ipToID    map[string]string // exact IP -> node id
+	sysToID   map[string]string // normalized sysName/host -> node id
+	shortToID map[string]string // unambiguous short-name -> device node id
+	aliasToID map[string]string // normalized CMDB alias (and its short form) -> device node id
+}
+
+// resolve returns the node id a name maps to, if any. Order: exact IP, exact (normalized) name, alias,
+// short-name. Short-name matching is skipped for IP literals so "192.168.1.1" never collapses on "192".
+func (hr hostResolver) resolve(name string) (string, bool) {
+	if name == "" {
+		return "", false
+	}
+	if id, ok := hr.ipToID[name]; ok {
+		return id, true
+	}
+	n := normalizeHost(name)
+	if id, ok := hr.sysToID[n]; ok {
+		return id, true
+	}
+	if id, ok := hr.aliasToID[n]; ok {
+		return id, true
+	}
+	if net.ParseIP(name) != nil {
+		return "", false
+	}
+	s := shortName(n)
+	if id, ok := hr.aliasToID[s]; ok {
+		return id, true
+	}
+	if id, ok := hr.shortToID[s]; ok {
+		return id, true
+	}
+	return "", false
+}
+
+// buildTopologyGraph merges devices, physical links, alert hosts, and CMDB aliases into one graph. Pure
+// and unit-tested (no DB).
+func buildTopologyGraph(devices []GraphNodeIn, links []GraphLinkIn, hosts []GraphHostIn, aliases []AssetAlias) TopologyGraph {
 	nodes := map[string]*GraphNode{}
-	// Index for matching: sysName(lower) -> node id, and ip -> node id.
-	sysToID := map[string]string{}
-	ipToID := map[string]string{}
+	hr := hostResolver{
+		ipToID:    map[string]string{},
+		sysToID:   map[string]string{},
+		shortToID: map[string]string{},
+		aliasToID: map[string]string{},
+	}
+	shortCount := map[string]int{} // detect ambiguous short-names (2+ devices) and drop them
 
 	for _, d := range devices {
 		label := d.SysName
@@ -91,9 +153,39 @@ func buildTopologyGraph(devices []GraphNodeIn, links []GraphLinkIn, hosts []Grap
 		}
 		n := &GraphNode{ID: d.IP, Label: label, Kind: d.DeviceType, Vendor: d.Vendor, Origin: "discovery"}
 		nodes[d.IP] = n
-		ipToID[d.IP] = d.IP
+		hr.ipToID[d.IP] = d.IP
 		if d.SysName != "" {
-			sysToID[strings.ToLower(d.SysName)] = d.IP
+			ns := normalizeHost(d.SysName)
+			hr.sysToID[ns] = d.IP
+			sn := shortName(ns)
+			shortCount[sn]++
+			hr.shortToID[sn] = d.IP
+		}
+	}
+	for sn, c := range shortCount {
+		if c > 1 {
+			delete(hr.shortToID, sn) // ambiguous: never guess between two devices
+		}
+	}
+
+	// CMDB aliases: map each alias (and its short form) to the device the asset identifier points at.
+	for _, a := range aliases {
+		target, ok := hr.ipToID[a.Identifier]
+		if !ok {
+			target, ok = hr.sysToID[normalizeHost(a.Identifier)]
+		}
+		if !ok {
+			continue // alias for a non-discovered (manual) asset — not a topology node
+		}
+		for _, al := range a.Aliases {
+			na := normalizeHost(al)
+			if na == "" {
+				continue
+			}
+			hr.aliasToID[na] = target
+			if net.ParseIP(al) == nil {
+				hr.aliasToID[shortName(na)] = target
+			}
 		}
 	}
 
@@ -102,13 +194,7 @@ func buildTopologyGraph(devices []GraphNodeIn, links []GraphLinkIn, hosts []Grap
 		if h.Host == "" {
 			continue
 		}
-		id := ""
-		if v, ok := ipToID[h.Host]; ok {
-			id = v
-		} else if v, ok := sysToID[strings.ToLower(h.Host)]; ok {
-			id = v
-		}
-		if id != "" {
+		if id, ok := hr.resolve(h.Host); ok {
 			n := nodes[id]
 			n.Origin = "both"
 			n.WorstSeverity = h.WorstSeverity
@@ -119,21 +205,21 @@ func buildTopologyGraph(devices []GraphNodeIn, links []GraphLinkIn, hosts []Grap
 			ID: h.Host, Label: h.Host, Kind: "host", Origin: "telemetry",
 			WorstSeverity: h.WorstSeverity, UnresolvedAlerts: h.UnresolvedAlerts,
 		}
-		sysToID[strings.ToLower(h.Host)] = h.Host
+		hr.sysToID[normalizeHost(h.Host)] = h.Host
 	}
 
-	// Physical edges. Resolve the remote endpoint to an existing node by sysName; otherwise create a
-	// light neighbour node keyed by chassis id (or sysName) so the edge still lands somewhere.
+	// Physical edges. Resolve the remote endpoint to an existing node; otherwise create a light
+	// neighbour node keyed by chassis id (or sysName) so the edge still lands somewhere.
 	edgeSeen := map[string]bool{}
 	edges := make([]GraphEdge, 0, len(links))
 	for _, l := range links {
 		src := l.LocalIP
 		if _, ok := nodes[src]; !ok {
-			// A link whose local device wasn't in the inventory this cycle: add it as a bare node.
 			nodes[src] = &GraphNode{ID: src, Label: src, Kind: "network_device", Origin: "discovery"}
+			hr.ipToID[src] = src
 		}
 		var tgt string
-		if id, ok := sysToID[strings.ToLower(l.RemoteSysName)]; ok && l.RemoteSysName != "" {
+		if id, ok := hr.resolve(l.RemoteSysName); ok {
 			tgt = id
 		} else {
 			identity := l.RemoteChassisID
@@ -177,8 +263,8 @@ func buildTopologyGraph(devices []GraphNodeIn, links []GraphLinkIn, hosts []Grap
 	return out
 }
 
-// HandleGetTopologyGraph returns the merged topology graph (discovery slice C). Same access level and
-// tenant-scoping as the other topology/SLA endpoints.
+// HandleGetTopologyGraph returns the merged topology graph. Same access level and tenant-scoping as the
+// other topology/SLA endpoints.
 func HandleGetTopologyGraph(pgPool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		tenantID, err := middleware.ResolveTenantScope(r.Context(), r, pgPool)
@@ -191,6 +277,7 @@ func HandleGetTopologyGraph(pgPool *pgxpool.Pool) http.HandlerFunc {
 		var devices []GraphNodeIn
 		var links []GraphLinkIn
 		var hosts []GraphHostIn
+		var aliases []AssetAlias
 
 		err = db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
 			dr, e := tx.Query(ctx, `SELECT ip, sysname, vendor, device_type FROM discovered_devices WHERE tenant_id = $1 LIMIT 500`, tenantID)
@@ -220,6 +307,21 @@ func HandleGetTopologyGraph(pgPool *pgxpool.Pool) http.HandlerFunc {
 				links = append(links, l)
 			}
 			lr.Close()
+
+			// CMDB aliases for manual host↔device mapping (slice T3).
+			aar, e := tx.Query(ctx, `SELECT identifier, aliases FROM assets WHERE tenant_id = $1 AND array_length(aliases, 1) > 0`, tenantID)
+			if e != nil {
+				return e
+			}
+			for aar.Next() {
+				var a AssetAlias
+				if e := aar.Scan(&a.Identifier, &a.Aliases); e != nil {
+					aar.Close()
+					return e
+				}
+				aliases = append(aliases, a)
+			}
+			aar.Close()
 
 			// Alert-derived hosts (same window/exclusions as HandleGetTopology).
 			window := fmt.Sprintf("%d days", topologyWindowDays)
@@ -259,7 +361,7 @@ func HandleGetTopologyGraph(pgPool *pgxpool.Pool) http.HandlerFunc {
 			return
 		}
 
-		graph := buildTopologyGraph(devices, links, hosts)
+		graph := buildTopologyGraph(devices, links, hosts, aliases)
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(graph)
 	}

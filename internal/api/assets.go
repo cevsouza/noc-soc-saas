@@ -34,6 +34,9 @@ type Asset struct {
 	Location            string   `json:"location"`
 	Tags                []string `json:"tags"`
 	Notes               string   `json:"notes"`
+	// Aliases are alternate hostnames/IPs a monitoring tool uses for this asset, so the topology graph
+	// can fold those alert-hosts onto the right node (topology slice T3).
+	Aliases []string `json:"aliases"`
 }
 
 // AssetView is one row of the merged CMDB list: the managed overlay (if any) plus the discovery facts
@@ -48,6 +51,7 @@ type AssetView struct {
 	Location            string     `json:"location"`
 	Tags                []string   `json:"tags"`
 	Notes               string     `json:"notes"`
+	Aliases             []string   `json:"aliases"`
 	Managed             bool       `json:"managed"`
 	Discovered          bool       `json:"discovered"`
 	SysName             string     `json:"sysname,omitempty"`
@@ -134,6 +138,7 @@ func mergeAssets(assets []Asset, devices []discoveredRow) []AssetView {
 			Vendor:              d.Vendor,
 			BusinessCriticality: "medium",
 			Tags:                []string{},
+			Aliases:             []string{},
 			Discovered:          true,
 			SysName:             d.SysName,
 		}
@@ -155,7 +160,7 @@ func mergeAssets(assets []Asset, devices []discoveredRow) []AssetView {
 		if seen[a.Identifier] {
 			continue
 		}
-		v := AssetView{Identifier: a.Identifier, BusinessCriticality: "medium", Tags: []string{}, Managed: true}
+		v := AssetView{Identifier: a.Identifier, BusinessCriticality: "medium", Tags: []string{}, Aliases: []string{}, Managed: true}
 		applyOverlay(&v, a)
 		out = append(out, v)
 	}
@@ -190,6 +195,9 @@ func applyOverlay(v *AssetView, a Asset) {
 	if a.Tags != nil {
 		v.Tags = a.Tags
 	}
+	if a.Aliases != nil {
+		v.Aliases = a.Aliases
+	}
 	v.Notes = a.Notes
 }
 
@@ -207,14 +215,14 @@ func HandleGetAssets(pgPool *pgxpool.Pool) http.HandlerFunc {
 		var devices []discoveredRow
 		err = db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
 			ar, e := tx.Query(ctx, `
-				SELECT identifier, name, asset_type, vendor, business_criticality, owner, location, tags, notes
+				SELECT identifier, name, asset_type, vendor, business_criticality, owner, location, tags, notes, aliases
 				FROM assets WHERE tenant_id = $1`, tenantID)
 			if e != nil {
 				return e
 			}
 			for ar.Next() {
 				var a Asset
-				if e := ar.Scan(&a.Identifier, &a.Name, &a.AssetType, &a.Vendor, &a.BusinessCriticality, &a.Owner, &a.Location, &a.Tags, &a.Notes); e != nil {
+				if e := ar.Scan(&a.Identifier, &a.Name, &a.AssetType, &a.Vendor, &a.BusinessCriticality, &a.Owner, &a.Location, &a.Tags, &a.Notes, &a.Aliases); e != nil {
 					ar.Close()
 					return e
 				}
@@ -279,14 +287,15 @@ func HandleMutateAssets(pgPool *pgxpool.Pool) http.HandlerFunc {
 				a.BusinessCriticality = "medium"
 			}
 			a.Tags = normalizeTags(a.Tags)
+			a.Aliases = normalizeTags(a.Aliases)
 			if verr := validateAssetInput(a); verr != nil {
 				http.Error(w, "Bad Request: "+verr.Error(), http.StatusBadRequest)
 				return
 			}
 			err = db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
 				_, e := tx.Exec(ctx, `
-					INSERT INTO assets (tenant_id, identifier, name, asset_type, vendor, business_criticality, owner, location, tags, notes, updated_at)
-					VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW())
+					INSERT INTO assets (tenant_id, identifier, name, asset_type, vendor, business_criticality, owner, location, tags, notes, aliases, updated_at)
+					VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NOW())
 					ON CONFLICT (tenant_id, identifier) DO UPDATE SET
 						name = EXCLUDED.name,
 						asset_type = EXCLUDED.asset_type,
@@ -296,8 +305,9 @@ func HandleMutateAssets(pgPool *pgxpool.Pool) http.HandlerFunc {
 						location = EXCLUDED.location,
 						tags = EXCLUDED.tags,
 						notes = EXCLUDED.notes,
+						aliases = EXCLUDED.aliases,
 						updated_at = NOW()
-				`, tenantID, a.Identifier, a.Name, a.AssetType, a.Vendor, a.BusinessCriticality, a.Owner, a.Location, a.Tags, a.Notes)
+				`, tenantID, a.Identifier, a.Name, a.AssetType, a.Vendor, a.BusinessCriticality, a.Owner, a.Location, a.Tags, a.Notes, a.Aliases)
 				return e
 			})
 			if err != nil {

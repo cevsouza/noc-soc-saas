@@ -65,6 +65,7 @@ export function AssetsPanel({ tenantId }: { tenantId?: string }) {
       owner: '',
       location: '',
       tags: [],
+      aliases: [],
       notes: '',
       managed: true,
       discovered: false,
@@ -228,6 +229,7 @@ function AssetEditDialog({
   const [owner, setOwner] = useState(asset.owner);
   const [location, setLocation] = useState(asset.location);
   const [tags, setTags] = useState(asset.tags.join(', '));
+  const [aliases, setAliases] = useState(asset.aliases.join(', '));
   const [notes, setNotes] = useState(asset.notes);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -249,6 +251,7 @@ function AssetEditDialog({
         owner: owner.trim(),
         location: location.trim(),
         tags: tags.split(',').map((t) => t.trim()).filter(Boolean),
+        aliases: aliases.split(',').map((t) => t.trim()).filter(Boolean),
         notes: notes.trim(),
       };
       const qs = tenantId ? `?tenant_id=${tenantId}` : '';
@@ -329,6 +332,14 @@ function AssetEditDialog({
               <input value={tags} onChange={(e) => setTags(e.target.value)} placeholder="perímetro, produção" className={inputCls} />
             </label>
           </div>
+          <label className="flex flex-col gap-1 text-[11px] font-bold text-slate-400">
+            Aliases de host (separados por vírgula)
+            <input value={aliases} onChange={(e) => setAliases(e.target.value)} placeholder="edge-fw.corp.local, fw01.mon" className={`${inputCls} font-mono`} />
+            <span className="text-[10px] font-normal text-slate-500">
+              Outros nomes/IPs que as ferramentas de monitoramento usam para este ativo — o grafo de
+              topologia funde esses hosts neste nó (elimina duplicatas).
+            </span>
+          </label>
           <label className="flex flex-col gap-1 text-[11px] font-bold text-slate-400">
             Notas
             <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} className={inputCls} />
