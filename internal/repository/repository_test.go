@@ -535,3 +535,44 @@ func TestIncidentIsolation(t *testing.T) {
 	}
 }
 
+// TestSuppressionRuleIsolation is the cross-tenant leak test for tenant_suppression_rules
+// (migration 000021): a rule created by tenant A must be invisible to tenant B under RLS.
+func TestSuppressionRuleIsolation(t *testing.T) {
+	pool := getTestPool(t)
+	defer pool.Close()
+
+	ctx := context.Background()
+	tenantA := uuid.New()
+	tenantB := uuid.New()
+	if _, err := pool.Exec(ctx, "INSERT INTO tenants (id, name, slug, status) VALUES ($1, 'Sup A', 'sup-iso-a', 'active')", tenantA); err != nil {
+		t.Fatalf("insert tenant A: %v", err)
+	}
+	defer pool.Exec(ctx, "DELETE FROM tenants WHERE id = $1", tenantA)
+	if _, err := pool.Exec(ctx, "INSERT INTO tenants (id, name, slug, status) VALUES ($1, 'Sup B', 'sup-iso-b', 'active')", tenantB); err != nil {
+		t.Fatalf("insert tenant B: %v", err)
+	}
+	defer pool.Exec(ctx, "DELETE FROM tenants WHERE id = $1", tenantB)
+
+	ctxA := db.WithTenantID(ctx, tenantA)
+	if err := db.ExecuteInTenantTx(ctxA, pool, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctxA, `INSERT INTO tenant_suppression_rules (tenant_id, name, match_field, match_value) VALUES ($1, 'maint', 'host', 'web-01')`, tenantA)
+		return err
+	}); err != nil {
+		t.Fatalf("tenant A failed to create suppression rule: %v", err)
+	}
+
+	ctxB := db.WithTenantID(ctx, tenantB)
+	if err := db.ExecuteInTenantTx(ctxB, pool, func(tx pgx.Tx) error {
+		var count int
+		if err := tx.QueryRow(ctxB, `SELECT COUNT(*) FROM tenant_suppression_rules`).Scan(&count); err != nil {
+			return err
+		}
+		if count != 0 {
+			t.Errorf("SECURITY BREACH: tenant B saw %d suppression rule(s) belonging to tenant A", count)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("tenant B transaction failed: %v", err)
+	}
+}
+

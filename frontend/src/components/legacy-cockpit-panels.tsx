@@ -5,6 +5,7 @@ import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAx
 import {
   Activity,
   Ban,
+  BellOff,
   Check,
   Copy,
   Cpu,
@@ -31,6 +32,7 @@ import { ResponseActionsPanel } from '@/components/settings/response-actions-pan
 import { AccessControlPanel } from '@/components/settings/access-control-panel';
 import { OperationalKpisPanel } from '@/components/settings/operational-kpis-panel';
 import { TopologyView } from '@/components/settings/topology-view';
+import { SuppressionRulesPanel } from '@/components/settings/suppression-rules-panel';
 import type { SLAExecutiveStats } from '@/types';
 
 type AsyncStatus = { status: 'idle' | 'saving' | 'success' | 'error'; message?: string };
@@ -598,6 +600,18 @@ export function LegacyCockpitPanels({ cockpitTab, onSearchTermChange }: LegacyCo
                     >
                       <User className="w-3.5 h-3.5 text-violet-400" />
                       <span>Usuários (RBAC)</span>
+                    </button>
+                    <button
+                      onClick={() => {
+                        setSelectedIntegrationTool('suppression');
+                        setValidationResult(null);
+                      }}
+                      className={`w-full px-3 py-2 rounded-lg text-left text-xs font-bold transition-all flex items-center gap-2 ${
+                        selectedIntegrationTool === 'suppression' ? 'bg-white/5 text-white border-l-2 border-cyan-400' : 'text-slate-400 hover:bg-white/[0.02] hover:text-slate-200'
+                      }`}
+                    >
+                      <BellOff className="w-3.5 h-3.5 text-amber-400" />
+                      <span>Regras de Supressão</span>
                     </button>
                     <button
                       onClick={() => {
@@ -1501,6 +1515,8 @@ export function LegacyCockpitPanels({ cockpitTab, onSearchTermChange }: LegacyCo
                   <RunbookApprovalsPanel />
                 ) : selectedIntegrationTool === 'response_actions' ? (
                   <ResponseActionsPanel />
+                ) : selectedIntegrationTool === 'suppression' ? (
+                  <SuppressionRulesPanel tenantId={selectedTenant?.id} />
                 ) : selectedIntegrationTool === 'access_admin' ? (
                   <AccessControlPanel />
                 ) : selectedIntegrationTool === 'users_admin' ? (

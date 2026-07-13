@@ -134,6 +134,27 @@ func (wp *WorkerPool) processEvent(ctx context.Context, event model.UnifiedIncid
 	// Construct RLS context for this tenant
 	tenantCtx := db.WithTenantID(ctx, event.TenantID)
 
+	// Temporal suppression (Fase 3/3d): drop events matching an active tenant suppression rule
+	// (e.g. a maintenance window) before they ever become an alert/incident. System-generated
+	// alerts (the connection watchdog) are never suppressed — losing a "source is down" signal to a
+	// suppression rule would defeat the whole point.
+	if event.Source != model.SourceSystem {
+		if rules := wp.loadSuppressionRules(tenantCtx, event.TenantID); len(rules) > 0 {
+			fields := map[string]string{
+				"event_type": event.EventType,
+				"host":       event.Host,
+				"summary":    event.Title,
+				"source":     string(event.Source),
+				"severity":   string(event.Severity),
+			}
+			if eventSuppressed(rules, fields, time.Now()) {
+				wp.redisClient.Incr(ctx, "suppression:count:"+event.TenantID.String())
+				log.Printf("[Suppression] Suppressed event for tenant %s (event_type=%q, host=%q)", event.TenantID, event.EventType, event.Host)
+				return nil
+			}
+		}
+	}
+
 	// 0. Dynamic Ingestion Normalization: lookup mapping rules in PostgreSQL
 	var severityOverride string
 	queryRule := `

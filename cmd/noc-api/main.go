@@ -717,6 +717,19 @@ func main() {
 	protectedResolveIncidentGroup := middleware.JWTAuth(jwtSecret)(middleware.RequireRole(model.RoleAnalystL1)(api.HandleResolveIncidentGroup(appPool)))
 	mux.Handle("/api/v1/incidents/group/resolve", protectedResolveIncidentGroup)
 
+	// Temporal suppression rules (Fase 3/3d): one route, method-dispatched — GET lists (any
+	// authenticated user), POST/DELETE mutate (tenant admins). Single registration avoids a
+	// ServeMux "multiple registrations" collision.
+	suppGet := api.HandleGetSuppressionRules(appPool)
+	suppMutate := middleware.RequireRole(model.RoleTenantAdmin)(api.HandleMutateSuppressionRules(appPool, redisClient))
+	mux.Handle("/api/v1/suppression-rules", middleware.JWTAuth(jwtSecret)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			suppGet.ServeHTTP(w, r)
+			return
+		}
+		suppMutate.ServeHTTP(w, r)
+	})))
+
 	// Real asset topology: the tenant's actual reporting hosts derived from its alert stream,
 	// replacing the old hardcoded 6-node SVG. Same authenticated-user access level as SLA stats.
 	protectedGetTopology := middleware.JWTAuth(jwtSecret)(api.HandleGetTopology(appPool))
