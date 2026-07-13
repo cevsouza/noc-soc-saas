@@ -6,6 +6,7 @@ import { useAuth } from '@/lib/auth-context';
 import { useTenantSelection } from '@/lib/tenant-context';
 import { useAlertsSocket } from '@/lib/use-alerts-socket';
 import { usePendingApprovalsCount } from '@/lib/use-pending-approvals-count';
+import { usePendingResponseCount } from '@/lib/use-pending-response-count';
 import { AppHeader } from '@/components/app-header';
 import { AlertStatCards } from '@/components/alerts/alert-stat-cards';
 import { AlertsSearchBar } from '@/components/alerts/alerts-search-bar';
@@ -31,6 +32,8 @@ export default function CockpitPage() {
   const { tenants, selectedTenantIds, setSelectedTenantIds } = useTenantSelection();
   const { alerts, setAlerts, connStatus } = useAlertsSocket(token, selectedTenantIds);
   const { count: pendingApprovals, refetch: refetchApprovals } = usePendingApprovalsCount(token);
+  const { count: pendingResponses } = usePendingResponseCount(token);
+  const pendingSettingsCount = pendingApprovals + pendingResponses;
 
   const [cockpitTab, setCockpitTab] = useState<CockpitTab>('alerts');
   const [searchTerm, setSearchTerm] = useState('');
@@ -151,9 +154,9 @@ export default function CockpitPage() {
               <button onClick={() => setCockpitTab('settings')} className={TAB_BUTTON_CLASS(cockpitTab === 'settings')}>
                 <Settings className="w-3.5 h-3.5" />
                 Configuração MSP
-                {pendingApprovals > 0 && (
+                {pendingSettingsCount > 0 && (
                   <span className="ml-1 px-1.5 py-0.5 rounded-full bg-rose-500/20 border border-rose-500/40 text-rose-400 text-[9px] font-bold leading-none">
-                    {pendingApprovals}
+                    {pendingSettingsCount}
                   </span>
                 )}
               </button>

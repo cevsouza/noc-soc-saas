@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import {
   Activity,
+  Ban,
   Check,
   Copy,
   Cpu,
@@ -26,6 +27,7 @@ import { useTenantSelection } from '@/lib/tenant-context';
 import { apiFetch } from '@/lib/api-client';
 import { API_BASE_URL } from '@/lib/env';
 import { RunbookApprovalsPanel } from '@/components/settings/runbook-approvals-panel';
+import { ResponseActionsPanel } from '@/components/settings/response-actions-panel';
 import { AccessControlPanel } from '@/components/settings/access-control-panel';
 import { OperationalKpisPanel } from '@/components/settings/operational-kpis-panel';
 import type { Alert, SLAExecutiveStats } from '@/types';
@@ -670,6 +672,18 @@ export function LegacyCockpitPanels({ cockpitTab, alerts, onSearchTermChange }: 
                 >
                   <ShieldAlert className="w-3.5 h-3.5 text-amber-400" />
                   <span>Aprovações Pendentes</span>
+                </button>
+                <button
+                  onClick={() => {
+                    setSelectedIntegrationTool('response_actions');
+                    setValidationResult(null);
+                  }}
+                  className={`w-full px-3 py-2 rounded-lg text-left text-xs font-bold transition-all flex items-center gap-2 ${
+                    selectedIntegrationTool === 'response_actions' ? 'bg-white/5 text-white border-l-2 border-cyan-400' : 'text-slate-400 hover:bg-white/[0.02] hover:text-slate-200'
+                  }`}
+                >
+                  <Ban className="w-3.5 h-3.5 text-rose-400" />
+                  <span>Fila de Contenção</span>
                 </button>
 
                 {user?.role === 'admin' && (
@@ -1588,6 +1602,8 @@ export function LegacyCockpitPanels({ cockpitTab, alerts, onSearchTermChange }: 
                   <OperationalKpisPanel tenantId={selectedTenant?.id} />
                 ) : selectedIntegrationTool === 'approvals_admin' ? (
                   <RunbookApprovalsPanel />
+                ) : selectedIntegrationTool === 'response_actions' ? (
+                  <ResponseActionsPanel />
                 ) : selectedIntegrationTool === 'access_admin' ? (
                   <AccessControlPanel />
                 ) : selectedIntegrationTool === 'users_admin' ? (
