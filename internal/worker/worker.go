@@ -21,8 +21,6 @@ import (
 	"noc-api/internal/repository"
 	"noc-api/internal/security"
 
-	"strings"
-
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -324,9 +322,15 @@ func (wp *WorkerPool) createNewAlert(ctx context.Context, tx pgx.Tx, event model
 		}
 	}(newAlert.ID, newAlert.TenantID, newAlert.Summary, event.Host, newAlert.Payload)
 
-	// Trigger self healing remote script (SOAR Playbook Auto-Healing Engine) if CRITICAL/FATAL
+	// Trigger self healing remote script (SOAR Playbook Auto-Healing Engine) if CRITICAL/FATAL.
+	// System-generated alerts (the connection watchdog) must escalate so a human is paged, but
+	// must NOT auto-run SOAR remediation runbooks — those target infra faults, not a connectivity
+	// gap, and triggerSOARPlaybooks fires every auto_trigger runbook regardless of the alert's
+	// subject. So we page but skip remediation for source=system.
 	if newAlert.Severity == model.SeverityCritical || newAlert.Severity == model.SeverityFatal {
-		wp.triggerSOARPlaybooks(ctx, newAlert)
+		if event.Source != model.SourceSystem {
+			wp.triggerSOARPlaybooks(ctx, newAlert)
+		}
 		wp.triggerEscalations(ctx, newAlert)
 	}
 
@@ -650,74 +654,6 @@ func (wp *WorkerPool) createRunbookApprovalRequest(ctx context.Context, runbookI
 		return
 	}
 	log.Printf("[SOAR Approval] Runbook '%s' for alert %s requires human approval before execution", runbookName, alert.ID)
-}
-
-// StartWatchdog initializes the background heartbeat ticker checker.
-func (wp *WorkerPool) StartWatchdog(ctx context.Context) {
-	ticker := time.NewTicker(30 * time.Second)
-	go func() {
-		for {
-			select {
-			case <-wp.stopChan:
-				ticker.Stop()
-				return
-			case <-ctx.Done():
-				ticker.Stop()
-				return
-			case <-ticker.C:
-				wp.checkConnectorsHealth(ctx)
-			}
-		}
-	}()
-}
-
-func (wp *WorkerPool) checkConnectorsHealth(ctx context.Context) {
-	keys, err := wp.redisClient.Keys(ctx, "heartbeat:connector:*").Result()
-	if err != nil {
-		return
-	}
-
-	currentTime := time.Now().Unix()
-	const limitSeconds = 600 // 10 minutes without telemetry signal
-
-	for _, key := range keys {
-		lastSeenStr, err := wp.redisClient.Get(ctx, key).Result()
-		if err != nil {
-			continue
-		}
-		var lastSeen int64
-		_, _ = fmt.Sscanf(lastSeenStr, "%d", &lastSeen)
-
-		timeElapsed := currentTime - lastSeen
-		if timeElapsed > limitSeconds {
-			parts := strings.Split(key, ":")
-			if len(parts) < 4 {
-				continue
-			}
-			tenantIDStr := parts[2]
-			connectorName := parts[3]
-
-			tenantID, err := uuid.Parse(tenantIDStr)
-			if err != nil {
-				continue
-			}
-
-			summary := fmt.Sprintf("Watchdog Heartbeat: Perda de Telemetria / Falha de Comunicação com conector %s há %ds", connectorName, timeElapsed)
-
-			incident := model.UnifiedIncident{
-				ID:        uuid.New(),
-				TenantID:  tenantID,
-				Source:    model.SourceSystem,
-				EventType: "telemetry_loss_" + connectorName,
-				Severity:  model.SeverityCritical,
-				Title:     summary,
-				Timestamp: time.Now(),
-				Host:      "watchdog",
-			}
-
-			_ = wp.processEvent(ctx, incident)
-		}
-	}
 }
 
 // StartMappingEngine runs a background thread that translates raw messages into normalized UnifiedIncident structures.
