@@ -253,6 +253,11 @@ func (wp *WorkerPool) createNewAlert(ctx context.Context, tx pgx.Tx, event model
 		return err
 	}
 
+	// Group this alert into an incident (find-or-create an open incident for its fingerprint) and
+	// link it. Runs inside a SAVEPOINT so a grouping failure rolls back only the incident work and
+	// never drops the alert itself.
+	wp.attachIncident(ctx, tx, newAlert, fingerprint)
+
 	// Push to AI evaluation queue for Python worker processing
 	aiPayload := map[string]interface{}{
 		"alert_id":  newAlert.ID.String(),

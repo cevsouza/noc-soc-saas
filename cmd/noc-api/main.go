@@ -703,6 +703,11 @@ func main() {
 	protectedGetOperationalStats := middleware.JWTAuth(jwtSecret)(api.HandleGetOperationalStats(appPool, redisClient))
 	mux.Handle("/api/v1/reports/operational/stats", protectedGetOperationalStats)
 
+	// Incidents (Fase 3/3b): the grouped-investigation view — recurring alerts of the same problem
+	// collapsed into one incident. Same authenticated-user access level as the alerts feed.
+	protectedGetIncidents := middleware.JWTAuth(jwtSecret)(api.HandleGetIncidents(appPool))
+	mux.Handle("/api/v1/incidents", protectedGetIncidents)
+
 	// Real asset topology: the tenant's actual reporting hosts derived from its alert stream,
 	// replacing the old hardcoded 6-node SVG. Same authenticated-user access level as SLA stats.
 	protectedGetTopology := middleware.JWTAuth(jwtSecret)(api.HandleGetTopology(appPool))
