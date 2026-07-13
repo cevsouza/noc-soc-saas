@@ -100,14 +100,23 @@ func main() {
 		if cfg.PollIntervalSeconds > 0 {
 			pollInterval = time.Duration(cfg.PollIntervalSeconds) * time.Second
 		}
-		// Collect SNMP threshold breaches from the configured targets. An empty batch is a heartbeat.
-		events := agent.Collect(poller, cfg.SNMPTargets)
+		// Collect SNMP threshold breaches (events) + raw values (metric samples) from the configured
+		// targets. An empty events batch is a heartbeat.
+		events, samples := agent.Collect(poller, cfg.SNMPTargets)
 		accepted, err := client.SendEvents(st.AgentID, events)
 		if err != nil {
 			log.Printf("[agent] events push failed: %v", err)
 			return
 		}
-		log.Printf("[agent] cycle ok (snmp_targets=%d, events=%d accepted=%d, next in %s)", len(cfg.SNMPTargets), len(events), accepted, pollInterval)
+		metricsAccepted := 0
+		if len(samples) > 0 {
+			if n, merr := client.SendMetrics(st.AgentID, samples); merr != nil {
+				log.Printf("[agent] metrics push failed: %v", merr)
+			} else {
+				metricsAccepted = n
+			}
+		}
+		log.Printf("[agent] cycle ok (snmp_targets=%d, events=%d accepted=%d, metrics=%d accepted=%d, next in %s)", len(cfg.SNMPTargets), len(events), accepted, len(samples), metricsAccepted, pollInterval)
 	}
 
 	runCycle()

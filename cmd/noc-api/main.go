@@ -486,6 +486,11 @@ func main() {
 	mux.Handle("/api/v1/agent/enroll", api.HandleEnrollAgent(appPool))
 	mux.Handle("/api/v1/agent/config", middleware.APIKeyAuth(appPool, redisClient, jwtSecret)(api.HandleGetAgentConfig(appPool)))
 	mux.Handle("/api/v1/agent/events", ingestGuard(api.HandleAgentEvents(appPool, redisClient)))
+	// Raw SNMP metric samples (slice 3): agent pushes (API key + ingest guard); console reads the
+	// catalog + series (JWT, tenant-scoped) to graph them.
+	mux.Handle("/api/v1/agent/metrics", ingestGuard(api.HandleAgentMetrics(appPool)))
+	mux.Handle("/api/v1/agent/metrics/catalog", middleware.JWTAuth(jwtSecret)(api.HandleGetMetricsCatalog(appPool)))
+	mux.Handle("/api/v1/agent/metrics/series", middleware.JWTAuth(jwtSecret)(api.HandleGetMetricsSeries(appPool)))
 
 	// SNMP collection targets (slice 2): one route, method-dispatched — GET lists (any authenticated
 	// user), POST/DELETE mutate (tenant admins). The agent reads these (community decrypted) via

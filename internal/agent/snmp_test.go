@@ -61,7 +61,7 @@ func TestCollectEmitsOnlyBreaches(t *testing.T) {
 		"1.3.6.1.4.1.9.9.109.1.1.1.1.5.1": 95,
 		"1.3.6.1.2.1.25.2.3.1.6.1":        40,
 	}}
-	events := Collect(poller, []SNMPTarget{target})
+	events, samples := Collect(poller, []SNMPTarget{target})
 	if len(events) != 1 {
 		t.Fatalf("want 1 breach event, got %d: %+v", len(events), events)
 	}
@@ -72,12 +72,19 @@ func TestCollectEmitsOnlyBreaches(t *testing.T) {
 	if e.ExternalID != "10.0.0.1:1.3.6.1.4.1.9.9.109.1.1.1.1.5.1" {
 		t.Fatalf("external_id = %q", e.ExternalID)
 	}
+	// Both checks returned a value, so we get a sample for each (breach or not).
+	if len(samples) != 2 {
+		t.Fatalf("want 2 samples, got %d: %+v", len(samples), samples)
+	}
 }
 
 func TestCollectUnreachableEmitsWarning(t *testing.T) {
 	target := SNMPTarget{Name: "edge", Host: "10.0.0.2", Checks: []Check{{OID: "1.2.3", Label: "x", Comparison: "gt", Threshold: 1, Severity: "critical"}}}
-	events := Collect(fakePoller{err: errors.New("timeout")}, []SNMPTarget{target})
+	events, samples := Collect(fakePoller{err: errors.New("timeout")}, []SNMPTarget{target})
 	if len(events) != 1 || events[0].EventType != "snmp_unreachable" || events[0].Severity != "warning" {
 		t.Fatalf("want 1 unreachable warning, got %+v", events)
+	}
+	if len(samples) != 0 {
+		t.Fatalf("unreachable target must yield no samples, got %d", len(samples))
 	}
 }

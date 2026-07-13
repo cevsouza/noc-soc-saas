@@ -37,6 +37,14 @@ type Poller interface {
 	Poll(target SNMPTarget, oids []string) (map[string]float64, error)
 }
 
+// Sample is one raw polled value, reported as a time-series metric (slice 3).
+type Sample struct {
+	TargetID string  `json:"target_id"`
+	OID      string  `json:"oid"`
+	Label    string  `json:"label"`
+	Value    float64 `json:"value"`
+}
+
 // normOID drops a leading dot so requested and returned OIDs compare consistently.
 func normOID(oid string) string { return strings.TrimPrefix(oid, ".") }
 
@@ -60,10 +68,12 @@ func evaluateCheck(value, threshold float64, comparison string) bool {
 	}
 }
 
-// Collect polls every target and returns the alert events for all breaches. A target that can't be
-// reached yields a single "snmp_unreachable" warning event so a down device is visible.
-func Collect(poller Poller, targets []SNMPTarget) []Event {
+// Collect polls every target and returns (a) the alert events for threshold breaches and (b) the raw
+// value samples for every check (time-series metrics). A target that can't be reached yields a single
+// "snmp_unreachable" warning event and no samples.
+func Collect(poller Poller, targets []SNMPTarget) ([]Event, []Sample) {
 	var events []Event
+	var samples []Sample
 	for _, t := range targets {
 		oids := make([]string, 0, len(t.Checks))
 		seen := map[string]bool{}
@@ -89,6 +99,7 @@ func Collect(poller Poller, targets []SNMPTarget) []Event {
 			if !ok {
 				continue // OID not returned by the device
 			}
+			samples = append(samples, Sample{TargetID: t.ID, OID: normOID(c.OID), Label: c.Label, Value: v})
 			if evaluateCheck(v, c.Threshold, c.Comparison) {
 				events = append(events, Event{
 					Source: "snmp", ExternalID: t.Host + ":" + normOID(c.OID), EventType: c.Label,
@@ -98,7 +109,7 @@ func Collect(poller Poller, targets []SNMPTarget) []Event {
 			}
 		}
 	}
-	return events
+	return events, samples
 }
 
 // gosnmpPoller is the real SNMP v2c poller.

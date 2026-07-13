@@ -127,3 +127,23 @@ func (c *Client) SendEvents(agentID string, events []Event) (int, error) {
 	_ = json.Unmarshal(body, &out)
 	return out.Accepted, nil
 }
+
+// SendMetrics pushes a batch of raw metric samples (time-series). Returns the number accepted.
+func (c *Client) SendMetrics(agentID string, samples []Sample) (int, error) {
+	resp, err := c.postJSON("/api/v1/agent/metrics?agent_id="+agentID, map[string]interface{}{
+		"agent_id": agentID, "samples": samples,
+	}, true)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusAccepted {
+		return 0, fmt.Errorf("metrics failed: status %d: %s", resp.StatusCode, string(body))
+	}
+	var out struct {
+		Accepted int `json:"accepted"`
+	}
+	_ = json.Unmarshal(body, &out)
+	return out.Accepted, nil
+}

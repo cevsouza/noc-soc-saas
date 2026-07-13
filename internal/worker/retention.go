@@ -46,15 +46,22 @@ func (wp *WorkerPool) enforceRetention(ctx context.Context) {
 		log.Printf("[Retention] Failed to list active tenants: %v", err)
 		return
 	}
+	metricsDays := envInt64("METRICS_RETENTION_DAYS", 30)
 	for _, tid := range tenantIDs {
 		tctx := db.WithTenantID(ctx, tid)
 		var days int
 		var enabled bool
 		var deleted int64
 		err := db.ExecuteInTenantTx(tctx, wp.pgPool, func(tx pgx.Tx) error {
+			// Metrics retention: fixed window for every tenant (raw SNMP samples grow fast; the
+			// graphs only need a recent window). Independent of the opt-in alert retention below.
+			if _, e := tx.Exec(tctx, `DELETE FROM agent_metrics WHERE tenant_id = $1 AND ts < NOW() - make_interval(days => $2)`, tid, metricsDays); e != nil {
+				return e
+			}
+			// Alerts retention: opt-in per tenant_retention.
 			e := tx.QueryRow(tctx, `SELECT alerts_retention_days FROM tenant_retention WHERE tenant_id = $1`, tid).Scan(&days)
 			if errors.Is(e, pgx.ErrNoRows) {
-				return nil // no policy — keep forever
+				return nil // no policy — keep alerts forever
 			}
 			if e != nil {
 				return e
