@@ -29,6 +29,14 @@ const STATUS_CLASS: Record<string, string> = {
   resolved: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/25',
 };
 
+// Dynamic risk score (0-100): severity + recurrence. Colored by band.
+function riskClass(score: number): string {
+  if (score >= 80) return 'bg-rose-600/20 text-rose-300 border-rose-500/40';
+  if (score >= 55) return 'bg-amber-500/15 text-amber-400 border-amber-500/30';
+  if (score >= 30) return 'bg-sky-500/15 text-sky-400 border-sky-500/30';
+  return 'bg-slate-500/15 text-slate-400 border-slate-500/25';
+}
+
 // Incidents view (Fase 3/3b-cont): the grouped-investigation surface. Each row is an incident —
 // the recurring alerts of one problem collapsed together — with acknowledge/resolve actions and an
 // expandable list of the alerts it groups. Resolving closes the incident (a new occurrence opens a
@@ -170,6 +178,9 @@ export function IncidentsView({ tenantId }: { tenantId?: string }) {
                   {expandedId === inc.id ? <ChevronDown className="w-4 h-4 text-slate-400 mt-0.5 shrink-0" /> : <ChevronRight className="w-4 h-4 text-slate-400 mt-0.5 shrink-0" />}
                   <div className="flex flex-col gap-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
+                      <span className={`px-2 py-0.5 rounded text-[9px] font-extrabold uppercase tracking-wider border ${riskClass(inc.risk_score)}`} title="Score de risco dinâmico (severidade + recorrência)">
+                        risco {inc.risk_score}
+                      </span>
                       <span className={`px-2 py-0.5 rounded text-[9px] font-extrabold uppercase tracking-wider border ${SEVERITY_CLASS[inc.severity] || 'bg-slate-500/10 text-slate-400 border-slate-500/25'}`}>{inc.severity}</span>
                       <span className={`px-2 py-0.5 rounded text-[9px] font-extrabold uppercase tracking-wider border ${STATUS_CLASS[inc.status] || 'bg-slate-500/10 text-slate-400 border-slate-500/25'}`}>{inc.status}</span>
                       <span className="text-sm font-bold text-slate-200 truncate">{inc.title}</span>

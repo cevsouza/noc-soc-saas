@@ -14,6 +14,7 @@ export interface Incident {
   title: string;
   severity: string;
   status: string;
+  risk_score: number;
   alert_count: number;
   first_seen: string;
   last_seen: string;

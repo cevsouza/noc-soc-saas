@@ -24,6 +24,7 @@ type Incident struct {
 	Title       string     `json:"title"`
 	Severity    string     `json:"severity"`
 	Status      string     `json:"status"`
+	RiskScore   int        `json:"risk_score"`
 	AlertCount  int        `json:"alert_count"`
 	FirstSeen   time.Time  `json:"first_seen"`
 	LastSeen    time.Time  `json:"last_seen"`
@@ -50,10 +51,10 @@ func HandleGetIncidents(pgPool *pgxpool.Pool) http.HandlerFunc {
 		list := make([]Incident, 0)
 		err = db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
 			rows, err := tx.Query(ctx, `
-				SELECT id, fingerprint, title, severity, status, alert_count, first_seen, last_seen, created_at, resolved_at
+				SELECT id, fingerprint, title, severity, status, risk_score, alert_count, first_seen, last_seen, created_at, resolved_at
 				FROM incidents
 				WHERE tenant_id = $1 AND ($2 = 'all' OR status = $2)
-				ORDER BY last_seen DESC
+				ORDER BY risk_score DESC, last_seen DESC
 				LIMIT 100
 			`, tenantID, statusFilter)
 			if err != nil {
@@ -62,7 +63,7 @@ func HandleGetIncidents(pgPool *pgxpool.Pool) http.HandlerFunc {
 			defer rows.Close()
 			for rows.Next() {
 				var inc Incident
-				if err := rows.Scan(&inc.ID, &inc.Fingerprint, &inc.Title, &inc.Severity, &inc.Status,
+				if err := rows.Scan(&inc.ID, &inc.Fingerprint, &inc.Title, &inc.Severity, &inc.Status, &inc.RiskScore,
 					&inc.AlertCount, &inc.FirstSeen, &inc.LastSeen, &inc.CreatedAt, &inc.ResolvedAt); err != nil {
 					return err
 				}

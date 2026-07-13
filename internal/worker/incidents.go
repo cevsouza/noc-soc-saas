@@ -49,6 +49,30 @@ func worseSeverity(a, b string) string {
 	return a
 }
 
+// riskSeverityBase is the severity contribution to an incident's dynamic risk score.
+var riskSeverityBase = map[string]int{"info": 10, "warning": 30, "critical": 50, "fatal": 70}
+
+// computeRiskScore derives a dynamic 0-100 risk score (Fase 3/3c) combining the incident's worst
+// severity with its recurrence (alert_count — how persistent the problem is / tenant history). This
+// is deliberately more than static severity: a recurring critical outranks a one-off critical.
+// Pure and unit-tested. (Asset criticality and threat-intel confidence are documented future
+// inputs — see migration 000020 — not yet available as data.)
+func computeRiskScore(severity string, recurrence int) int {
+	score := riskSeverityBase[severity]
+	if recurrence < 1 {
+		recurrence = 1
+	}
+	bonus := recurrence * 3
+	if bonus > 30 {
+		bonus = 30
+	}
+	score += bonus
+	if score > 100 {
+		score = 100
+	}
+	return score
+}
+
 // findOrCreateOpenIncident returns the id of the OPEN incident that groups this fingerprint for the
 // tenant, creating one if none exists. On an existing incident it bumps the alert count, refreshes
 // last_seen, and raises the severity if this alert is worse. Must run inside the tenant RLS tx.
@@ -60,22 +84,25 @@ func findOrCreateOpenIncident(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID
 	bumpExisting := func() (uuid.UUID, bool, error) {
 		var id uuid.UUID
 		var cur string
+		var count int
 		err := tx.QueryRow(ctx, `
-			SELECT id, severity FROM incidents
+			SELECT id, severity, alert_count FROM incidents
 			WHERE tenant_id = $1 AND fingerprint = $2 AND status <> 'resolved'
 			LIMIT 1
-		`, tenantID, fingerprint).Scan(&id, &cur)
+		`, tenantID, fingerprint).Scan(&id, &cur, &count)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return uuid.Nil, false, nil
 		}
 		if err != nil {
 			return uuid.Nil, false, err
 		}
+		worst := worseSeverity(cur, severity)
+		newCount := count + 1
 		_, err = tx.Exec(ctx, `
 			UPDATE incidents
-			SET alert_count = alert_count + 1, last_seen = NOW(), updated_at = NOW(), severity = $2
+			SET alert_count = alert_count + 1, last_seen = NOW(), updated_at = NOW(), severity = $2, risk_score = $3
 			WHERE id = $1
-		`, id, worseSeverity(cur, severity))
+		`, id, worst, computeRiskScore(worst, newCount))
 		return id, true, err
 	}
 
@@ -85,10 +112,10 @@ func findOrCreateOpenIncident(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID
 
 	var id uuid.UUID
 	err := tx.QueryRow(ctx, `
-		INSERT INTO incidents (tenant_id, fingerprint, title, severity, status, alert_count)
-		VALUES ($1, $2, $3, $4, 'open', 1)
+		INSERT INTO incidents (tenant_id, fingerprint, title, severity, status, alert_count, risk_score)
+		VALUES ($1, $2, $3, $4, 'open', 1, $5)
 		RETURNING id
-	`, tenantID, fingerprint, title, severity).Scan(&id)
+	`, tenantID, fingerprint, title, severity, computeRiskScore(severity, 1)).Scan(&id)
 	if err != nil {
 		// Lost a race to another worker creating the same open incident — bump theirs instead.
 		var pgErr *pgconn.PgError
