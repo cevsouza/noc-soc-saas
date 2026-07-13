@@ -310,10 +310,12 @@ func HandleAgentDiscovery(pgPool *pgxpool.Pool) http.HandlerFunc {
 				if proto != "cdp" {
 					proto = "lldp"
 				}
+				// Edge identity is (local device, local port, remote neighbour); the remote port is a
+				// mutable attribute, so a re-walk after a rewire updates it in place (see migration 000028).
 				_, e := tx.Exec(ctx, `
 					INSERT INTO discovered_links (tenant_id, local_ip, local_port, remote_sysname, remote_chassis_id, remote_port_id, protocol, first_seen, last_seen)
 					VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
-					ON CONFLICT (tenant_id, local_ip, local_port, remote_chassis_id, remote_port_id) DO UPDATE SET
+					ON CONFLICT (tenant_id, local_ip, local_port, remote_chassis_id) DO UPDATE SET
 						remote_sysname = EXCLUDED.remote_sysname,
 						remote_port_id = EXCLUDED.remote_port_id,
 						protocol = EXCLUDED.protocol,
