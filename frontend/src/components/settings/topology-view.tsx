@@ -3,12 +3,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { RefreshCw, Radar, ServerCog } from 'lucide-react';
 import { apiFetchJson } from '@/lib/api-client';
-import type { TopologyResponse, TopologyNode } from '@/types';
+import type { TopologyGraph, GraphNode } from '@/types';
 
-// Real asset topology (Fase 7 fatia A-topologia). Replaces the old hardcoded 6-node SVG that was
-// identical for every tenant with the hosts that have actually reported telemetry, fetched from
-// GET /api/v1/topology. Lines here mean "reports telemetry into the NOC core" (a real relationship),
-// not physical network links we don't have. Clicking a node filters the Alerts tab by that host.
+// Merged topology graph (discovery slice C). Unifies three real sources fetched from
+// GET /api/v1/topology/graph: devices found by the active SNMP sweep (slice A), assets that reported
+// telemetry/alerts (carrying severity), and the physical LLDP/CDP edges between them (slice B). Lines
+// here are REAL physical adjacencies (not "reports to NOC core"). Clicking a node filters the Alerts
+// tab by that asset.
 export function TopologyView({
   tenantId,
   onSearchTermChange,
@@ -16,42 +17,57 @@ export function TopologyView({
   tenantId?: string;
   onSearchTermChange: (term: string) => void;
 }) {
-  const [data, setData] = useState<TopologyResponse | null>(null);
+  const [data, setData] = useState<TopologyGraph | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchTopology = useCallback(async () => {
+  const fetchGraph = useCallback(async () => {
     setIsLoading(true);
     setError(null);
     try {
       const qs = tenantId ? `?tenant_id=${tenantId}` : '';
-      const res = await apiFetchJson<TopologyResponse>(`/api/v1/topology${qs}`);
+      const res = await apiFetchJson<TopologyGraph>(`/api/v1/topology/graph${qs}`);
       setData(res);
     } catch (err) {
-      console.error('Failed to fetch topology:', err);
-      setError('Não foi possível carregar a topologia de ativos.');
+      console.error('Failed to fetch topology graph:', err);
+      setError('Não foi possível carregar o grafo de topologia.');
     } finally {
       setIsLoading(false);
     }
   }, [tenantId]);
 
   useEffect(() => {
-    fetchTopology();
-  }, [fetchTopology]);
+    fetchGraph();
+  }, [fetchGraph]);
 
   const nodes = data?.nodes ?? [];
+  const edges = data?.edges ?? [];
 
-  // Radial layout: assets arranged in a ring around a central NOC core. Positions computed once
-  // per node set. viewBox is 800x440; center at (400,210).
-  const layout = useMemo(() => {
-    const cx = 400;
-    const cy = 210;
+  // Ring layout: nodes on a circle, physical edges drawn as chords between their positions. Positions
+  // computed once per node set. viewBox 820x480; center (410,240).
+  const positions = useMemo(() => {
+    const cx = 410;
+    const cy = 240;
     const n = nodes.length;
-    const radius = n <= 6 ? 130 : n <= 12 ? 155 : 175;
-    return nodes.map((node, i) => {
+    const radius = n <= 6 ? 150 : n <= 14 ? 185 : 210;
+    const map: Record<string, { x: number; y: number; node: GraphNode }> = {};
+    nodes.forEach((node, i) => {
       const angle = (2 * Math.PI * i) / Math.max(n, 1) - Math.PI / 2;
-      return { node, x: cx + radius * Math.cos(angle), y: cy + radius * Math.sin(angle) };
+      map[node.id] = { x: cx + radius * Math.cos(angle), y: cy + radius * Math.sin(angle), node };
     });
+    return map;
+  }, [nodes]);
+
+  const counts = useMemo(() => {
+    let discovery = 0;
+    let telemetry = 0;
+    let neighbor = 0;
+    for (const n of nodes) {
+      if (n.origin === 'neighbor') neighbor++;
+      else if (n.origin === 'telemetry') telemetry++;
+      else discovery++; // discovery + both
+    }
+    return { discovery, telemetry, neighbor };
   }, [nodes]);
 
   return (
@@ -59,10 +75,10 @@ export function TopologyView({
       <div className="flex justify-between items-center mb-4">
         <div className="flex flex-col gap-0.5">
           <h4 className="text-sm font-extrabold text-slate-200 uppercase tracking-wider flex items-center gap-2">
-            <Radar className="w-4 h-4 text-cyan-400" /> Mapeamento de Topologia &amp; CMDB
+            <Radar className="w-4 h-4 text-cyan-400" /> Grafo de Topologia (descoberta ativa)
           </h4>
           <p className="text-[10px] text-slate-500 uppercase tracking-wider font-semibold">
-            Ativos reais derivados da telemetria recebida ({data?.window_days ?? 30}d) · {data?.total_assets ?? 0} host(s)
+            {nodes.length} ativo(s) · {edges.length} enlace(s) físico(s) LLDP/CDP · descobertos {counts.discovery} · telemetria {counts.telemetry} · vizinhos {counts.neighbor}
           </p>
         </div>
         <div className="flex items-center gap-4">
@@ -70,9 +86,10 @@ export function TopologyView({
             <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span> Operacional</span>
             <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-amber-500"></span> Atenção</span>
             <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-ping"></span> Incidente</span>
+            <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-slate-500"></span> Vizinho</span>
           </div>
           <button
-            onClick={fetchTopology}
+            onClick={fetchGraph}
             disabled={isLoading}
             className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-bold text-slate-300 bg-white/5 hover:bg-white/10 transition-all disabled:opacity-50"
           >
@@ -85,20 +102,21 @@ export function TopologyView({
         <div className="p-3 rounded-lg bg-rose-950/20 border border-rose-500/25 text-xs text-rose-300 mb-3">{error}</div>
       )}
 
-      <div className="relative w-full h-[420px] bg-black/60 rounded-xl border border-white/5 flex items-center justify-center overflow-hidden">
+      <div className="relative w-full h-[460px] bg-black/60 rounded-xl border border-white/5 flex items-center justify-center overflow-hidden">
         {isLoading && !data ? (
-          <div className="text-xs text-slate-500">Carregando ativos…</div>
+          <div className="text-xs text-slate-500">Carregando grafo…</div>
         ) : nodes.length === 0 ? (
           <div className="flex flex-col items-center gap-2 text-slate-500 px-6 text-center">
             <ServerCog className="w-8 h-8 text-slate-600" />
-            <p className="text-sm font-bold text-slate-400">Nenhum ativo descoberto ainda</p>
+            <p className="text-sm font-bold text-slate-400">Nenhum ativo no grafo ainda</p>
             <p className="text-[11px] max-w-md">
-              Os nós aparecem automaticamente conforme as fontes de monitoramento enviam alertas
-              identificando o host afetado. Configure e conecte as integrações para popular o mapa.
+              Os nós aparecem conforme a descoberta ativa (varredura SNMP) inventaria dispositivos e as
+              fontes de monitoramento reportam alertas. Os enlaces surgem quando os equipamentos expõem
+              vizinhos por LLDP/CDP. Configure faixas em <strong>Descoberta de Rede</strong>.
             </p>
           </div>
         ) : (
-          <svg className="w-full h-full" viewBox="0 0 800 440">
+          <svg className="w-full h-full" viewBox="0 0 820 480">
             <defs>
               <pattern id="topo-grid" width="20" height="20" patternUnits="userSpaceOnUse">
                 <path d="M 20 0 L 0 0 0 20" fill="none" stroke="rgba(255,255,255,0.015)" strokeWidth="1" />
@@ -106,50 +124,49 @@ export function TopologyView({
             </defs>
             <rect width="100%" height="100%" fill="url(#topo-grid)" />
 
-            {/* Links: every asset reports into the central NOC core */}
-            {layout.map(({ node, x, y }) => (
-              <line
-                key={`l-${node.host}`}
-                x1="400"
-                y1="210"
-                x2={x}
-                y2={y}
-                stroke="rgba(255,255,255,0.08)"
-                strokeWidth="1.5"
-                strokeDasharray={node.unresolved_alerts > 0 ? '4 2' : undefined}
-              />
-            ))}
-
-            {/* Central NOC core */}
-            <g>
-              <circle cx="400" cy="210" r="34" className="fill-slate-900 stroke-cyan-500/50 stroke-2" />
-              <text x="400" y="207" className="fill-cyan-300 font-bold" fontSize="11" textAnchor="middle">NOC</text>
-              <text x="400" y="220" className="fill-slate-400 font-bold" fontSize="8" textAnchor="middle">CORE</text>
-            </g>
-
-            {/* Asset nodes */}
-            {layout.map(({ node, x, y }) => {
-              const color = severityColor(node.worst_severity, node.unresolved_alerts);
-              const label = node.host.length > 14 ? node.host.slice(0, 13) + '…' : node.host;
+            {/* Physical edges (LLDP/CDP) */}
+            {edges.map((e, i) => {
+              const s = positions[e.source];
+              const t = positions[e.target];
+              if (!s || !t) return null;
               return (
-                <g key={node.host} className="cursor-pointer" onClick={() => onSearchTermChange(node.host)}>
+                <g key={`e-${i}`}>
+                  <line
+                    x1={s.x}
+                    y1={s.y}
+                    x2={t.x}
+                    y2={t.y}
+                    stroke="rgba(56,189,248,0.35)"
+                    strokeWidth="1.5"
+                  />
+                  <title>{`${s.node.label} (${e.local_port || '?'}) ↔ ${t.node.label} (${e.remote_port || '?'}) · ${e.protocol.toUpperCase()}`}</title>
+                </g>
+              );
+            })}
+
+            {/* Nodes */}
+            {nodes.map((node) => {
+              const p = positions[node.id];
+              if (!p) return null;
+              const color = nodeColor(node);
+              const label = node.label.length > 14 ? node.label.slice(0, 13) + '…' : node.label;
+              return (
+                <g key={node.id} className="cursor-pointer" onClick={() => onSearchTermChange(node.label)}>
                   <title>
-                    {`${node.host}\n${node.total_alerts} alerta(s), ${node.unresolved_alerts} em aberto${
-                      node.sources.length ? `\nFontes: ${node.sources.join(', ')}` : ''
-                    }`}
+                    {`${node.label}\n${originLabel(node.origin)}${node.vendor ? ` · ${node.vendor}` : ''}${
+                      node.kind ? ` · ${node.kind}` : ''
+                    }${node.unresolved_alerts > 0 ? `\n${node.unresolved_alerts} alerta(s) em aberto` : ''}`}
                   </title>
                   {node.unresolved_alerts > 0 && (
-                    <circle cx={x} cy={y} r="30" className="fill-none animate-ping" stroke={color.ring} strokeWidth="1" />
+                    <circle cx={p.x} cy={p.y} r="28" className="fill-none animate-ping" stroke={color.ring} strokeWidth="1" />
                   )}
-                  <circle cx={x} cy={y} r="24" fill={color.fill} stroke={color.stroke} strokeWidth="2" />
-                  <text x={x} y={y - 1} className="fill-slate-100 font-bold" fontSize="8.5" textAnchor="middle">
+                  <circle cx={p.x} cy={p.y} r="22" fill={color.fill} stroke={color.stroke} strokeWidth="2" strokeDasharray={node.origin === 'neighbor' ? '3 2' : undefined} />
+                  <text x={p.x} y={p.y - 1} className="fill-slate-100 font-bold" fontSize="8.5" textAnchor="middle">
                     {label}
                   </text>
-                  {node.unresolved_alerts > 0 && (
-                    <text x={x} y={y + 10} className="fill-slate-300" fontSize="7.5" textAnchor="middle">
-                      {node.unresolved_alerts} aberto(s)
-                    </text>
-                  )}
+                  <text x={p.x} y={p.y + 9} className="fill-slate-400" fontSize="7" textAnchor="middle">
+                    {node.unresolved_alerts > 0 ? `${node.unresolved_alerts} aberto(s)` : kindLabel(node.kind)}
+                  </text>
                 </g>
               );
             })}
@@ -157,22 +174,61 @@ export function TopologyView({
         )}
 
         <div className="absolute bottom-4 left-6 text-[10px] text-slate-500 bg-black/60 border border-white/5 px-2.5 py-1 rounded-md">
-          💡 <em>Clique num ativo para filtrar os incidentes daquele host na aba Alertas.</em>
+          💡 <em>Linhas = enlaces físicos LLDP/CDP. Clique num ativo para filtrar os incidentes na aba Alertas.</em>
         </div>
       </div>
     </div>
   );
 }
 
-function severityColor(worst: string, unresolved: number): { fill: string; stroke: string; ring: string } {
-  if (unresolved === 0) return { fill: '#0f172a', stroke: '#10b981', ring: '#10b981' }; // operational (emerald)
-  switch (worst) {
-    case 'fatal':
-    case 'critical':
-      return { fill: '#221015', stroke: '#f43f5e', ring: '#f43f5e' }; // rose
-    case 'warning':
-      return { fill: '#221a10', stroke: '#f59e0b', ring: '#f59e0b' }; // amber
+function nodeColor(node: GraphNode): { fill: string; stroke: string; ring: string } {
+  if (node.unresolved_alerts > 0) {
+    switch (node.worst_severity) {
+      case 'fatal':
+      case 'critical':
+        return { fill: '#221015', stroke: '#f43f5e', ring: '#f43f5e' };
+      case 'warning':
+        return { fill: '#221a10', stroke: '#f59e0b', ring: '#f59e0b' };
+      default:
+        return { fill: '#0f172a', stroke: '#38bdf8', ring: '#38bdf8' };
+    }
+  }
+  if (node.origin === 'neighbor') return { fill: '#0b0f19', stroke: '#64748b', ring: '#64748b' }; // slate (unmanaged)
+  return { fill: '#0f172a', stroke: '#10b981', ring: '#10b981' }; // operational
+}
+
+function originLabel(origin: string): string {
+  switch (origin) {
+    case 'discovery':
+      return 'Descoberto (SNMP)';
+    case 'telemetry':
+      return 'Telemetria (alertas)';
+    case 'both':
+      return 'Descoberto + telemetria';
+    case 'neighbor':
+      return 'Vizinho (não gerenciado)';
     default:
-      return { fill: '#0f172a', stroke: '#38bdf8', ring: '#38bdf8' }; // info (sky)
+      return origin;
+  }
+}
+
+function kindLabel(kind: string): string {
+  switch (kind) {
+    case 'firewall':
+      return 'firewall';
+    case 'switch':
+      return 'switch';
+    case 'router':
+      return 'roteador';
+    case 'access_point':
+      return 'AP';
+    case 'server':
+      return 'servidor';
+    case 'host':
+      return 'host';
+    case 'neighbor':
+      return 'vizinho';
+    default:
+      return 'rede';
   }
 }
