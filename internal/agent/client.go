@@ -15,9 +15,11 @@ import (
 
 // Config is what the agent polls to learn what to do.
 type Config struct {
-	HeartbeatIntervalSeconds int          `json:"heartbeat_interval_seconds"`
-	PollIntervalSeconds      int          `json:"poll_interval_seconds"`
-	SNMPTargets              []SNMPTarget `json:"snmp_targets"`
+	HeartbeatIntervalSeconds  int               `json:"heartbeat_interval_seconds"`
+	PollIntervalSeconds       int               `json:"poll_interval_seconds"`
+	DiscoveryIntervalSeconds  int               `json:"discovery_interval_seconds"`
+	SNMPTargets               []SNMPTarget      `json:"snmp_targets"`
+	DiscoveryTargets          []DiscoveryTarget `json:"discovery_targets"`
 }
 
 // Event is one event the agent pushes (e.g. an SNMP threshold breach in slice 2).
@@ -140,6 +142,27 @@ func (c *Client) SendMetrics(agentID string, samples []Sample) (int, error) {
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusAccepted {
 		return 0, fmt.Errorf("metrics failed: status %d: %s", resp.StatusCode, string(body))
+	}
+	var out struct {
+		Accepted int `json:"accepted"`
+	}
+	_ = json.Unmarshal(body, &out)
+	return out.Accepted, nil
+}
+
+// SendDiscovery pushes the batch of discovered devices from a network sweep. Returns the number the
+// SaaS upserted into the tenant inventory.
+func (c *Client) SendDiscovery(agentID string, devices []DiscoveredDevice) (int, error) {
+	resp, err := c.postJSON("/api/v1/agent/discovery?agent_id="+agentID, map[string]interface{}{
+		"agent_id": agentID, "devices": devices,
+	}, true)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusAccepted {
+		return 0, fmt.Errorf("discovery failed: status %d: %s", resp.StatusCode, string(body))
 	}
 	var out struct {
 		Accepted int `json:"accepted"`

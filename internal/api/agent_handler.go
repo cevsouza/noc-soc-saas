@@ -195,11 +195,14 @@ func HandleEnrollAgent(pgPool *pgxpool.Pool) http.HandlerFunc {
 var errTokenRace = errors.New("enrollment token already claimed")
 
 // AgentConfig is what the agent polls to learn what to do — including its per-tenant SNMP targets
-// (slice 2), with the community decrypted for the authenticated agent.
+// (slice 2) and network discovery ranges (topology slice A), with communities decrypted for the
+// authenticated agent.
 type AgentConfig struct {
-	HeartbeatIntervalSeconds int               `json:"heartbeat_interval_seconds"`
-	PollIntervalSeconds      int               `json:"poll_interval_seconds"`
-	SNMPTargets              []AgentSNMPTarget `json:"snmp_targets"`
+	HeartbeatIntervalSeconds int                    `json:"heartbeat_interval_seconds"`
+	PollIntervalSeconds      int                    `json:"poll_interval_seconds"`
+	DiscoveryIntervalSeconds int                    `json:"discovery_interval_seconds"`
+	SNMPTargets              []AgentSNMPTarget      `json:"snmp_targets"`
+	DiscoveryTargets         []AgentDiscoveryTarget `json:"discovery_targets"`
 }
 
 // HandleGetAgentConfig returns the agent's configuration (API-key auth). Optional ?agent_id refreshes
@@ -214,14 +217,17 @@ func HandleGetAgentConfig(pgPool *pgxpool.Pool) http.HandlerFunc {
 		touchAgent(r, pgPool, tenantID)
 
 		targets := make([]AgentSNMPTarget, 0)
+		discovery := make([]AgentDiscoveryTarget, 0)
 		if masterKey, err := security.GetMasterKey(); err == nil {
 			ctx := db.WithTenantID(r.Context(), tenantID)
 			_ = db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
-				t, e := loadAgentSNMPTargets(ctx, tx, tenantID, masterKey)
-				if e == nil {
+				if t, e := loadAgentSNMPTargets(ctx, tx, tenantID, masterKey); e == nil {
 					targets = t
 				}
-				return e
+				if d, e := loadAgentDiscoveryTargets(ctx, tx, tenantID, masterKey); e == nil {
+					discovery = d
+				}
+				return nil
 			})
 		}
 
@@ -229,7 +235,9 @@ func HandleGetAgentConfig(pgPool *pgxpool.Pool) http.HandlerFunc {
 		_ = json.NewEncoder(w).Encode(AgentConfig{
 			HeartbeatIntervalSeconds: 60,
 			PollIntervalSeconds:      60,
+			DiscoveryIntervalSeconds: 900,
 			SNMPTargets:              targets,
+			DiscoveryTargets:         discovery,
 		})
 	}
 }

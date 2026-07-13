@@ -13,3 +13,4 @@ export * from './search';
 export * from './topology';
 export * from './suppression';
 export * from './metrics';
+export * from './discovery';

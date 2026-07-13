@@ -88,7 +88,12 @@ func main() {
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 
 	pollInterval := 60 * time.Second
+	// Active network discovery runs on a slower cadence than the metric poll (a full CIDR sweep is
+	// heavier); default 15 min, overridable via config. A zero time means "run on the first cycle".
+	discoveryInterval := 15 * time.Minute
+	var lastDiscovery time.Time
 	poller := agent.NewPoller()
+	scanner := agent.NewScanner()
 	log.Printf("[agent] noc-agent %s started; polling %s every %s (outbound 443 only)", agentVersion, saasURL, pollInterval)
 
 	runCycle := func() {
@@ -99,6 +104,9 @@ func main() {
 		}
 		if cfg.PollIntervalSeconds > 0 {
 			pollInterval = time.Duration(cfg.PollIntervalSeconds) * time.Second
+		}
+		if cfg.DiscoveryIntervalSeconds > 0 {
+			discoveryInterval = time.Duration(cfg.DiscoveryIntervalSeconds) * time.Second
 		}
 		// Collect SNMP threshold breaches (events) + raw values (metric samples) from the configured
 		// targets. An empty events batch is a heartbeat.
@@ -117,6 +125,24 @@ func main() {
 			}
 		}
 		log.Printf("[agent] cycle ok (snmp_targets=%d, events=%d accepted=%d, metrics=%d accepted=%d, next in %s)", len(cfg.SNMPTargets), len(events), accepted, len(samples), metricsAccepted, pollInterval)
+
+		// Active discovery: sweep configured CIDRs when the slower cadence is due.
+		if len(cfg.DiscoveryTargets) > 0 && time.Since(lastDiscovery) >= discoveryInterval {
+			lastDiscovery = time.Now()
+			devices, derr := agent.Discover(scanner, cfg.DiscoveryTargets)
+			if derr != nil {
+				log.Printf("[agent] discovery partial error: %v", derr)
+			}
+			if len(devices) > 0 {
+				if n, serr := client.SendDiscovery(st.AgentID, devices); serr != nil {
+					log.Printf("[agent] discovery push failed: %v", serr)
+				} else {
+					log.Printf("[agent] discovery ok (ranges=%d, found=%d, upserted=%d)", len(cfg.DiscoveryTargets), len(devices), n)
+				}
+			} else {
+				log.Printf("[agent] discovery ok (ranges=%d, found=0)", len(cfg.DiscoveryTargets))
+			}
+		}
 	}
 
 	runCycle()

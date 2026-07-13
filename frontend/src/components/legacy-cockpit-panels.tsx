@@ -16,6 +16,7 @@ import {
   Layers,
   Lock,
   Palette,
+  Radar,
   RefreshCw,
   ShieldAlert,
   ShieldCheck,
@@ -32,6 +33,7 @@ import { ResponseActionsPanel } from '@/components/settings/response-actions-pan
 import { AccessControlPanel } from '@/components/settings/access-control-panel';
 import { OperationalKpisPanel } from '@/components/settings/operational-kpis-panel';
 import { TopologyView } from '@/components/settings/topology-view';
+import { NetworkDiscoveryPanel } from '@/components/settings/network-discovery-panel';
 import { SuppressionRulesPanel } from '@/components/settings/suppression-rules-panel';
 import type { SLAExecutiveStats } from '@/types';
 
@@ -583,6 +585,18 @@ export function LegacyCockpitPanels({ cockpitTab, onSearchTermChange }: LegacyCo
                 >
                   <Ban className="w-3.5 h-3.5 text-rose-400" />
                   <span>Fila de Contenção</span>
+                </button>
+                <button
+                  onClick={() => {
+                    setSelectedIntegrationTool('network_discovery');
+                    setValidationResult(null);
+                  }}
+                  className={`w-full px-3 py-2 rounded-lg text-left text-xs font-bold transition-all flex items-center gap-2 ${
+                    selectedIntegrationTool === 'network_discovery' ? 'bg-white/5 text-white border-l-2 border-cyan-400' : 'text-slate-400 hover:bg-white/[0.02] hover:text-slate-200'
+                  }`}
+                >
+                  <Radar className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>Descoberta de Rede</span>
                 </button>
 
                 {user?.role === 'admin' && (
@@ -1515,6 +1529,8 @@ export function LegacyCockpitPanels({ cockpitTab, onSearchTermChange }: LegacyCo
                   <RunbookApprovalsPanel />
                 ) : selectedIntegrationTool === 'response_actions' ? (
                   <ResponseActionsPanel />
+                ) : selectedIntegrationTool === 'network_discovery' ? (
+                  <NetworkDiscoveryPanel tenantId={selectedTenant?.id} />
                 ) : selectedIntegrationTool === 'suppression' ? (
                   <SuppressionRulesPanel tenantId={selectedTenant?.id} />
                 ) : selectedIntegrationTool === 'access_admin' ? (

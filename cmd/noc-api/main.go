@@ -505,6 +505,22 @@ func main() {
 		snmpMutate.ServeHTTP(w, r)
 	})))
 
+	// Active network discovery (topology slice A): the agent sweeps configured CIDRs (community
+	// decrypted via /agent/config) and pushes back responders. discovery-targets is one route,
+	// method-dispatched — GET lists (any authenticated user), POST/DELETE mutate (tenant admins).
+	// The device inventory is pushed through the ingest guard and read by the console (JWT).
+	mux.Handle("/api/v1/agent/discovery", ingestGuard(api.HandleAgentDiscovery(appPool)))
+	discoGet := api.HandleGetDiscoveryTargets(appPool)
+	discoMutate := middleware.RequireRole(model.RoleTenantAdmin)(api.HandleMutateDiscoveryTargets(appPool))
+	mux.Handle("/api/v1/agent/discovery-targets", middleware.JWTAuth(jwtSecret)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			discoGet.ServeHTTP(w, r)
+			return
+		}
+		discoMutate.ServeHTTP(w, r)
+	})))
+	mux.Handle("/api/v1/discovered-devices", middleware.JWTAuth(jwtSecret)(api.HandleGetDiscoveredDevices(appPool)))
+
 	// Secure Vault Credentials Storage Endpoint (Postgres Vault with RLS & GCM Ciphers, protected by JWT & Admin Role check)
 	vaultRepo := repository.NewPostgresVaultRepository()
 
