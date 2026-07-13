@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"time"
 
+	"noc-api/internal/cache"
 	"noc-api/internal/connector"
 	"noc-api/internal/db"
 	"noc-api/internal/model"
@@ -96,7 +97,7 @@ func HandleCloudWatchIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) htt
 		incidents, err := connector.MustGet(model.SourceCloudWatch).MapToUnified([]byte(envelope.Message), tenantID)
 		if err != nil {
 			errMsg := fmt.Sprintf("Bad Request: Invalid CloudWatch alarm JSON payload: %v", err)
-			redisClient.Set(r.Context(), fmt.Sprintf("webhook:error:%s:%s", tenantID.String(), "cloudwatch"), errMsg, 24*time.Hour)
+			redisClient.Set(r.Context(), cache.TenantKey(tenantID, "webhook_error","cloudwatch"), errMsg, 24*time.Hour)
 			http.Error(w, "Bad Request: Invalid CloudWatch alarm JSON payload", http.StatusBadRequest)
 			return
 		}
@@ -113,8 +114,8 @@ func HandleCloudWatchIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) htt
 			return
 		}
 
-		redisClient.Set(r.Context(), fmt.Sprintf("heartbeat:connector:%s:%s", tenantID.String(), "cloudwatch"), time.Now().Unix(), 24*time.Hour)
-		redisClient.Del(r.Context(), fmt.Sprintf("webhook:error:%s:%s", tenantID.String(), "cloudwatch"))
+		redisClient.Set(r.Context(), cache.TenantKey(tenantID, "heartbeat","cloudwatch"), time.Now().Unix(), 24*time.Hour)
+		redisClient.Del(r.Context(), cache.TenantKey(tenantID, "webhook_error","cloudwatch"))
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)

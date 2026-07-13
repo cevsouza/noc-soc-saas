@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"noc-api/internal/api"
+	"noc-api/internal/cache"
 	"noc-api/internal/db"
 	"noc-api/internal/model"
 
@@ -165,7 +166,7 @@ func (wp *WorkerPool) scanTenantSLABreaches(ctx context.Context, tenantID uuid.U
 // escalateSLABreach pages the tenant's active escalation channels once per breach, suppressing
 // re-pages within the renotify window via a Redis flag keyed by incident + breach type.
 func (wp *WorkerPool) escalateSLABreach(ctx context.Context, tenantID uuid.UUID, oi openIncident, breach slaBreach, ageMinutes float64, target api.SLATarget, renotifySecs int64) {
-	flagKey := fmt.Sprintf("sla:escalated:%s:%s:%s", tenantID, oi.id, breach.label())
+	flagKey := cache.TenantKey(tenantID, "sla_escalated", oi.id.String(), breach.label())
 	if _, err := wp.redisClient.Get(ctx, flagKey).Result(); err == nil {
 		return // already paged for this breach within the re-notify window
 	}

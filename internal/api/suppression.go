@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"noc-api/internal/audit"
+	"noc-api/internal/cache"
 	"noc-api/internal/db"
 	"noc-api/internal/middleware"
 
@@ -63,7 +64,7 @@ func validateCreateSuppressionRule(req CreateSuppressionRuleRequest) error {
 
 func invalidateSuppressionCache(redisClient *redis.Client, tenantID uuid.UUID) {
 	if redisClient != nil {
-		_ = redisClient.Del(context.Background(), "suppression:rules:"+tenantID.String()).Err() // best-effort
+		_ = redisClient.Del(context.Background(), cache.TenantKey(tenantID, "suppression", "rules")).Err() // best-effort
 	}
 }
 

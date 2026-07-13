@@ -2,16 +2,19 @@ package api
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"strings"
 	"time"
 
+	"noc-api/internal/cache"
 	"noc-api/internal/middleware"
 	"noc-api/internal/model"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/redis/go-redis/v9"
 )
 
 type TenantResponse struct {
@@ -219,7 +222,7 @@ func HandleUpdateTenantStyle(pgPool *pgxpool.Pool) http.HandlerFunc {
 }
 
 // HandleDeleteTenant allows admins to delete a tenant (and cascades its relations, e.g. alerts, rules, etc.)
-func HandleDeleteTenant(pgPool *pgxpool.Pool) http.HandlerFunc {
+func HandleDeleteTenant(pgPool *pgxpool.Pool, redisClient *redis.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		tenantIDStr := r.URL.Query().Get("id")
 		tenantID, err := uuid.Parse(tenantIDStr)
@@ -248,6 +251,14 @@ func HandleDeleteTenant(pgPool *pgxpool.Pool) http.HandlerFunc {
 		if err := tx.Commit(ctx); err != nil {
 			http.Error(w, "Failed to commit transaction", http.StatusInternalServerError)
 			return
+		}
+
+		// Offboarding: wipe the tenant's ephemeral Redis footprint (heartbeats, rate-limit/breaker
+		// counters, suppression cache, SLA flags, etc.) now that they share one uniform prefix.
+		// Best-effort — the DB delete is the source of truth; a Redis hiccup just leaves keys to
+		// age out on their own TTLs.
+		if _, werr := cache.WipeTenant(ctx, redisClient, tenantID); werr != nil {
+			log.Printf("[Tenant] WipeTenant best-effort failed for %s: %v", tenantID, werr)
 		}
 
 		w.Header().Set("Content-Type", "application/json")

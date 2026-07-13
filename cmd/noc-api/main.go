@@ -590,7 +590,7 @@ func main() {
 	)
 	protectedDeleteTenant := middleware.JWTAuth(jwtSecret)(
 		middleware.RequireGlobalRole(model.RoleAdmin)(
-			api.HandleDeleteTenant(appPool),
+			api.HandleDeleteTenant(appPool, redisClient),
 		),
 	)
 	mux.Handle("/api/v1/tenants", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

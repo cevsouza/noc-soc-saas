@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"time"
 
+	"noc-api/internal/cache"
 	"noc-api/internal/db"
 	"noc-api/internal/middleware"
 
@@ -258,8 +260,9 @@ func resolveSourceHealth(ctx context.Context, redisClient *redis.Client, tenantI
 	now := time.Now().Unix()
 	for _, t := range activeTypes {
 		hb := SourceHeartbeat{Type: t, LastSeenSecondsAgo: -1, Silent: true}
-		key := "heartbeat:connector:" + tenantID.String() + ":" + t
-		if val, err := redisClient.Get(ctx, key).Int64(); err == nil && val > 0 {
+		// New uniform key, falling back to the legacy key during the rollout window.
+		raw, _ := cache.GetWithLegacyFallback(ctx, redisClient, cache.TenantKey(tenantID, "heartbeat", t), cache.LegacyHeartbeatKey(tenantID, t))
+		if val, perr := strconv.ParseInt(raw, 10, 64); perr == nil && val > 0 {
 			ago := now - val
 			if ago < 0 {
 				ago = 0

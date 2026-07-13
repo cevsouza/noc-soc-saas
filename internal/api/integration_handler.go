@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"noc-api/internal/cache"
 	"noc-api/internal/connector"
 	"noc-api/internal/db"
 	"noc-api/internal/loki"
@@ -198,10 +199,10 @@ func HandleGetIntegrationStatus(pgPool *pgxpool.Pool, redisClient *redis.Client)
 			lokiClient := loki.NewLokiClient(pgPool)
 			if err := lokiClient.TestConnection(ctx, tenantID); err != nil {
 				errMsg := fmt.Sprintf("Loki ready check failed: %v", err)
-				redisClient.Set(ctx, "webhook:error:"+tenantID.String()+":loki", errMsg, 24*time.Hour)
+				redisClient.Set(ctx, cache.TenantKey(tenantID, "webhook_error", "loki"), errMsg, 24*time.Hour)
 			} else {
-				redisClient.Set(ctx, "heartbeat:connector:"+tenantID.String()+":loki", time.Now().Unix(), 24*time.Hour)
-				redisClient.Del(ctx, "webhook:error:"+tenantID.String()+":loki")
+				redisClient.Set(ctx, cache.TenantKey(tenantID, "heartbeat", "loki"), time.Now().Unix(), 24*time.Hour)
+				redisClient.Del(ctx, cache.TenantKey(tenantID, "webhook_error", "loki"))
 			}
 		}
 
@@ -210,26 +211,26 @@ func HandleGetIntegrationStatus(pgPool *pgxpool.Pool, redisClient *redis.Client)
 			sentinelConnector := connector.NewSentinelConnector(pgPool, redisClient)
 			if err := sentinelConnector.TestConnection(ctx, tenantID); err != nil {
 				errMsg := fmt.Sprintf("Sentinel connection check failed: %v", err)
-				redisClient.Set(ctx, "webhook:error:"+tenantID.String()+":sentinel", errMsg, 24*time.Hour)
+				redisClient.Set(ctx, cache.TenantKey(tenantID, "webhook_error", "sentinel"), errMsg, 24*time.Hour)
 			} else {
-				redisClient.Set(ctx, "heartbeat:connector:"+tenantID.String()+":sentinel", time.Now().Unix(), 24*time.Hour)
-				redisClient.Del(ctx, "webhook:error:"+tenantID.String()+":sentinel")
+				redisClient.Set(ctx, cache.TenantKey(tenantID, "heartbeat", "sentinel"), time.Now().Unix(), 24*time.Hour)
+				redisClient.Del(ctx, cache.TenantKey(tenantID, "webhook_error", "sentinel"))
 			}
 		}
 		
-		// 1. Get heartbeat
-		heartbeatKey := "heartbeat:connector:" + tenantID.String() + ":" + integrationType
-		lastSeenStr, err := redisClient.Get(ctx, heartbeatKey).Result()
-		
+		// 1. Get heartbeat (new uniform key, falling back to the legacy key during rollout)
+		heartbeatKey := cache.TenantKey(tenantID, "heartbeat", integrationType)
+		lastSeenStr, err := cache.GetWithLegacyFallback(ctx, redisClient, heartbeatKey, cache.LegacyHeartbeatKey(tenantID, integrationType))
+
 		var lastSeen int64
 		hasHeartbeat := false
 		if err == nil && lastSeenStr != "" {
 			_, _ = fmt.Sscanf(lastSeenStr, "%d", &lastSeen)
 			hasHeartbeat = true
 		}
-		
+
 		// 2. Get latest error log
-		errorKey := "webhook:error:" + tenantID.String() + ":" + integrationType
+		errorKey := cache.TenantKey(tenantID, "webhook_error", integrationType)
 		lastError, _ := redisClient.Get(ctx, errorKey).Result()
 		
 		status := "inactive"

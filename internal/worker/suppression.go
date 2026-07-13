@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"noc-api/internal/cache"
 	"noc-api/internal/db"
 
 	"github.com/google/uuid"
@@ -54,7 +55,7 @@ const suppressionCacheTTL = 30 * time.Second
 // loadSuppressionRules returns the tenant's active suppression rules, cached in Redis so the worker
 // doesn't hit Postgres on every single event. Must be called with a tenant-scoped context.
 func (wp *WorkerPool) loadSuppressionRules(ctx context.Context, tenantID uuid.UUID) []suppressionRule {
-	key := "suppression:rules:" + tenantID.String()
+	key := cache.TenantKey(tenantID, "suppression", "rules")
 	if cached, err := wp.redisClient.Get(ctx, key).Result(); err == nil {
 		var rules []suppressionRule
 		if json.Unmarshal([]byte(cached), &rules) == nil {

@@ -10,9 +10,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
+	"noc-api/internal/cache"
 	"noc-api/internal/db"
 	"noc-api/internal/model"
 
@@ -337,7 +339,7 @@ func RateLimiter(redisClient *redis.Client, limit int) func(http.Handler) http.H
 
 			ctx := r.Context()
 			currentMinute := time.Now().Unix() / 60
-			key := fmt.Sprintf("ratelimit:tenant:%s:%d", tenantID.String(), currentMinute)
+			key := cache.TenantKey(tenantID, "ratelimit", strconv.FormatInt(currentMinute, 10))
 
 			// Multi/Pipeline increments and sets TTL of 60s
 			pipe := redisClient.Pipeline()

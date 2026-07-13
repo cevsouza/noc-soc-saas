@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"noc-api/internal/audit"
+	"noc-api/internal/cache"
 	"noc-api/internal/connector"
 	"noc-api/internal/db"
 	"noc-api/internal/middleware"
@@ -104,7 +105,7 @@ func HandleGenericWebhook(pgPool *pgxpool.Pool, redisClient *redis.Client, vault
 		expected := hex.EncodeToString(mac.Sum(nil))
 		if !hmac.Equal([]byte(expected), []byte(xSignature)) {
 			errMsg := "Unauthorized: HMAC signature verification failed"
-			redisClient.Set(r.Context(), fmt.Sprintf("webhook:error:%s:%s", tenantID.String(), integrationType), errMsg, 24*time.Hour)
+			redisClient.Set(r.Context(), cache.TenantKey(tenantID, "webhook_error",integrationType), errMsg, 24*time.Hour)
 			http.Error(w, errMsg, http.StatusUnauthorized)
 			return
 		}
@@ -112,7 +113,7 @@ func HandleGenericWebhook(pgPool *pgxpool.Pool, redisClient *redis.Client, vault
 		var payload map[string]interface{}
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 			errMsg := fmt.Sprintf("Bad Request: Invalid JSON body: %v", err)
-			redisClient.Set(r.Context(), fmt.Sprintf("webhook:error:%s:%s", tenantID.String(), integrationType), errMsg, 24*time.Hour)
+			redisClient.Set(r.Context(), cache.TenantKey(tenantID, "webhook_error",integrationType), errMsg, 24*time.Hour)
 			http.Error(w, errMsg, http.StatusBadRequest)
 			return
 		}
@@ -131,8 +132,8 @@ func HandleGenericWebhook(pgPool *pgxpool.Pool, redisClient *redis.Client, vault
 
 		// Register heartbeat in Redis and clear any previous errors
 		ctx := r.Context()
-		redisClient.Set(ctx, fmt.Sprintf("heartbeat:connector:%s:%s", tenantID.String(), integrationType), time.Now().Unix(), 24*time.Hour)
-		redisClient.Del(ctx, fmt.Sprintf("webhook:error:%s:%s", tenantID.String(), integrationType))
+		redisClient.Set(ctx, cache.TenantKey(tenantID, "heartbeat",integrationType), time.Now().Unix(), 24*time.Hour)
+		redisClient.Del(ctx, cache.TenantKey(tenantID, "webhook_error",integrationType))
 
 		// Push to alerts.raw queue
 		err = redisClient.LPush(ctx, queue.AlertsRawQueueKey, rawMsgBytes).Err()
@@ -262,7 +263,7 @@ func HandlePrometheusIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) htt
 		incidents, err := connector.MustGet(model.SourcePrometheus).MapToUnified(bodyBytes, tenantID)
 		if err != nil {
 			errMsg := fmt.Sprintf("Bad Request: Invalid Alertmanager JSON payload: %v", err)
-			redisClient.Set(r.Context(), fmt.Sprintf("webhook:error:%s:%s", tenantID.String(), "prometheus"), errMsg, 24*time.Hour)
+			redisClient.Set(r.Context(), cache.TenantKey(tenantID, "webhook_error","prometheus"), errMsg, 24*time.Hour)
 			http.Error(w, "Bad Request: Invalid Alertmanager JSON payload", http.StatusBadRequest)
 			return
 		}
@@ -295,8 +296,8 @@ func HandlePrometheusIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) htt
 		}
 
 		// Register heartbeat in Redis and clear any previous errors
-		redisClient.Set(r.Context(), fmt.Sprintf("heartbeat:connector:%s:%s", tenantID.String(), "prometheus"), time.Now().Unix(), 24*time.Hour)
-		redisClient.Del(r.Context(), fmt.Sprintf("webhook:error:%s:%s", tenantID.String(), "prometheus"))
+		redisClient.Set(r.Context(), cache.TenantKey(tenantID, "heartbeat","prometheus"), time.Now().Unix(), 24*time.Hour)
+		redisClient.Del(r.Context(), cache.TenantKey(tenantID, "webhook_error","prometheus"))
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
@@ -340,7 +341,7 @@ func HandleWazuhIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) http.Han
 		incidents, err := connector.MustGet(model.SourceWazuh).MapToUnified(bodyBytes, tenantID)
 		if err != nil {
 			errMsg := fmt.Sprintf("Bad Request: Invalid Wazuh JSON payload: %v", err)
-			redisClient.Set(r.Context(), fmt.Sprintf("webhook:error:%s:%s", tenantID.String(), "wazuh"), errMsg, 24*time.Hour)
+			redisClient.Set(r.Context(), cache.TenantKey(tenantID, "webhook_error","wazuh"), errMsg, 24*time.Hour)
 			http.Error(w, "Bad Request: Invalid Wazuh JSON payload", http.StatusBadRequest)
 			return
 		}
@@ -359,8 +360,8 @@ func HandleWazuhIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) http.Han
 		}
 
 		// Register heartbeat in Redis and clear any previous errors
-		redisClient.Set(r.Context(), fmt.Sprintf("heartbeat:connector:%s:%s", tenantID.String(), "wazuh"), time.Now().Unix(), 24*time.Hour)
-		redisClient.Del(r.Context(), fmt.Sprintf("webhook:error:%s:%s", tenantID.String(), "wazuh"))
+		redisClient.Set(r.Context(), cache.TenantKey(tenantID, "heartbeat","wazuh"), time.Now().Unix(), 24*time.Hour)
+		redisClient.Del(r.Context(), cache.TenantKey(tenantID, "webhook_error","wazuh"))
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
@@ -824,7 +825,7 @@ func HandleUptimeKumaIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) htt
 		incidents, err := connector.MustGet(model.SourceUptimeKuma).MapToUnified(bodyBytes, tenantID)
 		if err != nil {
 			errMsg := fmt.Sprintf("Bad Request: Invalid Uptime Kuma JSON payload: %v", err)
-			redisClient.Set(r.Context(), fmt.Sprintf("webhook:error:%s:%s", tenantID.String(), "uptimekuma"), errMsg, 24*time.Hour)
+			redisClient.Set(r.Context(), cache.TenantKey(tenantID, "webhook_error","uptimekuma"), errMsg, 24*time.Hour)
 			http.Error(w, "Bad Request: Invalid Uptime Kuma JSON payload", http.StatusBadRequest)
 			return
 		}
@@ -843,8 +844,8 @@ func HandleUptimeKumaIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) htt
 		}
 
 		// Register heartbeat in Redis and clear any previous errors
-		redisClient.Set(r.Context(), fmt.Sprintf("heartbeat:connector:%s:%s", tenantID.String(), "uptimekuma"), time.Now().Unix(), 24*time.Hour)
-		redisClient.Del(r.Context(), fmt.Sprintf("webhook:error:%s:%s", tenantID.String(), "uptimekuma"))
+		redisClient.Set(r.Context(), cache.TenantKey(tenantID, "heartbeat","uptimekuma"), time.Now().Unix(), 24*time.Hour)
+		redisClient.Del(r.Context(), cache.TenantKey(tenantID, "webhook_error","uptimekuma"))
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
@@ -888,7 +889,7 @@ func HandleGrafanaIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) http.H
 		incidents, err := connector.MustGet(model.SourceGrafana).MapToUnified(bodyBytes, tenantID)
 		if err != nil {
 			errMsg := fmt.Sprintf("Bad Request: Invalid Grafana alert JSON payload: %v", err)
-			redisClient.Set(r.Context(), fmt.Sprintf("webhook:error:%s:%s", tenantID.String(), "grafana"), errMsg, 24*time.Hour)
+			redisClient.Set(r.Context(), cache.TenantKey(tenantID, "webhook_error","grafana"), errMsg, 24*time.Hour)
 			http.Error(w, "Bad Request: Invalid Grafana alert JSON payload", http.StatusBadRequest)
 			return
 		}
@@ -920,8 +921,8 @@ func HandleGrafanaIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) http.H
 		}
 
 		// Register heartbeat in Redis and clear any previous errors
-		redisClient.Set(r.Context(), fmt.Sprintf("heartbeat:connector:%s:%s", tenantID.String(), "grafana"), time.Now().Unix(), 24*time.Hour)
-		redisClient.Del(r.Context(), fmt.Sprintf("webhook:error:%s:%s", tenantID.String(), "grafana"))
+		redisClient.Set(r.Context(), cache.TenantKey(tenantID, "heartbeat","grafana"), time.Now().Unix(), 24*time.Hour)
+		redisClient.Del(r.Context(), cache.TenantKey(tenantID, "webhook_error","grafana"))
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
@@ -965,7 +966,7 @@ func HandleZabbixIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) http.Ha
 		incidents, err := connector.MustGet(model.SourceZabbix).MapToUnified(bodyBytes, tenantID)
 		if err != nil {
 			errMsg := fmt.Sprintf("Bad Request: Invalid Zabbix JSON payload: %v", err)
-			redisClient.Set(r.Context(), fmt.Sprintf("webhook:error:%s:%s", tenantID.String(), "zabbix"), errMsg, 24*time.Hour)
+			redisClient.Set(r.Context(), cache.TenantKey(tenantID, "webhook_error","zabbix"), errMsg, 24*time.Hour)
 			http.Error(w, "Bad Request: Invalid Zabbix JSON payload", http.StatusBadRequest)
 			return
 		}
@@ -984,8 +985,8 @@ func HandleZabbixIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) http.Ha
 		}
 
 		// Register heartbeat in Redis and clear any previous errors
-		redisClient.Set(r.Context(), fmt.Sprintf("heartbeat:connector:%s:%s", tenantID.String(), "zabbix"), time.Now().Unix(), 24*time.Hour)
-		redisClient.Del(r.Context(), fmt.Sprintf("webhook:error:%s:%s", tenantID.String(), "zabbix"))
+		redisClient.Set(r.Context(), cache.TenantKey(tenantID, "heartbeat","zabbix"), time.Now().Unix(), 24*time.Hour)
+		redisClient.Del(r.Context(), cache.TenantKey(tenantID, "webhook_error","zabbix"))
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
@@ -1029,7 +1030,7 @@ func HandleOTLPIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) http.Hand
 		incidents, err := connector.MustGet(model.SourceOTLP).MapToUnified(bodyBytes, tenantID)
 		if err != nil {
 			errMsg := fmt.Sprintf("Bad Request: Invalid OTLP JSON payload: %v", err)
-			redisClient.Set(r.Context(), fmt.Sprintf("webhook:error:%s:%s", tenantID.String(), "otlp"), errMsg, 24*time.Hour)
+			redisClient.Set(r.Context(), cache.TenantKey(tenantID, "webhook_error","otlp"), errMsg, 24*time.Hour)
 			http.Error(w, "Bad Request: Invalid OTLP JSON payload", http.StatusBadRequest)
 			return
 		}
@@ -1052,8 +1053,8 @@ func HandleOTLPIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) http.Hand
 			}
 		}
 
-		redisClient.Set(r.Context(), fmt.Sprintf("heartbeat:connector:%s:%s", tenantID.String(), "otlp"), time.Now().Unix(), 24*time.Hour)
-		redisClient.Del(r.Context(), fmt.Sprintf("webhook:error:%s:%s", tenantID.String(), "otlp"))
+		redisClient.Set(r.Context(), cache.TenantKey(tenantID, "heartbeat","otlp"), time.Now().Unix(), 24*time.Hour)
+		redisClient.Del(r.Context(), cache.TenantKey(tenantID, "webhook_error","otlp"))
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
@@ -1097,7 +1098,7 @@ func HandleIcingaIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) http.Ha
 		incidents, err := connector.MustGet(model.SourceIcinga).MapToUnified(bodyBytes, tenantID)
 		if err != nil {
 			errMsg := fmt.Sprintf("Bad Request: Invalid Icinga/Nagios JSON payload: %v", err)
-			redisClient.Set(r.Context(), fmt.Sprintf("webhook:error:%s:%s", tenantID.String(), "icinga"), errMsg, 24*time.Hour)
+			redisClient.Set(r.Context(), cache.TenantKey(tenantID, "webhook_error","icinga"), errMsg, 24*time.Hour)
 			http.Error(w, "Bad Request: Invalid Icinga/Nagios JSON payload", http.StatusBadRequest)
 			return
 		}
@@ -1115,8 +1116,8 @@ func HandleIcingaIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) http.Ha
 			return
 		}
 
-		redisClient.Set(r.Context(), fmt.Sprintf("heartbeat:connector:%s:%s", tenantID.String(), "icinga"), time.Now().Unix(), 24*time.Hour)
-		redisClient.Del(r.Context(), fmt.Sprintf("webhook:error:%s:%s", tenantID.String(), "icinga"))
+		redisClient.Set(r.Context(), cache.TenantKey(tenantID, "heartbeat","icinga"), time.Now().Unix(), 24*time.Hour)
+		redisClient.Del(r.Context(), cache.TenantKey(tenantID, "webhook_error","icinga"))
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
@@ -1160,7 +1161,7 @@ func HandleAzureMonitorIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) h
 		incidents, err := connector.MustGet(model.SourceAzureMonitor).MapToUnified(bodyBytes, tenantID)
 		if err != nil {
 			errMsg := fmt.Sprintf("Bad Request: Invalid Azure Monitor JSON payload: %v", err)
-			redisClient.Set(r.Context(), fmt.Sprintf("webhook:error:%s:%s", tenantID.String(), "azuremonitor"), errMsg, 24*time.Hour)
+			redisClient.Set(r.Context(), cache.TenantKey(tenantID, "webhook_error","azuremonitor"), errMsg, 24*time.Hour)
 			http.Error(w, "Bad Request: Invalid Azure Monitor JSON payload", http.StatusBadRequest)
 			return
 		}
@@ -1178,8 +1179,8 @@ func HandleAzureMonitorIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) h
 			return
 		}
 
-		redisClient.Set(r.Context(), fmt.Sprintf("heartbeat:connector:%s:%s", tenantID.String(), "azuremonitor"), time.Now().Unix(), 24*time.Hour)
-		redisClient.Del(r.Context(), fmt.Sprintf("webhook:error:%s:%s", tenantID.String(), "azuremonitor"))
+		redisClient.Set(r.Context(), cache.TenantKey(tenantID, "heartbeat","azuremonitor"), time.Now().Unix(), 24*time.Hour)
+		redisClient.Del(r.Context(), cache.TenantKey(tenantID, "webhook_error","azuremonitor"))
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
@@ -1223,7 +1224,7 @@ func HandlePagerDutyIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) http
 		incidents, err := connector.MustGet(model.SourcePagerDuty).MapToUnified(bodyBytes, tenantID)
 		if err != nil {
 			errMsg := fmt.Sprintf("Bad Request: Invalid PagerDuty JSON payload: %v", err)
-			redisClient.Set(r.Context(), fmt.Sprintf("webhook:error:%s:%s", tenantID.String(), "pagerduty"), errMsg, 24*time.Hour)
+			redisClient.Set(r.Context(), cache.TenantKey(tenantID, "webhook_error","pagerduty"), errMsg, 24*time.Hour)
 			http.Error(w, "Bad Request: Invalid PagerDuty JSON payload", http.StatusBadRequest)
 			return
 		}
@@ -1241,8 +1242,8 @@ func HandlePagerDutyIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) http
 			return
 		}
 
-		redisClient.Set(r.Context(), fmt.Sprintf("heartbeat:connector:%s:%s", tenantID.String(), "pagerduty"), time.Now().Unix(), 24*time.Hour)
-		redisClient.Del(r.Context(), fmt.Sprintf("webhook:error:%s:%s", tenantID.String(), "pagerduty"))
+		redisClient.Set(r.Context(), cache.TenantKey(tenantID, "heartbeat","pagerduty"), time.Now().Unix(), 24*time.Hour)
+		redisClient.Del(r.Context(), cache.TenantKey(tenantID, "webhook_error","pagerduty"))
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
@@ -1286,7 +1287,7 @@ func HandleOpsgenieIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) http.
 		incidents, err := connector.MustGet(model.SourceOpsgenie).MapToUnified(bodyBytes, tenantID)
 		if err != nil {
 			errMsg := fmt.Sprintf("Bad Request: Invalid Opsgenie JSON payload: %v", err)
-			redisClient.Set(r.Context(), fmt.Sprintf("webhook:error:%s:%s", tenantID.String(), "opsgenie"), errMsg, 24*time.Hour)
+			redisClient.Set(r.Context(), cache.TenantKey(tenantID, "webhook_error","opsgenie"), errMsg, 24*time.Hour)
 			http.Error(w, "Bad Request: Invalid Opsgenie JSON payload", http.StatusBadRequest)
 			return
 		}
@@ -1304,8 +1305,8 @@ func HandleOpsgenieIngest(pgPool *pgxpool.Pool, redisClient *redis.Client) http.
 			return
 		}
 
-		redisClient.Set(r.Context(), fmt.Sprintf("heartbeat:connector:%s:%s", tenantID.String(), "opsgenie"), time.Now().Unix(), 24*time.Hour)
-		redisClient.Del(r.Context(), fmt.Sprintf("webhook:error:%s:%s", tenantID.String(), "opsgenie"))
+		redisClient.Set(r.Context(), cache.TenantKey(tenantID, "heartbeat","opsgenie"), time.Now().Unix(), 24*time.Hour)
+		redisClient.Del(r.Context(), cache.TenantKey(tenantID, "webhook_error","opsgenie"))
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
@@ -1353,7 +1354,7 @@ func handleTypedIngest(pgPool *pgxpool.Pool, redisClient *redis.Client, source m
 		incidents, err := connector.MustGet(source).MapToUnified(bodyBytes, tenantID)
 		if err != nil || len(incidents) == 0 {
 			errMsg := fmt.Sprintf("Bad Request: Invalid %s JSON payload: %v", label, err)
-			redisClient.Set(r.Context(), fmt.Sprintf("webhook:error:%s:%s", tenantID.String(), sourceType), errMsg, 24*time.Hour)
+			redisClient.Set(r.Context(), cache.TenantKey(tenantID, "webhook_error",sourceType), errMsg, 24*time.Hour)
 			http.Error(w, fmt.Sprintf("Bad Request: Invalid %s JSON payload", label), http.StatusBadRequest)
 			return
 		}
@@ -1370,8 +1371,8 @@ func handleTypedIngest(pgPool *pgxpool.Pool, redisClient *redis.Client, source m
 			return
 		}
 
-		redisClient.Set(r.Context(), fmt.Sprintf("heartbeat:connector:%s:%s", tenantID.String(), sourceType), time.Now().Unix(), 24*time.Hour)
-		redisClient.Del(r.Context(), fmt.Sprintf("webhook:error:%s:%s", tenantID.String(), sourceType))
+		redisClient.Set(r.Context(), cache.TenantKey(tenantID, "heartbeat",sourceType), time.Now().Unix(), 24*time.Hour)
+		redisClient.Del(r.Context(), cache.TenantKey(tenantID, "webhook_error",sourceType))
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)

@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"time"
 
+	"noc-api/internal/cache"
 	"noc-api/internal/db"
 	"noc-api/internal/model"
 
@@ -191,12 +192,14 @@ func (wp *WorkerPool) activeInboundIntegrations(ctx context.Context, tenantID uu
 
 // evaluateAndAct reads the heartbeat + alarmed state for one source and acts on the decision.
 func (wp *WorkerPool) evaluateAndAct(ctx context.Context, tenantID uuid.UUID, itype string, createdAt, now, silenceThreshold, graceSecs, renotifySecs int64) {
-	heartbeatKey := "heartbeat:connector:" + tenantID.String() + ":" + itype
-	alarmKey := "watchdog:alarmed:" + tenantID.String() + ":" + itype
+	heartbeatKey := cache.TenantKey(tenantID, "heartbeat", itype)
+	alarmKey := cache.TenantKey(tenantID, "watchdog", "alarmed", itype)
 
 	var lastSeen int64
 	hasHeartbeat := false
-	if v, err := wp.redisClient.Get(ctx, heartbeatKey).Result(); err == nil && v != "" {
+	// New uniform heartbeat key, falling back to the legacy key during the rollout window so an
+	// active source that hasn't re-reported since the deploy isn't mistaken for a disconnection.
+	if v, err := cache.GetWithLegacyFallback(ctx, wp.redisClient, heartbeatKey, cache.LegacyHeartbeatKey(tenantID, itype)); err == nil && v != "" {
 		if n, perr := strconv.ParseInt(v, 10, 64); perr == nil {
 			lastSeen = n
 			hasHeartbeat = true

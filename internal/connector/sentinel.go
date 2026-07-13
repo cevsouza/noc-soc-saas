@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"noc-api/internal/cache"
 	"noc-api/internal/db"
 	"noc-api/internal/model"
 	"noc-api/internal/queue"
@@ -198,7 +199,7 @@ func (c *SentinelConnector) syncTenantSentinel(ctx context.Context, tenant model
 	token, err := c.getAzureAccessToken(ctx, cfg)
 	if err != nil {
 		errMsg := fmt.Sprintf("Azure OAuth failed: %v", err)
-		c.redisClient.Set(ctx, fmt.Sprintf("webhook:error:%s:%s", tenant.ID.String(), "sentinel"), errMsg, 24*time.Hour)
+		c.redisClient.Set(ctx, cache.TenantKey(tenant.ID, "webhook_error","sentinel"), errMsg, 24*time.Hour)
 		log.Printf("[Sentinel Connector ERROR] Tenant %s failed Azure OAuth: %v", tenant.ID, err)
 		return
 	}
@@ -214,7 +215,7 @@ func (c *SentinelConnector) syncTenantSentinel(ctx context.Context, tenant model
 	req, err := http.NewRequestWithContext(ctx, "GET", urlPath, nil)
 	if err != nil {
 		errMsg := fmt.Sprintf("HTTP NewRequest failed: %v", err)
-		c.redisClient.Set(ctx, fmt.Sprintf("webhook:error:%s:%s", tenant.ID.String(), "sentinel"), errMsg, 24*time.Hour)
+		c.redisClient.Set(ctx, cache.TenantKey(tenant.ID, "webhook_error","sentinel"), errMsg, 24*time.Hour)
 		return
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
@@ -222,7 +223,7 @@ func (c *SentinelConnector) syncTenantSentinel(ctx context.Context, tenant model
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		errMsg := fmt.Sprintf("Azure API call failed: %v", err)
-		c.redisClient.Set(ctx, fmt.Sprintf("webhook:error:%s:%s", tenant.ID.String(), "sentinel"), errMsg, 24*time.Hour)
+		c.redisClient.Set(ctx, cache.TenantKey(tenant.ID, "webhook_error","sentinel"), errMsg, 24*time.Hour)
 		log.Printf("[Sentinel Connector ERROR] API call failed: %v", err)
 		return
 	}
@@ -230,7 +231,7 @@ func (c *SentinelConnector) syncTenantSentinel(ctx context.Context, tenant model
 
 	if resp.StatusCode != http.StatusOK {
 		errMsg := fmt.Sprintf("Azure Sentinel API returned status %d", resp.StatusCode)
-		c.redisClient.Set(ctx, fmt.Sprintf("webhook:error:%s:%s", tenant.ID.String(), "sentinel"), errMsg, 24*time.Hour)
+		c.redisClient.Set(ctx, cache.TenantKey(tenant.ID, "webhook_error","sentinel"), errMsg, 24*time.Hour)
 		log.Printf("[Sentinel Connector ERROR] Azure Sentinel API returned status %d", resp.StatusCode)
 		return
 	}
@@ -290,8 +291,8 @@ func (c *SentinelConnector) syncTenantSentinel(ctx context.Context, tenant model
 	}
 
 	// Register heartbeat in Redis and clear any previous errors
-	c.redisClient.Set(ctx, fmt.Sprintf("heartbeat:connector:%s:%s", tenant.ID.String(), "sentinel"), time.Now().Unix(), 24*time.Hour)
-	c.redisClient.Del(ctx, fmt.Sprintf("webhook:error:%s:%s", tenant.ID.String(), "sentinel"))
+	c.redisClient.Set(ctx, cache.TenantKey(tenant.ID, "heartbeat","sentinel"), time.Now().Unix(), 24*time.Hour)
+	c.redisClient.Del(ctx, cache.TenantKey(tenant.ID, "webhook_error","sentinel"))
 }
 
 func (c *SentinelConnector) getAzureAccessToken(ctx context.Context, cfg *SentinelConfig) (string, error) {
@@ -356,8 +357,8 @@ func (c *SentinelConnector) runMockSync(ctx context.Context, tenant model.Tenant
 	log.Printf("[Sentinel Mock Connector] Mock incident pushed to queue: %s", incidentID)
 
 	// Register heartbeat in Redis and clear any previous errors
-	c.redisClient.Set(ctx, fmt.Sprintf("heartbeat:connector:%s:%s", tenant.ID.String(), "sentinel"), time.Now().Unix(), 24*time.Hour)
-	c.redisClient.Del(ctx, fmt.Sprintf("webhook:error:%s:%s", tenant.ID.String(), "sentinel"))
+	c.redisClient.Set(ctx, cache.TenantKey(tenant.ID, "heartbeat","sentinel"), time.Now().Unix(), 24*time.Hour)
+	c.redisClient.Del(ctx, cache.TenantKey(tenant.ID, "webhook_error","sentinel"))
 }
 
 // TestConnection checks if Sentinel credentials are valid by requesting an OAuth token.

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"noc-api/internal/api"
+	"noc-api/internal/cache"
 	"noc-api/internal/connector"
 	"noc-api/internal/db"
 	"noc-api/internal/executor"
@@ -148,7 +149,7 @@ func (wp *WorkerPool) processEvent(ctx context.Context, event model.UnifiedIncid
 				"severity":   string(event.Severity),
 			}
 			if eventSuppressed(rules, fields, time.Now()) {
-				wp.redisClient.Incr(ctx, "suppression:count:"+event.TenantID.String())
+				wp.redisClient.Incr(ctx, cache.TenantKey(event.TenantID, "suppression", "count"))
 				log.Printf("[Suppression] Suppressed event for tenant %s (event_type=%q, host=%q)", event.TenantID, event.EventType, event.Host)
 				return nil
 			}

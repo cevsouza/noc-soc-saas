@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"time"
 
+	"noc-api/internal/cache"
 	"noc-api/internal/db"
 	"noc-api/internal/model"
 	"noc-api/internal/queue"
@@ -67,8 +68,8 @@ func IngestCircuitBreaker(redisClient *redis.Client) func(http.Handler) http.Han
 				return
 			}
 			ctx := r.Context()
-			openKey := "ingest:breaker:open:" + tenantID.String()
-			shedKey := "ingest:breaker:shed:" + tenantID.String()
+			openKey := cache.TenantKey(tenantID, "ingest_breaker", "open")
+			shedKey := cache.TenantKey(tenantID, "ingest_breaker", "shed")
 
 			// Breaker already open → shed cheaply without touching the counter/handler.
 			if _, err := redisClient.Get(ctx, openKey).Result(); err == nil {
@@ -79,7 +80,7 @@ func IngestCircuitBreaker(redisClient *redis.Client) func(http.Handler) http.Han
 
 			// Count this request in the current-minute window.
 			minute := time.Now().Unix() / 60
-			countKey := fmt.Sprintf("ingest:breaker:count:%s:%d", tenantID.String(), minute)
+			countKey := cache.TenantKey(tenantID, "ingest_breaker", "count", strconv.FormatInt(minute, 10))
 			pipe := redisClient.Pipeline()
 			incr := pipe.Incr(ctx, countKey)
 			pipe.Expire(ctx, countKey, 120*time.Second)
