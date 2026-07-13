@@ -771,12 +771,11 @@ func main() {
 		suppMutate.ServeHTTP(w, r)
 	})))
 
-	// Real asset topology: the tenant's actual reporting hosts derived from its alert stream,
-	// replacing the old hardcoded 6-node SVG. Same authenticated-user access level as SLA stats.
-	protectedGetTopology := middleware.JWTAuth(jwtSecret)(api.HandleGetTopology(appPool))
-	mux.Handle("/api/v1/topology", protectedGetTopology)
 	// Merged topology graph (discovery slice C): discovered devices + alert hosts + physical LLDP/CDP edges.
 	mux.Handle("/api/v1/topology/graph", middleware.JWTAuth(jwtSecret)(api.HandleGetTopologyGraph(appPool)))
+	// Discovery wiring status (agent connected? last check-in? how much found?) — drives the topology
+	// tab's onboarding state so an empty graph explains itself instead of degrading silently.
+	mux.Handle("/api/v1/topology/status", middleware.JWTAuth(jwtSecret)(api.HandleGetTopologyStatus(appPool)))
 
 	// Global search (alerts/runbooks/tenants), scoped to whatever tenants the caller has access to
 	protectedSearch := middleware.JWTAuth(jwtSecret)(api.HandleGlobalSearch(appPool))

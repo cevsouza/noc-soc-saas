@@ -248,7 +248,7 @@ export default function CockpitPage() {
           )}
 
           {(cockpitTab === 'topology' || cockpitTab === 'settings') && (
-            <LegacyCockpitPanels cockpitTab={cockpitTab} onSearchTermChange={setSearchTerm} />
+            <LegacyCockpitPanels cockpitTab={cockpitTab} onSearchTermChange={setSearchTerm} onNavigateSettings={() => setCockpitTab('settings')} />
           )}
         </section>
       </main>

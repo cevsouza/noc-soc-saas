@@ -45,6 +45,9 @@ interface LegacyCockpitPanelsProps {
   /** Topology nodes filter the (Alerts tab's) search term on click — ported from the original
    * single-component behavior where both lived in the same `searchTerm` state. */
   onSearchTermChange: (term: string) => void;
+  /** Cross-link from the Topology tab to the Descoberta de Rede panel (which lives under Settings):
+   * switch the cockpit tab to 'settings'. Combined with selecting the network_discovery sub-panel. */
+  onNavigateSettings?: () => void;
 }
 
 /**
@@ -61,7 +64,7 @@ interface LegacyCockpitPanelsProps {
  * button, and the event simulator) — confirmed via grep that none of them were referenced by
  * the JSX being ported. All of this is deferred to a future session, not silently lost.
  */
-export function LegacyCockpitPanels({ cockpitTab, onSearchTermChange }: LegacyCockpitPanelsProps) {
+export function LegacyCockpitPanels({ cockpitTab, onSearchTermChange, onNavigateSettings }: LegacyCockpitPanelsProps) {
   const { token, user } = useAuth();
   const { tenants, setTenants, selectedTenant, setSelectedTenantIds, refetchTenants } = useTenantSelection();
 
@@ -486,7 +489,14 @@ export function LegacyCockpitPanels({ cockpitTab, onSearchTermChange }: LegacyCo
   return (
     <>
       {cockpitTab === 'topology' && (
-            <TopologyView tenantId={selectedTenant?.id} onSearchTermChange={onSearchTermChange} />
+            <TopologyView
+              tenantId={selectedTenant?.id}
+              onSearchTermChange={onSearchTermChange}
+              onConfigureDiscovery={() => {
+                setSelectedIntegrationTool('network_discovery');
+                onNavigateSettings?.();
+              }}
+            />
       )}
       {cockpitTab === 'settings' && (
             // Unified Settings & Administration Split-Pane
