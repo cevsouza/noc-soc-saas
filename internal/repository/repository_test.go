@@ -617,3 +617,50 @@ func TestTenantRetentionIsolation(t *testing.T) {
 	}
 }
 
+// TestAgentIsolation is the mandatory cross-tenant leak test for the agent tables (enrollment tokens
+// and agents). Tenant B must never see tenant A's agents or enrollment tokens under RLS.
+func TestAgentIsolation(t *testing.T) {
+	pool := getTestPool(t)
+	defer pool.Close()
+
+	ctx := context.Background()
+	tenantA := uuid.New()
+	tenantB := uuid.New()
+	if _, err := pool.Exec(ctx, "INSERT INTO tenants (id, name, slug, status) VALUES ($1, 'Agt A', 'agt-iso-a', 'active')", tenantA); err != nil {
+		t.Fatalf("insert tenant A: %v", err)
+	}
+	defer pool.Exec(ctx, "DELETE FROM tenants WHERE id = $1", tenantA)
+	if _, err := pool.Exec(ctx, "INSERT INTO tenants (id, name, slug, status) VALUES ($1, 'Agt B', 'agt-iso-b', 'active')", tenantB); err != nil {
+		t.Fatalf("insert tenant B: %v", err)
+	}
+	defer pool.Exec(ctx, "DELETE FROM tenants WHERE id = $1", tenantB)
+
+	ctxA := db.WithTenantID(ctx, tenantA)
+	if err := db.ExecuteInTenantTx(ctxA, pool, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctxA, `INSERT INTO agent_enrollment_tokens (tenant_id, token_hash, expires_at) VALUES ($1, 'hashA', NOW() + INTERVAL '1 hour')`, tenantA); err != nil {
+			return err
+		}
+		_, err := tx.Exec(ctxA, `INSERT INTO agents (tenant_id, name) VALUES ($1, 'agentA')`, tenantA)
+		return err
+	}); err != nil {
+		t.Fatalf("tenant A failed to create agent rows: %v", err)
+	}
+
+	ctxB := db.WithTenantID(ctx, tenantB)
+	if err := db.ExecuteInTenantTx(ctxB, pool, func(tx pgx.Tx) error {
+		var tokens, agents int
+		if err := tx.QueryRow(ctxB, `SELECT COUNT(*) FROM agent_enrollment_tokens`).Scan(&tokens); err != nil {
+			return err
+		}
+		if err := tx.QueryRow(ctxB, `SELECT COUNT(*) FROM agents`).Scan(&agents); err != nil {
+			return err
+		}
+		if tokens != 0 || agents != 0 {
+			t.Errorf("SECURITY BREACH: tenant B saw %d token(s) and %d agent(s) belonging to tenant A", tokens, agents)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("tenant B transaction failed: %v", err)
+	}
+}
+

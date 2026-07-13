@@ -477,6 +477,16 @@ func main() {
 	mux.Handle("/api/v1/ingest/paloalto", ingestGuard(api.HandlePaloAltoIngest(appPool, redisClient)))
 	mux.Handle("/api/v1/ingest/fortinet", ingestGuard(api.HandleFortinetIngest(appPool, redisClient)))
 
+	// NOC/SOC agent (outbound-443 only): a tenant admin mints a one-time enrollment token; the agent
+	// exchanges it (unauthenticated — the token IS the credential) for a tenant API key; then it polls
+	// config and pushes heartbeats/events with that API key. Events ride the same ingest guard
+	// (breaker + rate limit) as the connectors.
+	mux.Handle("/api/v1/agent/enroll-token", middleware.JWTAuth(jwtSecret)(
+		middleware.RequireRole(model.RoleTenantAdmin)(api.HandleCreateEnrollmentToken(appPool))))
+	mux.Handle("/api/v1/agent/enroll", api.HandleEnrollAgent(appPool))
+	mux.Handle("/api/v1/agent/config", middleware.APIKeyAuth(appPool, redisClient, jwtSecret)(api.HandleGetAgentConfig(appPool)))
+	mux.Handle("/api/v1/agent/events", ingestGuard(api.HandleAgentEvents(appPool, redisClient)))
+
 	// Secure Vault Credentials Storage Endpoint (Postgres Vault with RLS & GCM Ciphers, protected by JWT & Admin Role check)
 	vaultRepo := repository.NewPostgresVaultRepository()
 
