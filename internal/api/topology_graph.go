@@ -97,6 +97,22 @@ func shortName(s string) string {
 	return s
 }
 
+// severityStringRank ranks a severity label for aggregation (higher = worse). "" ranks 0.
+func severityStringRank(s string) int {
+	switch s {
+	case "fatal":
+		return 4
+	case "critical":
+		return 3
+	case "warning":
+		return 2
+	case "info":
+		return 1
+	default:
+		return 0
+	}
+}
+
 // hostResolver folds an alert-host / neighbour name onto an existing device (or telemetry) node id.
 type hostResolver struct {
 	ipToID    map[string]string // exact IP -> node id
@@ -195,10 +211,14 @@ func buildTopologyGraph(devices []GraphNodeIn, links []GraphLinkIn, hosts []Grap
 			continue
 		}
 		if id, ok := hr.resolve(h.Host); ok {
+			// Multiple alert-hosts can map to the same device (FQDN + alias + short-name); aggregate
+			// instead of overwriting so the node reflects the total open alerts and the worst severity.
 			n := nodes[id]
 			n.Origin = "both"
-			n.WorstSeverity = h.WorstSeverity
-			n.UnresolvedAlerts = h.UnresolvedAlerts
+			n.UnresolvedAlerts += h.UnresolvedAlerts
+			if severityStringRank(h.WorstSeverity) > severityStringRank(n.WorstSeverity) {
+				n.WorstSeverity = h.WorstSeverity
+			}
 			continue
 		}
 		nodes[h.Host] = &GraphNode{

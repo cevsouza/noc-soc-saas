@@ -115,6 +115,26 @@ func TestBuildTopologyGraphRobustMatching(t *testing.T) {
 	}
 }
 
+func TestBuildTopologyGraphAggregatesHosts(t *testing.T) {
+	// Two alert-hosts (FQDN + CMDB alias) both map to the same switch: the node must aggregate the open
+	// counts (1+1) and take the worst severity (critical), not overwrite with whichever folds last.
+	devices := []GraphNodeIn{{IP: "192.168.70.2", SysName: "core-sw", DeviceType: "switch"}}
+	hosts := []GraphHostIn{
+		{Host: "core-sw.corp.example.com", UnresolvedAlerts: 1, WorstSeverity: "critical"},
+		{Host: "switch01.mon", UnresolvedAlerts: 1, WorstSeverity: "warning"},
+	}
+	aliases := []AssetAlias{{Identifier: "192.168.70.2", Aliases: []string{"switch01.mon"}}}
+
+	g := buildTopologyGraph(devices, nil, hosts, aliases)
+	if len(g.Nodes) != 1 {
+		t.Fatalf("got %d nodes, want 1 (both hosts folded): %+v", len(g.Nodes), g.Nodes)
+	}
+	n := g.Nodes[0]
+	if n.Origin != "both" || n.UnresolvedAlerts != 2 || n.WorstSeverity != "critical" {
+		t.Errorf("aggregation wrong: origin=%s unresolved=%d worst=%s", n.Origin, n.UnresolvedAlerts, n.WorstSeverity)
+	}
+}
+
 func TestBuildTopologyGraphAmbiguousShortName(t *testing.T) {
 	// Two devices share the short-name "fw" (different domains). An ambiguous short-name must NOT be
 	// guessed — the host stays a separate telemetry node rather than merging onto the wrong device.
