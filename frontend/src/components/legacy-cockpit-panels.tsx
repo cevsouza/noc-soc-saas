@@ -30,14 +30,14 @@ import { RunbookApprovalsPanel } from '@/components/settings/runbook-approvals-p
 import { ResponseActionsPanel } from '@/components/settings/response-actions-panel';
 import { AccessControlPanel } from '@/components/settings/access-control-panel';
 import { OperationalKpisPanel } from '@/components/settings/operational-kpis-panel';
-import type { Alert, SLAExecutiveStats } from '@/types';
+import { TopologyView } from '@/components/settings/topology-view';
+import type { SLAExecutiveStats } from '@/types';
 
 type AsyncStatus = { status: 'idle' | 'saving' | 'success' | 'error'; message?: string };
 
 interface LegacyCockpitPanelsProps {
   /** Only 'topology' and 'settings' render here — 'alerts' is handled by the new components. */
   cockpitTab: 'topology' | 'settings';
-  alerts: Alert[];
   /** Topology nodes filter the (Alerts tab's) search term on click — ported from the original
    * single-component behavior where both lived in the same `searchTerm` state. */
   onSearchTermChange: (term: string) => void;
@@ -57,7 +57,7 @@ interface LegacyCockpitPanelsProps {
  * button, and the event simulator) — confirmed via grep that none of them were referenced by
  * the JSX being ported. All of this is deferred to a future session, not silently lost.
  */
-export function LegacyCockpitPanels({ cockpitTab, alerts, onSearchTermChange }: LegacyCockpitPanelsProps) {
+export function LegacyCockpitPanels({ cockpitTab, onSearchTermChange }: LegacyCockpitPanelsProps) {
   const { token, user } = useAuth();
   const { tenants, setTenants, selectedTenant, setSelectedTenantIds, refetchTenants } = useTenantSelection();
 
@@ -482,110 +482,7 @@ export function LegacyCockpitPanels({ cockpitTab, alerts, onSearchTermChange }: 
   return (
     <>
       {cockpitTab === 'topology' && (
-            // Interactive Topology CMDB view
-            <div className="glass-card rounded-xl overflow-hidden flex flex-col border border-white/5 p-6 bg-[#040812]">
-              <div className="flex justify-between items-center mb-6">
-                <div className="flex flex-col gap-0.5">
-                  <h4 className="text-sm font-extrabold text-slate-200 uppercase tracking-wider">Mapeamento de Topologia & CMDB</h4>
-                  <p className="text-[10px] text-slate-500 uppercase tracking-wider font-semibold">Descoberta em tempo real de ativos de rede e segurança</p>
-                </div>
-                <div className="flex gap-4 text-[10px] font-bold text-slate-400">
-                  <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span> Operacional</span>
-                  <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-ping"></span> Incidente Ativo</span>
-                </div>
-              </div>
-
-              <div className="relative w-full h-[360px] bg-black/60 rounded-xl border border-white/5 flex items-center justify-center overflow-hidden">
-                <svg className="w-full h-full" viewBox="0 0 800 400">
-                  {/* Grid background pattern */}
-                  <defs>
-                    <pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse">
-                      <path d="M 20 0 L 0 0 0 20" fill="none" stroke="rgba(255,255,255,0.015)" strokeWidth="1" />
-                    </pattern>
-                  </defs>
-                  <rect width="100%" height="100%" fill="url(#grid)" />
-
-                  {/* Connective lines */}
-                  {/* Internet -> NGFW */}
-                  <line x1="150" y1="200" x2="280" y2="200" stroke="rgba(255,255,255,0.1)" strokeWidth="2" strokeDasharray="4 2" />
-                  
-                  {/* NGFW -> Core Switch */}
-                  <line x1="280" y1="200" x2="430" y2="200" stroke="rgba(255,255,255,0.1)" strokeWidth="2" />
-                  
-                  {/* Core Switch -> SQL Server */}
-                  <line x1="430" y1="200" x2="580" y2="100" stroke="rgba(255,255,255,0.1)" strokeWidth="2" />
-                  
-                  {/* Core Switch -> IIS Server */}
-                  <line x1="430" y1="200" x2="580" y2="200" stroke="rgba(255,255,255,0.1)" strokeWidth="2" />
-                  
-                  {/* Core Switch -> Wazuh SOC Agent */}
-                  <line x1="430" y1="200" x2="580" y2="300" stroke="rgba(255,255,255,0.1)" strokeWidth="2" />
-
-                  {/* Nodes rendering */}
-                  {/* Node 1: Internet Cloud */}
-                  <g className="cursor-pointer" onClick={() => onSearchTermChange('')}>
-                    <circle cx="150" cy="200" r="28" className="fill-slate-900 stroke-slate-700 stroke-2" />
-                    <text x="150" y="204" className="text-[10px] font-sans font-bold fill-slate-300 text-anchor-middle" textAnchor="middle">INTERNET</text>
-                  </g>
-
-                  {/* Node 2: NGFW Firewall */}
-                  <g className="cursor-pointer" onClick={() => onSearchTermChange('firewall')}>
-                    <circle cx="280" cy="200" r="28" className="fill-[#1e1515] stroke-rose-500/40 stroke-2" />
-                    <text x="280" y="204" className="text-[10px] font-sans font-bold fill-rose-400 text-anchor-middle" textAnchor="middle">NGFW</text>
-                  </g>
-
-                  {/* Node 3: Core Switch */}
-                  <g className="cursor-pointer" onClick={() => onSearchTermChange('switch')}>
-                    <circle cx="430" cy="200" r="28" className="fill-slate-900 stroke-cyan-500/40 stroke-2" />
-                    <text x="430" y="204" className="text-[10px] font-sans font-bold fill-cyan-400 text-anchor-middle" textAnchor="middle">SWITCH</text>
-                  </g>
-
-                  {/* Node 4: SQL Server (Database) */}
-                  <g className="cursor-pointer" onClick={() => onSearchTermChange('sql server')}>
-                    {/* Pulsing indicator if has alerts matching sql */}
-                    {alerts.some(a => a.summary.toLowerCase().includes('sql') || a.event_type.toLowerCase().includes('sql')) && (
-                      <circle cx="580" cy="100" r="34" className="fill-none stroke-rose-500 stroke-1 animate-ping" />
-                    )}
-                    <circle cx="580" cy="100" r="28" className={`stroke-2 ${
-                      alerts.some(a => a.status !== 'resolved' && (a.summary.toLowerCase().includes('sql') || a.event_type.toLowerCase().includes('sql')))
-                        ? 'fill-[#221015] stroke-rose-500'
-                        : 'fill-slate-900 stroke-emerald-500'
-                    }`} />
-                    <text x="580" y="104" className="text-[9px] font-sans font-bold fill-slate-200 text-anchor-middle" textAnchor="middle">SQL DB</text>
-                  </g>
-
-                  {/* Node 5: IIS Server (Web) */}
-                  <g className="cursor-pointer" onClick={() => onSearchTermChange('iis')}>
-                    {alerts.some(a => a.summary.toLowerCase().includes('iis') || a.event_type.toLowerCase().includes('iis')) && (
-                      <circle cx="580" cy="200" r="34" className="fill-none stroke-rose-500 stroke-1 animate-ping" />
-                    )}
-                    <circle cx="580" cy="200" r="28" className={`stroke-2 ${
-                      alerts.some(a => a.status !== 'resolved' && (a.summary.toLowerCase().includes('iis') || a.event_type.toLowerCase().includes('iis')))
-                        ? 'fill-[#221015] stroke-rose-500'
-                        : 'fill-slate-900 stroke-emerald-500'
-                    }`} />
-                    <text x="580" y="204" className="text-[9px] font-sans font-bold fill-slate-200 text-anchor-middle" textAnchor="middle">IIS WEB</text>
-                  </g>
-
-                  {/* Node 6: Wazuh SOC Agent */}
-                  <g className="cursor-pointer" onClick={() => onSearchTermChange('wazuh')}>
-                    {alerts.some(a => a.summary.toLowerCase().includes('wazuh') || a.event_type.toLowerCase().includes('security')) && (
-                      <circle cx="580" cy="300" r="34" className="fill-none stroke-rose-500 stroke-1 animate-ping" />
-                    )}
-                    <circle cx="580" cy="300" r="28" className={`stroke-2 ${
-                      alerts.some(a => a.status !== 'resolved' && (a.summary.toLowerCase().includes('wazuh') || a.event_type.toLowerCase().includes('security')))
-                        ? 'fill-[#221015] stroke-rose-500'
-                        : 'fill-slate-900 stroke-emerald-500'
-                    }`} />
-                    <text x="580" y="304" className="text-[9px] font-sans font-bold fill-slate-200 text-anchor-middle" textAnchor="middle">SOC AGENT</text>
-                  </g>
-                </svg>
-
-                <div className="absolute bottom-4 left-6 text-[10px] text-slate-500 bg-black/60 border border-white/5 px-2.5 py-1 rounded-md">
-                  💡 <em>Dica: Clique nos nós da topologia para filtrar os incidentes daquele ativo!</em>
-                </div>
-              </div>
-            </div>
+            <TopologyView tenantId={selectedTenant?.id} onSearchTermChange={onSearchTermChange} />
       )}
       {cockpitTab === 'settings' && (
             // Unified Settings & Administration Split-Pane

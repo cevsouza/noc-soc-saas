@@ -691,6 +691,11 @@ func main() {
 	protectedGetOperationalStats := middleware.JWTAuth(jwtSecret)(api.HandleGetOperationalStats(appPool, redisClient))
 	mux.Handle("/api/v1/reports/operational/stats", protectedGetOperationalStats)
 
+	// Real asset topology: the tenant's actual reporting hosts derived from its alert stream,
+	// replacing the old hardcoded 6-node SVG. Same authenticated-user access level as SLA stats.
+	protectedGetTopology := middleware.JWTAuth(jwtSecret)(api.HandleGetTopology(appPool))
+	mux.Handle("/api/v1/topology", protectedGetTopology)
+
 	// Global search (alerts/runbooks/tenants), scoped to whatever tenants the caller has access to
 	protectedSearch := middleware.JWTAuth(jwtSecret)(api.HandleGlobalSearch(appPool))
 	mux.Handle("/api/v1/search", protectedSearch)

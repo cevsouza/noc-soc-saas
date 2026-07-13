@@ -196,7 +196,7 @@ export default function CockpitPage() {
           )}
 
           {cockpitTab !== 'alerts' && (
-            <LegacyCockpitPanels cockpitTab={cockpitTab} alerts={alerts} onSearchTermChange={setSearchTerm} />
+            <LegacyCockpitPanels cockpitTab={cockpitTab} onSearchTermChange={setSearchTerm} />
           )}
         </section>
       </main>
