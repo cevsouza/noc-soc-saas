@@ -236,6 +236,7 @@ func main() {
 	wp.Start(ctx)
 	wp.StartWatchdog(ctx)
 	wp.StartSLAEscalationMonitor(ctx)
+	wp.StartRetentionEnforcer(ctx)
 	wp.StartMappingEngine(ctx)
 	defer wp.Stop()
 
@@ -669,6 +670,20 @@ func main() {
 		}
 		getSLAConfig.ServeHTTP(w, r)
 	})))
+
+	// Per-tenant alert retention (Fase 5): one route, method-dispatched — GET reads the policy (any
+	// authenticated user), PUT sets it (tenant admins). Enforce is a separate POST route (manual ops
+	// lever), also tenant-admin. Single registrations avoid a ServeMux collision.
+	getRetention := api.HandleGetRetentionConfig(appPool)
+	setRetention := middleware.RequireRole(model.RoleTenantAdmin)(api.HandleSetRetentionConfig(appPool))
+	mux.Handle("/api/v1/retention/config", middleware.JWTAuth(jwtSecret)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPut {
+			setRetention.ServeHTTP(w, r)
+			return
+		}
+		getRetention.ServeHTTP(w, r)
+	})))
+	mux.Handle("/api/v1/retention/enforce", middleware.JWTAuth(jwtSecret)(middleware.RequireRole(model.RoleTenantAdmin)(api.HandleEnforceRetention(appPool))))
 
 	// Operational KPI bundle (Fase 6 fatia 1): tactical NOC/SOC metrics (triage backlog, alert
 	// noise ratio, top offenders, automation ROI, MITRE breakdown, silent telemetry sources) that
