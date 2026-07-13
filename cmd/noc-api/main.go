@@ -441,72 +441,40 @@ func main() {
 		promMetricsHandler.ServeHTTP(w, r)
 	})
 
-	// High-Performance Ingestion endpoint (protected by API Key auth middleware & rate limiter)
-	ingestHandler := api.HandleIngest(appPool, redisClient)
-	protectedIngest := middleware.APIKeyAuth(appPool, redisClient, jwtSecret)(middleware.RateLimiter(redisClient, 500)(ingestHandler))
-	mux.Handle("/api/v1/ingest", protectedIngest)
+	// ingestGuard wraps an ingest handler with the shared middleware chain: API-key auth (resolves
+	// the tenant into context) → per-tenant ingestion circuit breaker (Fase 7: sheds a flooding
+	// tenant to protect the shared queue) → per-tenant rate limiter (500/min steady cap) → handler.
+	ingestGuard := func(h http.Handler) http.Handler {
+		return middleware.APIKeyAuth(appPool, redisClient, jwtSecret)(
+			middleware.IngestCircuitBreaker(redisClient)(
+				middleware.RateLimiter(redisClient, 500)(h)))
+	}
+
+	// High-Performance Ingestion endpoint (protected by API Key auth, circuit breaker & rate limiter)
+	mux.Handle("/api/v1/ingest", ingestGuard(api.HandleIngest(appPool, redisClient)))
 
 	// High-Performance Prometheus Alertmanager & Wazuh Webhook Ingestion
-	promHandler := api.HandlePrometheusIngest(appPool, redisClient)
-	protectedProm := middleware.APIKeyAuth(appPool, redisClient, jwtSecret)(middleware.RateLimiter(redisClient, 500)(promHandler))
-	mux.Handle("/api/v1/ingest/prometheus", protectedProm)
-
-	wazuhHandler := api.HandleWazuhIngest(appPool, redisClient)
-	protectedWazuh := middleware.APIKeyAuth(appPool, redisClient, jwtSecret)(middleware.RateLimiter(redisClient, 500)(wazuhHandler))
-	mux.Handle("/api/v1/ingest/wazuh", protectedWazuh)
+	mux.Handle("/api/v1/ingest/prometheus", ingestGuard(api.HandlePrometheusIngest(appPool, redisClient)))
+	mux.Handle("/api/v1/ingest/wazuh", ingestGuard(api.HandleWazuhIngest(appPool, redisClient)))
 
 	// High-Performance Uptime Kuma, Grafana & Zabbix Webhook Ingestions
-	uptimekumaHandler := api.HandleUptimeKumaIngest(appPool, redisClient)
-	protectedUptimeKuma := middleware.APIKeyAuth(appPool, redisClient, jwtSecret)(middleware.RateLimiter(redisClient, 500)(uptimekumaHandler))
-	mux.Handle("/api/v1/ingest/uptimekuma", protectedUptimeKuma)
-
-	grafanaHandler := api.HandleGrafanaIngest(appPool, redisClient)
-	protectedGrafana := middleware.APIKeyAuth(appPool, redisClient, jwtSecret)(middleware.RateLimiter(redisClient, 500)(grafanaHandler))
-	mux.Handle("/api/v1/ingest/grafana", protectedGrafana)
-
-	zabbixHandler := api.HandleZabbixIngest(appPool, redisClient)
-	protectedZabbix := middleware.APIKeyAuth(appPool, redisClient, jwtSecret)(middleware.RateLimiter(redisClient, 500)(zabbixHandler))
-	mux.Handle("/api/v1/ingest/zabbix", protectedZabbix)
+	mux.Handle("/api/v1/ingest/uptimekuma", ingestGuard(api.HandleUptimeKumaIngest(appPool, redisClient)))
+	mux.Handle("/api/v1/ingest/grafana", ingestGuard(api.HandleGrafanaIngest(appPool, redisClient)))
+	mux.Handle("/api/v1/ingest/zabbix", ingestGuard(api.HandleZabbixIngest(appPool, redisClient)))
 
 	// OTLP/HTTP+JSON logs, Icinga/Nagios, Azure Monitor, PagerDuty, Opsgenie (inbound), and
-	// CloudWatch (via SNS) ingestion — same auth/rate-limit wrapping as the connectors above.
-	otlpHandler := api.HandleOTLPIngest(appPool, redisClient)
-	protectedOTLP := middleware.APIKeyAuth(appPool, redisClient, jwtSecret)(middleware.RateLimiter(redisClient, 500)(otlpHandler))
-	mux.Handle("/api/v1/ingest/otlp", protectedOTLP)
+	// CloudWatch (via SNS) ingestion — same guard chain as the connectors above.
+	mux.Handle("/api/v1/ingest/otlp", ingestGuard(api.HandleOTLPIngest(appPool, redisClient)))
+	mux.Handle("/api/v1/ingest/icinga", ingestGuard(api.HandleIcingaIngest(appPool, redisClient)))
+	mux.Handle("/api/v1/ingest/azuremonitor", ingestGuard(api.HandleAzureMonitorIngest(appPool, redisClient)))
+	mux.Handle("/api/v1/ingest/pagerduty", ingestGuard(api.HandlePagerDutyIngest(appPool, redisClient)))
+	mux.Handle("/api/v1/ingest/opsgenie", ingestGuard(api.HandleOpsgenieIngest(appPool, redisClient)))
+	mux.Handle("/api/v1/ingest/cloudwatch", ingestGuard(api.HandleCloudWatchIngest(appPool, redisClient)))
 
-	icingaHandler := api.HandleIcingaIngest(appPool, redisClient)
-	protectedIcinga := middleware.APIKeyAuth(appPool, redisClient, jwtSecret)(middleware.RateLimiter(redisClient, 500)(icingaHandler))
-	mux.Handle("/api/v1/ingest/icinga", protectedIcinga)
-
-	azureMonitorHandler := api.HandleAzureMonitorIngest(appPool, redisClient)
-	protectedAzureMonitor := middleware.APIKeyAuth(appPool, redisClient, jwtSecret)(middleware.RateLimiter(redisClient, 500)(azureMonitorHandler))
-	mux.Handle("/api/v1/ingest/azuremonitor", protectedAzureMonitor)
-
-	pagerDutyHandler := api.HandlePagerDutyIngest(appPool, redisClient)
-	protectedPagerDuty := middleware.APIKeyAuth(appPool, redisClient, jwtSecret)(middleware.RateLimiter(redisClient, 500)(pagerDutyHandler))
-	mux.Handle("/api/v1/ingest/pagerduty", protectedPagerDuty)
-
-	opsgenieHandler := api.HandleOpsgenieIngest(appPool, redisClient)
-	protectedOpsgenie := middleware.APIKeyAuth(appPool, redisClient, jwtSecret)(middleware.RateLimiter(redisClient, 500)(opsgenieHandler))
-	mux.Handle("/api/v1/ingest/opsgenie", protectedOpsgenie)
-
-	cloudwatchHandler := api.HandleCloudWatchIngest(appPool, redisClient)
-	protectedCloudWatch := middleware.APIKeyAuth(appPool, redisClient, jwtSecret)(middleware.RateLimiter(redisClient, 500)(cloudwatchHandler))
-	mux.Handle("/api/v1/ingest/cloudwatch", protectedCloudWatch)
-
-	// EDR (CrowdStrike) and firewall (Palo Alto, Fortinet) inbound connectors — same auth/rate-limit
-	// wrapping as the connectors above.
-	crowdstrikeHandler := api.HandleCrowdStrikeIngest(appPool, redisClient)
-	protectedCrowdStrike := middleware.APIKeyAuth(appPool, redisClient, jwtSecret)(middleware.RateLimiter(redisClient, 500)(crowdstrikeHandler))
-	mux.Handle("/api/v1/ingest/crowdstrike", protectedCrowdStrike)
-
-	paloAltoHandler := api.HandlePaloAltoIngest(appPool, redisClient)
-	protectedPaloAlto := middleware.APIKeyAuth(appPool, redisClient, jwtSecret)(middleware.RateLimiter(redisClient, 500)(paloAltoHandler))
-	mux.Handle("/api/v1/ingest/paloalto", protectedPaloAlto)
-
-	fortinetHandler := api.HandleFortinetIngest(appPool, redisClient)
-	protectedFortinet := middleware.APIKeyAuth(appPool, redisClient, jwtSecret)(middleware.RateLimiter(redisClient, 500)(fortinetHandler))
-	mux.Handle("/api/v1/ingest/fortinet", protectedFortinet)
+	// EDR (CrowdStrike) and firewall (Palo Alto, Fortinet) inbound connectors — same guard chain.
+	mux.Handle("/api/v1/ingest/crowdstrike", ingestGuard(api.HandleCrowdStrikeIngest(appPool, redisClient)))
+	mux.Handle("/api/v1/ingest/paloalto", ingestGuard(api.HandlePaloAltoIngest(appPool, redisClient)))
+	mux.Handle("/api/v1/ingest/fortinet", ingestGuard(api.HandleFortinetIngest(appPool, redisClient)))
 
 	// Secure Vault Credentials Storage Endpoint (Postgres Vault with RLS & GCM Ciphers, protected by JWT & Admin Role check)
 	vaultRepo := repository.NewPostgresVaultRepository()
