@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"noc-api/internal/audit"
 	"noc-api/internal/db"
 	"noc-api/internal/middleware"
 	"noc-api/internal/repository"
@@ -323,6 +324,14 @@ func HandleApproveResponseAction(pgPool *pgxpool.Pool) http.HandlerFunc {
 			return
 		}
 
+		audit.Record(ctx, pgPool, audit.Entry{
+			TenantID: tenantID, UserID: claims.UserID,
+			Action:    "response.approve",
+			Resource:  req.RequestID.String(),
+			Details:   map[string]interface{}{"result": finalStatus},
+			IPAddress: r.RemoteAddr,
+		})
+
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": finalStatus, "output": output})
 	}
@@ -368,6 +377,13 @@ func HandleRejectResponseAction(pgPool *pgxpool.Pool) http.HandlerFunc {
 			http.Error(w, fmt.Sprintf("Failed to reject response action: %v", err), http.StatusInternalServerError)
 			return
 		}
+
+		audit.Record(ctx, pgPool, audit.Entry{
+			TenantID: tenantID, UserID: claims.UserID,
+			Action:    "response.reject",
+			Resource:  req.RequestID.String(),
+			IPAddress: r.RemoteAddr,
+		})
 
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"status":"success","message":"Ação de contenção rejeitada"}`))

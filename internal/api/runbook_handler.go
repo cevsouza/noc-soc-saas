@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"time"
 
+	"noc-api/internal/audit"
 	"noc-api/internal/db"
 	"noc-api/internal/middleware"
 	"noc-api/internal/model"
@@ -278,6 +279,18 @@ func HandleExecuteRunbook(pgPool *pgxpool.Pool) http.HandlerFunc {
 			}
 			return
 		}
+
+		var actorID uuid.UUID
+		if claims, ok := middleware.ClaimsFromContext(r.Context()); ok {
+			actorID = claims.UserID
+		}
+		audit.Record(ctx, pgPool, audit.Entry{
+			TenantID: tenantID, UserID: actorID,
+			Action:   "runbook.execute",
+			Resource: name,
+			Details:  map[string]interface{}{"runbook_id": req.RunbookID.String(), "exec_status": execStatus},
+			IPAddress: r.RemoteAddr,
+		})
 
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{
@@ -683,6 +696,14 @@ func HandleApproveRunbookRequest(pgPool *pgxpool.Pool) http.HandlerFunc {
 			return
 		}
 
+		audit.Record(ctx, pgPool, audit.Entry{
+			TenantID: tenantID, UserID: claims.UserID,
+			Action:   "runbook.approve",
+			Resource: name,
+			Details:  map[string]interface{}{"approval_id": req.ApprovalID.String(), "exec_status": execStatus},
+			IPAddress: r.RemoteAddr,
+		})
+
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": execStatus, "output": output})
 	}
@@ -742,6 +763,13 @@ func HandleRejectRunbookRequest(pgPool *pgxpool.Pool) http.HandlerFunc {
 			http.Error(w, fmt.Sprintf("Failed to reject request: %v", err), http.StatusInternalServerError)
 			return
 		}
+
+		audit.Record(ctx, pgPool, audit.Entry{
+			TenantID: tenantID, UserID: claims.UserID,
+			Action:    "runbook.reject",
+			Resource:  req.ApprovalID.String(),
+			IPAddress: r.RemoteAddr,
+		})
 
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"status":"success","message":"Runbook rejeitado com sucesso"}`))

@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"noc-api/internal/audit"
 	"noc-api/internal/connector"
 	"noc-api/internal/db"
 	"noc-api/internal/middleware"
@@ -1453,6 +1454,18 @@ func HandleSaveSecret(pgPool *pgxpool.Pool, vaultRepo repository.VaultRepository
 			http.Error(w, "Internal Server Error: Failed to commit secret to vault", http.StatusInternalServerError)
 			return
 		}
+
+		var actorID uuid.UUID
+		if claims, ok := middleware.ClaimsFromContext(r.Context()); ok {
+			actorID = claims.UserID
+		}
+		// Record the key name only — never the secret value.
+		audit.Record(tenantCtx, pgPool, audit.Entry{
+			TenantID: tenantID, UserID: actorID,
+			Action:    "vault.secret.save",
+			Resource:  req.Key,
+			IPAddress: r.RemoteAddr,
+		})
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)

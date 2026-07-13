@@ -380,3 +380,60 @@ func TestTenantVault(t *testing.T) {
 	}
 }
 
+// TestAuditAppendOnly validates migration 000017: the application role can INSERT audit rows but
+// can neither UPDATE nor DELETE them (write-once), so a compromised app cannot cover its tracks.
+// Runs meaningfully only when connected as the non-superuser noc_app_runtime role (CI); a
+// superuser/owner connection would be allowed to DELETE by design, so the DELETE assertion there
+// is skipped. Cleanup can't remove the tenant (cascade delete of audit rows is blocked for the app
+// role) — harmless on the ephemeral CI database.
+func TestAuditAppendOnly(t *testing.T) {
+	pool := getTestPool(t)
+	defer pool.Close()
+
+	ctx := context.Background()
+	tenantID := uuid.New()
+	if _, err := pool.Exec(ctx, "INSERT INTO tenants (id, name, slug, status) VALUES ($1, 'Audit AppendOnly', 'audit-append-only', 'active')", tenantID); err != nil {
+		t.Fatalf("failed to insert tenant: %v", err)
+	}
+	defer pool.Exec(ctx, "DELETE FROM tenants WHERE id = $1", tenantID) // may be blocked by the append-only trigger; ignored
+
+	tctx := db.WithTenantID(ctx, tenantID)
+
+	// INSERT must succeed.
+	var auditID uuid.UUID
+	if err := db.ExecuteInTenantTx(tctx, pool, func(tx pgx.Tx) error {
+		return tx.QueryRow(tctx, `
+			INSERT INTO audit_logs (tenant_id, action, resource, details)
+			VALUES ($1, 'test.action', 'test-resource', '{}')
+			RETURNING id
+		`, tenantID).Scan(&auditID)
+	}); err != nil {
+		t.Fatalf("INSERT into audit_logs should succeed: %v", err)
+	}
+
+	// UPDATE must be rejected (rows are immutable for everyone).
+	updErr := db.ExecuteInTenantTx(tctx, pool, func(tx pgx.Tx) error {
+		_, err := tx.Exec(tctx, `UPDATE audit_logs SET action = 'tampered' WHERE id = $1`, auditID)
+		return err
+	})
+	if updErr == nil {
+		t.Errorf("SECURITY: UPDATE on audit_logs should have been rejected (append-only)")
+	}
+
+	// DELETE must be rejected for the application role. If the test runs as a superuser/owner
+	// (local default), DELETE is allowed by design — detect that and skip the assertion.
+	var currentUser string
+	_ = pool.QueryRow(ctx, "SELECT current_user").Scan(&currentUser)
+	delErr := db.ExecuteInTenantTx(tctx, pool, func(tx pgx.Tx) error {
+		_, err := tx.Exec(tctx, `DELETE FROM audit_logs WHERE id = $1`, auditID)
+		return err
+	})
+	if currentUser == "noc_app_runtime" {
+		if delErr == nil {
+			t.Errorf("SECURITY: DELETE on audit_logs should have been rejected for the application role")
+		}
+	} else {
+		t.Logf("connected as %q (not noc_app_runtime): DELETE is allowed by design, skipping DELETE assertion", currentUser)
+	}
+}
+
