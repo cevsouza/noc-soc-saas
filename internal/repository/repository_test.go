@@ -664,3 +664,43 @@ func TestAgentIsolation(t *testing.T) {
 	}
 }
 
+// TestAgentSNMPIsolation is the mandatory cross-tenant leak test for agent_snmp_targets (slice 2).
+func TestAgentSNMPIsolation(t *testing.T) {
+	pool := getTestPool(t)
+	defer pool.Close()
+
+	ctx := context.Background()
+	tenantA := uuid.New()
+	tenantB := uuid.New()
+	if _, err := pool.Exec(ctx, "INSERT INTO tenants (id, name, slug, status) VALUES ($1, 'Snmp A', 'snmp-iso-a', 'active')", tenantA); err != nil {
+		t.Fatalf("insert tenant A: %v", err)
+	}
+	defer pool.Exec(ctx, "DELETE FROM tenants WHERE id = $1", tenantA)
+	if _, err := pool.Exec(ctx, "INSERT INTO tenants (id, name, slug, status) VALUES ($1, 'Snmp B', 'snmp-iso-b', 'active')", tenantB); err != nil {
+		t.Fatalf("insert tenant B: %v", err)
+	}
+	defer pool.Exec(ctx, "DELETE FROM tenants WHERE id = $1", tenantB)
+
+	ctxA := db.WithTenantID(ctx, tenantA)
+	if err := db.ExecuteInTenantTx(ctxA, pool, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctxA, `INSERT INTO agent_snmp_targets (tenant_id, name, host, community_encrypted, community_nonce, checks) VALUES ($1, 'sw', '10.0.0.1', '\x00', '\x00', '[]')`, tenantA)
+		return err
+	}); err != nil {
+		t.Fatalf("tenant A failed to create snmp target: %v", err)
+	}
+
+	ctxB := db.WithTenantID(ctx, tenantB)
+	if err := db.ExecuteInTenantTx(ctxB, pool, func(tx pgx.Tx) error {
+		var count int
+		if err := tx.QueryRow(ctxB, `SELECT COUNT(*) FROM agent_snmp_targets`).Scan(&count); err != nil {
+			return err
+		}
+		if count != 0 {
+			t.Errorf("SECURITY BREACH: tenant B saw %d SNMP target(s) belonging to tenant A", count)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("tenant B transaction failed: %v", err)
+	}
+}
+

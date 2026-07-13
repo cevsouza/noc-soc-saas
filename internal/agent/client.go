@@ -15,9 +15,9 @@ import (
 
 // Config is what the agent polls to learn what to do.
 type Config struct {
-	HeartbeatIntervalSeconds int               `json:"heartbeat_interval_seconds"`
-	PollIntervalSeconds      int               `json:"poll_interval_seconds"`
-	SNMPTargets              []json.RawMessage `json:"snmp_targets"`
+	HeartbeatIntervalSeconds int          `json:"heartbeat_interval_seconds"`
+	PollIntervalSeconds      int          `json:"poll_interval_seconds"`
+	SNMPTargets              []SNMPTarget `json:"snmp_targets"`
 }
 
 // Event is one event the agent pushes (e.g. an SNMP threshold breach in slice 2).

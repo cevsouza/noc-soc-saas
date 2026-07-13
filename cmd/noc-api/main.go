@@ -487,6 +487,19 @@ func main() {
 	mux.Handle("/api/v1/agent/config", middleware.APIKeyAuth(appPool, redisClient, jwtSecret)(api.HandleGetAgentConfig(appPool)))
 	mux.Handle("/api/v1/agent/events", ingestGuard(api.HandleAgentEvents(appPool, redisClient)))
 
+	// SNMP collection targets (slice 2): one route, method-dispatched — GET lists (any authenticated
+	// user), POST/DELETE mutate (tenant admins). The agent reads these (community decrypted) via
+	// /agent/config. Single registration avoids a ServeMux collision.
+	snmpGet := api.HandleGetSNMPTargets(appPool)
+	snmpMutate := middleware.RequireRole(model.RoleTenantAdmin)(api.HandleMutateSNMPTargets(appPool))
+	mux.Handle("/api/v1/agent/snmp-targets", middleware.JWTAuth(jwtSecret)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			snmpGet.ServeHTTP(w, r)
+			return
+		}
+		snmpMutate.ServeHTTP(w, r)
+	})))
+
 	// Secure Vault Credentials Storage Endpoint (Postgres Vault with RLS & GCM Ciphers, protected by JWT & Admin Role check)
 	vaultRepo := repository.NewPostgresVaultRepository()
 

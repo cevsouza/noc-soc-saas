@@ -88,6 +88,7 @@ func main() {
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 
 	pollInterval := 60 * time.Second
+	poller := agent.NewPoller()
 	log.Printf("[agent] noc-agent %s started; polling %s every %s (outbound 443 only)", agentVersion, saasURL, pollInterval)
 
 	runCycle := func() {
@@ -99,12 +100,14 @@ func main() {
 		if cfg.PollIntervalSeconds > 0 {
 			pollInterval = time.Duration(cfg.PollIntervalSeconds) * time.Second
 		}
-		// Slice 1: an empty batch is a heartbeat. Slice 2 fills it with SNMP threshold alerts.
-		if _, err := client.SendEvents(st.AgentID, nil); err != nil {
-			log.Printf("[agent] heartbeat/events push failed: %v", err)
+		// Collect SNMP threshold breaches from the configured targets. An empty batch is a heartbeat.
+		events := agent.Collect(poller, cfg.SNMPTargets)
+		accepted, err := client.SendEvents(st.AgentID, events)
+		if err != nil {
+			log.Printf("[agent] events push failed: %v", err)
 			return
 		}
-		log.Printf("[agent] cycle ok (snmp_targets=%d, next in %s)", len(cfg.SNMPTargets), pollInterval)
+		log.Printf("[agent] cycle ok (snmp_targets=%d, events=%d accepted=%d, next in %s)", len(cfg.SNMPTargets), len(events), accepted, pollInterval)
 	}
 
 	runCycle()
