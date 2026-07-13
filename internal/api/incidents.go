@@ -8,6 +8,7 @@ import (
 
 	"noc-api/internal/audit"
 	"noc-api/internal/db"
+	"noc-api/internal/domain"
 	"noc-api/internal/middleware"
 
 	"github.com/google/uuid"
@@ -47,16 +48,25 @@ func HandleGetIncidents(pgPool *pgxpool.Pool) http.HandlerFunc {
 		if statusFilter == "" {
 			statusFilter = "all"
 		}
+		// Segregated NOC/SOC console: ?domain=noc|soc keeps only incidents whose grouped alerts come
+		// from that domain's sources (an incident groups one fingerprint = one source, so its domain
+		// is well-defined). Filtered via an EXISTS on the incident's alerts.
+		domainClause := ""
+		args := []interface{}{tenantID, statusFilter}
+		if sources, ok := domain.SourcesForDomain(r.URL.Query().Get("domain")); ok {
+			args = append(args, sources)
+			domainClause = ` AND EXISTS (SELECT 1 FROM alerts a WHERE a.tenant_id = incidents.tenant_id AND a.incident_id = incidents.id AND a.ai_analysis->>'source' = ANY($3))`
+		}
 
 		list := make([]Incident, 0)
 		err = db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
 			rows, err := tx.Query(ctx, `
 				SELECT id, fingerprint, title, severity, status, risk_score, alert_count, first_seen, last_seen, created_at, resolved_at
 				FROM incidents
-				WHERE tenant_id = $1 AND ($2 = 'all' OR status = $2)
+				WHERE tenant_id = $1 AND ($2 = 'all' OR status = $2)`+domainClause+`
 				ORDER BY risk_score DESC, last_seen DESC
 				LIMIT 100
-			`, tenantID, statusFilter)
+			`, args...)
 			if err != nil {
 				return err
 			}

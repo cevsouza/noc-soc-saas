@@ -7,6 +7,7 @@ import { useTenantSelection } from '@/lib/tenant-context';
 import { useAlertsSocket } from '@/lib/use-alerts-socket';
 import { usePendingApprovalsCount } from '@/lib/use-pending-approvals-count';
 import { usePendingResponseCount } from '@/lib/use-pending-response-count';
+import { domainForSource, type ConsoleMode } from '@/lib/domain';
 import { AppHeader } from '@/components/app-header';
 import { AlertStatCards } from '@/components/alerts/alert-stat-cards';
 import { AlertsSearchBar } from '@/components/alerts/alerts-search-bar';
@@ -37,6 +38,7 @@ export default function CockpitPage() {
   const pendingSettingsCount = pendingApprovals + pendingResponses;
 
   const [cockpitTab, setCockpitTab] = useState<CockpitTab>('alerts');
+  const [consoleMode, setConsoleMode] = useState<ConsoleMode>('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [severityFilter, setSeverityFilter] = useState<SeverityFilterValue>('all');
   const [selectedAlert, setSelectedAlert] = useState<Alert | null>(null);
@@ -53,12 +55,18 @@ export default function CockpitPage() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
+  // Segregated NOC/SOC console: when a domain is selected, every view (stat cards, alerts, incidents)
+  // shows only that domain's data, derived from each alert's source.
+  const inConsole = (a: Alert) => consoleMode === 'all' || domainForSource(a.ai_analysis?.source as string | undefined) === consoleMode;
+  const consoleDomain = consoleMode === 'all' ? undefined : consoleMode;
+
+  const baseStat = (a: Alert) => selectedTenantIds.includes(a.tenant_id) && inConsole(a) && a.status !== 'resolved' && a.status !== 'suppressed';
   const stats = {
-    total: alerts.filter((a) => selectedTenantIds.includes(a.tenant_id) && a.status !== 'resolved' && a.status !== 'suppressed').length,
-    fatal: alerts.filter((a) => selectedTenantIds.includes(a.tenant_id) && a.severity === 'fatal' && a.status !== 'resolved' && a.status !== 'suppressed').length,
-    critical: alerts.filter((a) => selectedTenantIds.includes(a.tenant_id) && a.severity === 'critical' && a.status !== 'resolved' && a.status !== 'suppressed').length,
-    warning: alerts.filter((a) => selectedTenantIds.includes(a.tenant_id) && a.severity === 'warning' && a.status !== 'resolved' && a.status !== 'suppressed').length,
-    info: alerts.filter((a) => selectedTenantIds.includes(a.tenant_id) && a.severity === 'info' && a.status !== 'resolved' && a.status !== 'suppressed').length,
+    total: alerts.filter(baseStat).length,
+    fatal: alerts.filter((a) => baseStat(a) && a.severity === 'fatal').length,
+    critical: alerts.filter((a) => baseStat(a) && a.severity === 'critical').length,
+    warning: alerts.filter((a) => baseStat(a) && a.severity === 'warning').length,
+    info: alerts.filter((a) => baseStat(a) && a.severity === 'info').length,
   };
 
   const filteredAlerts = alerts.filter((a) => {
@@ -69,7 +77,7 @@ export default function CockpitPage() {
     const matchesSeverity = severityFilter === 'all' || a.severity === severityFilter;
     const matchesTenant = selectedTenantIds.includes(a.tenant_id);
     const isActive = a.status !== 'resolved' && a.status !== 'suppressed';
-    return matchesSearch && matchesSeverity && matchesTenant && isActive;
+    return matchesSearch && matchesSeverity && matchesTenant && isActive && inConsole(a);
   });
 
   useEffect(() => {
@@ -168,6 +176,32 @@ export default function CockpitPage() {
             )}
           </div>
 
+          {/* Segregated console selector: NOC (rede/disponibilidade) vs SOC (segurança) */}
+          <div className="flex items-center gap-2 text-[10px] uppercase font-bold tracking-wider">
+            <span className="text-slate-500">Console</span>
+            {([
+              { id: 'all', label: 'Unificado' },
+              { id: 'noc', label: 'NOC' },
+              { id: 'soc', label: 'SOC' },
+            ] as { id: ConsoleMode; label: string }[]).map((m) => (
+              <button
+                key={m.id}
+                onClick={() => setConsoleMode(m.id)}
+                className={`px-3 py-1 rounded-lg border transition-all cursor-pointer ${
+                  consoleMode === m.id
+                    ? m.id === 'soc'
+                      ? 'bg-rose-500/20 border-rose-500/50 text-rose-300'
+                      : m.id === 'noc'
+                        ? 'bg-sky-500/20 border-sky-500/50 text-sky-300'
+                        : 'bg-white/10 border-white/20 text-slate-100'
+                    : 'bg-white/[0.02] border-white/10 text-slate-500 hover:text-slate-300'
+                }`}
+              >
+                {m.label}
+              </button>
+            ))}
+          </div>
+
           {selectedTenantIds.length === 1 && (
             <div className="p-3 rounded-xl bg-violet-950/20 border border-violet-500/35 flex items-center justify-between text-xs text-violet-300">
               <div className="flex items-center gap-2">
@@ -201,7 +235,7 @@ export default function CockpitPage() {
           )}
 
           {cockpitTab === 'incidents' && (
-            <IncidentsView tenantId={selectedTenantIds.length === 1 ? selectedTenantIds[0] : undefined} />
+            <IncidentsView tenantId={selectedTenantIds.length === 1 ? selectedTenantIds[0] : undefined} domain={consoleDomain} />
           )}
 
           {(cockpitTab === 'topology' || cockpitTab === 'settings') && (

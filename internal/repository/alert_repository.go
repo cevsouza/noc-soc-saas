@@ -139,70 +139,56 @@ func (r *PostgresAlertRepository) GetByID(ctx context.Context, q db.Queryer, id 
 // optimization: it is a defense-in-depth guarantee that this query cannot return
 // cross-tenant data even if the caller forgets to run it inside a tenant-scoped
 // transaction (i.e. even if RLS is not enforced for whatever reason).
-func (r *PostgresAlertRepository) List(ctx context.Context, q db.Queryer, tenantID uuid.UUID, limit, offset int) ([]*model.Alert, error) {
-	query := `
-		SELECT id, tenant_id, device_id, event_type, severity, status, summary, payload, ai_analysis, created_at, updated_at, resolved_at, acknowledged_at, ai_diagnostic, itsm_ticket_ref, mitre_tactics, ueba_anomalous, COALESCE(fingerprint, ''), incident_id
-		FROM alerts
-		WHERE tenant_id = $1
-		ORDER BY created_at DESC
-		LIMIT $2 OFFSET $3
-	`
+const alertSelectCols = `id, tenant_id, device_id, event_type, severity, status, summary, payload, ai_analysis, created_at, updated_at, resolved_at, acknowledged_at, ai_diagnostic, itsm_ticket_ref, mitre_tactics, ueba_anomalous, COALESCE(fingerprint, ''), incident_id`
 
-	rows, err := q.Query(ctx, query, tenantID, limit, offset)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query alerts: %w", err)
-	}
-	defer rows.Close()
-
+// scanAlertRows scans a result set selecting alertSelectCols into a slice of alerts.
+func scanAlertRows(rows pgx.Rows) ([]*model.Alert, error) {
 	var alerts []*model.Alert
 	for rows.Next() {
 		var a model.Alert
 		var payloadBytes []byte
 		var aiAnalysisBytes []byte
-
-		err := rows.Scan(
-			&a.ID,
-			&a.TenantID,
-			&a.DeviceID,
-			&a.EventType,
-			&a.Severity,
-			&a.Status,
-			&a.Summary,
-			&payloadBytes,
-			&aiAnalysisBytes,
-			&a.CreatedAt,
-			&a.UpdatedAt,
-			&a.ResolvedAt,
-			&a.AcknowledgedAt,
-			&a.AIDiagnostic,
-			&a.ITSMTicketRef,
-			&a.MitreTactics,
-			&a.UEBAAnomalous,
-			&a.Fingerprint,
-			&a.IncidentID,
-		)
-		if err != nil {
+		if err := rows.Scan(
+			&a.ID, &a.TenantID, &a.DeviceID, &a.EventType, &a.Severity, &a.Status, &a.Summary,
+			&payloadBytes, &aiAnalysisBytes, &a.CreatedAt, &a.UpdatedAt, &a.ResolvedAt, &a.AcknowledgedAt,
+			&a.AIDiagnostic, &a.ITSMTicketRef, &a.MitreTactics, &a.UEBAAnomalous, &a.Fingerprint, &a.IncidentID,
+		); err != nil {
 			return nil, fmt.Errorf("failed to scan alert: %w", err)
 		}
-
 		if err := json.Unmarshal(payloadBytes, &a.Payload); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal alert payload: %w", err)
 		}
-
 		if len(aiAnalysisBytes) > 0 {
 			if err := json.Unmarshal(aiAnalysisBytes, &a.AIAnalysis); err != nil {
 				return nil, fmt.Errorf("failed to unmarshal alert AI analysis: %w", err)
 			}
 		}
-
 		alerts = append(alerts, &a)
 	}
-
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("error during alerts row iteration: %w", err)
 	}
-
 	return alerts, nil
+}
+
+func (r *PostgresAlertRepository) List(ctx context.Context, q db.Queryer, tenantID uuid.UUID, limit, offset int) ([]*model.Alert, error) {
+	rows, err := q.Query(ctx, `SELECT `+alertSelectCols+` FROM alerts WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3`, tenantID, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query alerts: %w", err)
+	}
+	defer rows.Close()
+	return scanAlertRows(rows)
+}
+
+// ListByDomain is List filtered to alerts whose stored source (ai_analysis->>'source') is in the
+// given set — powering the segregated NOC vs SOC consoles.
+func (r *PostgresAlertRepository) ListByDomain(ctx context.Context, q db.Queryer, tenantID uuid.UUID, sources []string, limit, offset int) ([]*model.Alert, error) {
+	rows, err := q.Query(ctx, `SELECT `+alertSelectCols+` FROM alerts WHERE tenant_id = $1 AND ai_analysis->>'source' = ANY($2) ORDER BY created_at DESC LIMIT $3 OFFSET $4`, tenantID, sources, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query alerts by domain: %w", err)
+	}
+	defer rows.Close()
+	return scanAlertRows(rows)
 }
 
 func (r *PostgresAlertRepository) UpdateStatus(ctx context.Context, q db.Queryer, id uuid.UUID, createdAt time.Time, status model.AlertStatus) error {

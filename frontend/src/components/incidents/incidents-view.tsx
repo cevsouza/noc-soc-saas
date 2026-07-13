@@ -41,7 +41,7 @@ function riskClass(score: number): string {
 // the recurring alerts of one problem collapsed together — with acknowledge/resolve actions and an
 // expandable list of the alerts it groups. Resolving closes the incident (a new occurrence opens a
 // fresh one).
-export function IncidentsView({ tenantId }: { tenantId?: string }) {
+export function IncidentsView({ tenantId, domain }: { tenantId?: string; domain?: 'noc' | 'soc' }) {
   const [filter, setFilter] = useState<Filter>('open');
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -53,18 +53,19 @@ export function IncidentsView({ tenantId }: { tenantId?: string }) {
   const [actioningId, setActioningId] = useState<string | null>(null);
 
   const qtenant = tenantId ? `&tenant_id=${tenantId}` : '';
+  const qdomain = domain ? `&domain=${domain}` : '';
 
   const fetchIncidents = useCallback(async () => {
     setIsLoading(true);
     try {
-      const data = await apiFetchJson<Incident[]>(`/api/v1/incidents?status=${filter}${qtenant}`);
+      const data = await apiFetchJson<Incident[]>(`/api/v1/incidents?status=${filter}${qtenant}${qdomain}`);
       setIncidents(data || []);
     } catch (err) {
       console.error('Failed to fetch incidents:', err);
     } finally {
       setIsLoading(false);
     }
-  }, [filter, qtenant]);
+  }, [filter, qtenant, qdomain]);
 
   useEffect(() => {
     fetchIncidents();

@@ -19,6 +19,7 @@ import (
 	"noc-api/internal/cache"
 	"noc-api/internal/connector"
 	"noc-api/internal/db"
+	"noc-api/internal/domain"
 	"noc-api/internal/middleware"
 	"noc-api/internal/model"
 	"noc-api/internal/queue"
@@ -1516,7 +1517,12 @@ func HandleListAlerts(pgPool *pgxpool.Pool, alertRepo repository.AlertRepository
 		var alerts []*model.Alert
 		err = db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
 			var err error
-			alerts, err = alertRepo.List(ctx, tx, tenantID, 100, 0)
+			// Segregated NOC/SOC console: ?domain=noc|soc filters by the alert source's domain.
+			if sources, ok := domain.SourcesForDomain(r.URL.Query().Get("domain")); ok {
+				alerts, err = alertRepo.ListByDomain(ctx, tx, tenantID, sources, 100, 0)
+			} else {
+				alerts, err = alertRepo.List(ctx, tx, tenantID, 100, 0)
+			}
 			return err
 		})
 		if err != nil {
