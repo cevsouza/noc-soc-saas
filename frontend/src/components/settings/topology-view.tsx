@@ -1,16 +1,15 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { RefreshCw, Radar, ServerCog, Wifi, WifiOff, Settings2, AlertCircle } from 'lucide-react';
+import { RefreshCw, Radar, ServerCog, Wifi, WifiOff, Settings2, AlertCircle, Search, X, Filter } from 'lucide-react';
 import { apiFetchJson } from '@/lib/api-client';
-import type { TopologyGraph, GraphNode, TopologyStatus } from '@/types';
+import type { TopologyGraph, GraphNode, GraphEdge, TopologyStatus } from '@/types';
 
-// Merged topology graph (discovery slice C, onboarding in slice T1). Unifies three real sources fetched
-// from GET /api/v1/topology/graph: devices found by the active SNMP sweep (slice A), assets that reported
-// telemetry/alerts (carrying severity), and the physical LLDP/CDP edges between them (slice B). Lines
-// here are REAL physical adjacencies (not "reports to NOC core"). Clicking a node filters the Alerts
-// tab by that asset. GET /api/v1/topology/status drives the onboarding state so an empty graph explains
-// that it needs an agent + CIDR ranges instead of degrading silently.
+// Merged topology graph (discovery slice C; onboarding T1; robust matching T3; scalable view T4).
+// Fetches GET /api/v1/topology/graph and renders it as a HIERARCHICAL layout grouped by device role
+// (perimeter → core → access → hosts → unmanaged neighbours), with filters (kind/severity/origin/search)
+// and per-node drill-down. Lines are REAL physical LLDP/CDP adjacencies. Clicking "filter alerts" on a
+// node scopes the Alerts tab to that asset. GET /api/v1/topology/status drives the onboarding state.
 export function TopologyView({
   tenantId,
   onSearchTermChange,
@@ -25,6 +24,12 @@ export function TopologyView({
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const [search, setSearch] = useState('');
+  const [onlyAlerting, setOnlyAlerting] = useState(false);
+  const [originFilter, setOriginFilter] = useState<'all' | 'discovery' | 'telemetry' | 'both' | 'neighbor'>('all');
+  const [hiddenTiers, setHiddenTiers] = useState<Set<string>>(new Set());
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+
   const fetchGraph = useCallback(async () => {
     setIsLoading(true);
     setError(null);
@@ -36,6 +41,7 @@ export function TopologyView({
       ]);
       setData(g);
       setStatus(s);
+      setSelectedId(null);
     } catch (err) {
       console.error('Failed to fetch topology graph:', err);
       setError('Não foi possível carregar o grafo de topologia.');
@@ -48,54 +54,66 @@ export function TopologyView({
     fetchGraph();
   }, [fetchGraph]);
 
-  const nodes = data?.nodes ?? [];
-  const edges = data?.edges ?? [];
+  const allNodes = useMemo(() => data?.nodes ?? [], [data]);
+  const allEdges = useMemo(() => data?.edges ?? [], [data]);
 
-  // Ring layout: nodes on a circle, physical edges drawn as chords between their positions. Positions
-  // computed once per node set. viewBox 820x480; center (410,240).
-  const positions = useMemo(() => {
-    const cx = 410;
-    const cy = 240;
-    const n = nodes.length;
-    const radius = n <= 6 ? 150 : n <= 14 ? 185 : 210;
-    const map: Record<string, { x: number; y: number; node: GraphNode }> = {};
-    nodes.forEach((node, i) => {
-      const angle = (2 * Math.PI * i) / Math.max(n, 1) - Math.PI / 2;
-      map[node.id] = { x: cx + radius * Math.cos(angle), y: cy + radius * Math.sin(angle), node };
+  // Which tiers actually have nodes (drives the tier filter chips).
+  const presentTiers = useMemo(() => {
+    const set = new Set<string>();
+    for (const n of allNodes) set.add(tierKey(n.kind));
+    return TIERS.filter((t) => set.has(t.key));
+  }, [allNodes]);
+
+  // Apply all filters; edges kept only when both endpoints survive.
+  const nodes = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return allNodes.filter((n) => {
+      if (hiddenTiers.has(tierKey(n.kind))) return false;
+      if (onlyAlerting && n.unresolved_alerts === 0) return false;
+      if (originFilter !== 'all' && n.origin !== originFilter) return false;
+      if (q && !n.label.toLowerCase().includes(q) && !n.id.toLowerCase().includes(q)) return false;
+      return true;
     });
-    return map;
-  }, [nodes]);
+  }, [allNodes, hiddenTiers, onlyAlerting, originFilter, search]);
 
-  const counts = useMemo(() => {
-    let discovery = 0;
-    let telemetry = 0;
-    let neighbor = 0;
-    for (const n of nodes) {
-      if (n.origin === 'neighbor') neighbor++;
-      else if (n.origin === 'telemetry') telemetry++;
-      else discovery++; // discovery + both
-    }
-    return { discovery, telemetry, neighbor };
-  }, [nodes]);
+  const visibleIds = useMemo(() => new Set(nodes.map((n) => n.id)), [nodes]);
+  const edges = useMemo(
+    () => allEdges.filter((e) => visibleIds.has(e.source) && visibleIds.has(e.target)),
+    [allEdges, visibleIds],
+  );
 
-  // No actively-discovered devices yet: the physical topology can't be drawn until an agent sweeps the
-  // network. Show the onboarding banner (strong empty-state when there's nothing at all, inline note
-  // when there are at least telemetry-derived hosts to show).
+  const layout = useMemo(() => computeLayout(nodes), [nodes]);
+  const nodesById = useMemo(() => {
+    const m: Record<string, GraphNode> = {};
+    for (const n of allNodes) m[n.id] = n;
+    return m;
+  }, [allNodes]);
+  const selected = selectedId ? nodesById[selectedId] : null;
+
   const noDiscovery = !!status && status.discovered_devices === 0;
-  const nothingAtAll = noDiscovery && nodes.length === 0;
+  const nothingAtAll = noDiscovery && allNodes.length === 0;
+
+  const toggleTier = (key: string) => {
+    setHiddenTiers((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
 
   return (
     <div className="glass-card rounded-xl overflow-hidden flex flex-col border border-white/5 p-6 bg-[#040812]">
-      <div className="flex justify-between items-center mb-4">
+      <div className="flex justify-between items-start mb-4 gap-4 flex-wrap">
         <div className="flex flex-col gap-0.5">
           <h4 className="text-sm font-extrabold text-slate-200 uppercase tracking-wider flex items-center gap-2">
             <Radar className="w-4 h-4 text-cyan-400" /> Grafo de Topologia (descoberta ativa)
           </h4>
           <p className="text-[10px] text-slate-500 uppercase tracking-wider font-semibold">
-            {nodes.length} ativo(s) · {edges.length} enlace(s) físico(s) LLDP/CDP · descobertos {counts.discovery} · telemetria {counts.telemetry} · vizinhos {counts.neighbor}
+            {nodes.length}/{allNodes.length} ativo(s) · {edges.length} enlace(s) físico(s) LLDP/CDP · layout hierárquico por função
           </p>
         </div>
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-3">
           <div className="flex gap-3 text-[10px] font-bold text-slate-400">
             <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span> Operacional</span>
             <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-amber-500"></span> Atenção</span>
@@ -112,19 +130,17 @@ export function TopologyView({
         </div>
       </div>
 
-      {/* Discovery status strip: is an agent connected, when did it last check in, how much has it found */}
       {status && <StatusStrip status={status} onConfigureDiscovery={onConfigureDiscovery} />}
 
       {error && (
         <div className="p-3 rounded-lg bg-rose-950/20 border border-rose-500/25 text-xs text-rose-300 mb-3">{error}</div>
       )}
 
-      {/* Inline note when there are telemetry hosts to show but no actively-discovered devices yet */}
       {noDiscovery && !nothingAtAll && (
         <div className="mb-3 flex items-start gap-2 p-3 rounded-lg bg-amber-950/15 border border-amber-500/20 text-[11px] text-amber-200/90">
           <AlertCircle className="w-4 h-4 mt-0.5 shrink-0 text-amber-400" />
           <span>
-            O grafo abaixo mostra apenas ativos <strong>derivados de alertas</strong>. A topologia física
+            O grafo mostra apenas ativos <strong>derivados de alertas</strong>. A topologia física
             (dispositivos e enlaces LLDP/CDP) só aparece quando um agente varre a rede.{' '}
             {onConfigureDiscovery && (
               <button onClick={onConfigureDiscovery} className="underline font-bold text-amber-100 hover:text-white">
@@ -135,84 +151,228 @@ export function TopologyView({
         </div>
       )}
 
-      <div className="relative w-full h-[460px] bg-black/60 rounded-xl border border-white/5 flex items-center justify-center overflow-hidden">
-        {isLoading && !data ? (
-          <div className="text-xs text-slate-500">Carregando grafo…</div>
-        ) : nothingAtAll ? (
-          <DiscoveryOnboarding onConfigureDiscovery={onConfigureDiscovery} hasAgent={!!status && status.agent_count > 0} hasTargets={!!status && status.discovery_targets > 0} />
-        ) : nodes.length === 0 ? (
-          <div className="flex flex-col items-center gap-2 text-slate-500 px-6 text-center">
-            <ServerCog className="w-8 h-8 text-slate-600" />
-            <p className="text-sm font-bold text-slate-400">Nenhum ativo no grafo ainda</p>
-            <p className="text-[11px] max-w-md">
-              Os nós aparecem conforme a descoberta ativa (varredura SNMP) inventaria dispositivos e as
-              fontes de monitoramento reportam alertas.
-            </p>
+      {/* Filter bar */}
+      {allNodes.length > 0 && (
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <div className="relative">
+            <Search className="w-3.5 h-3.5 text-slate-500 absolute left-2 top-1/2 -translate-y-1/2" />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Buscar ativo…"
+              className="pl-7 pr-2 py-1.5 rounded-md bg-black/40 border border-white/10 text-xs text-slate-200 placeholder:text-slate-600 w-44"
+            />
           </div>
-        ) : (
-          <svg className="w-full h-full" viewBox="0 0 820 480">
-            <defs>
-              <pattern id="topo-grid" width="20" height="20" patternUnits="userSpaceOnUse">
-                <path d="M 20 0 L 0 0 0 20" fill="none" stroke="rgba(255,255,255,0.015)" strokeWidth="1" />
-              </pattern>
-            </defs>
-            <rect width="100%" height="100%" fill="url(#topo-grid)" />
-
-            {/* Physical edges (LLDP/CDP) */}
-            {edges.map((e, i) => {
-              const s = positions[e.source];
-              const t = positions[e.target];
-              if (!s || !t) return null;
-              return (
-                <g key={`e-${i}`}>
-                  <line
-                    x1={s.x}
-                    y1={s.y}
-                    x2={t.x}
-                    y2={t.y}
-                    stroke="rgba(56,189,248,0.35)"
-                    strokeWidth="1.5"
-                  />
-                  <title>{`${s.node.label} (${e.local_port || '?'}) ↔ ${t.node.label} (${e.remote_port || '?'}) · ${e.protocol.toUpperCase()}`}</title>
-                </g>
-              );
-            })}
-
-            {/* Nodes */}
-            {nodes.map((node) => {
-              const p = positions[node.id];
-              if (!p) return null;
-              const color = nodeColor(node);
-              const label = node.label.length > 14 ? node.label.slice(0, 13) + '…' : node.label;
-              return (
-                <g key={node.id} className="cursor-pointer" onClick={() => onSearchTermChange(node.label)}>
-                  <title>
-                    {`${node.label}\n${originLabel(node.origin)}${node.vendor ? ` · ${node.vendor}` : ''}${
-                      node.kind ? ` · ${node.kind}` : ''
-                    }${node.unresolved_alerts > 0 ? `\n${node.unresolved_alerts} alerta(s) em aberto` : ''}`}
-                  </title>
-                  {node.unresolved_alerts > 0 && (
-                    <circle cx={p.x} cy={p.y} r="28" className="fill-none animate-ping" stroke={color.ring} strokeWidth="1" />
-                  )}
-                  <circle cx={p.x} cy={p.y} r="22" fill={color.fill} stroke={color.stroke} strokeWidth="2" strokeDasharray={node.origin === 'neighbor' ? '3 2' : undefined} />
-                  <text x={p.x} y={p.y - 1} className="fill-slate-100 font-bold" fontSize="8.5" textAnchor="middle">
-                    {label}
-                  </text>
-                  <text x={p.x} y={p.y + 9} className="fill-slate-400" fontSize="7" textAnchor="middle">
-                    {node.unresolved_alerts > 0 ? `${node.unresolved_alerts} aberto(s)` : kindLabel(node.kind)}
-                  </text>
-                </g>
-              );
-            })}
-          </svg>
-        )}
-
-        <div className="absolute bottom-4 left-6 text-[10px] text-slate-500 bg-black/60 border border-white/5 px-2.5 py-1 rounded-md">
-          💡 <em>Linhas = enlaces físicos LLDP/CDP. Clique num ativo para filtrar os incidentes na aba Alertas.</em>
+          <button
+            onClick={() => setOnlyAlerting((v) => !v)}
+            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-[11px] font-bold transition-all border ${
+              onlyAlerting ? 'bg-rose-500/15 text-rose-200 border-rose-500/30' : 'bg-white/5 text-slate-400 border-white/10 hover:bg-white/10'
+            }`}
+          >
+            <AlertCircle className="w-3.5 h-3.5" /> Só com alerta
+          </button>
+          <select
+            value={originFilter}
+            onChange={(e) => setOriginFilter(e.target.value as typeof originFilter)}
+            className="px-2 py-1.5 rounded-md bg-black/40 border border-white/10 text-[11px] font-bold text-slate-300"
+          >
+            <option value="all">Todas as origens</option>
+            <option value="both">Descoberto + telemetria</option>
+            <option value="discovery">Descoberto (SNMP)</option>
+            <option value="telemetry">Telemetria (alertas)</option>
+            <option value="neighbor">Vizinho</option>
+          </select>
+          <span className="flex items-center gap-1 text-[10px] text-slate-500 uppercase font-bold ml-1"><Filter className="w-3 h-3" /> Tipos:</span>
+          {presentTiers.map((t) => (
+            <button
+              key={t.key}
+              onClick={() => toggleTier(t.key)}
+              className={`px-2 py-1 rounded-md text-[10px] font-bold transition-all border ${
+                hiddenTiers.has(t.key) ? 'bg-white/[0.02] text-slate-600 border-white/5 line-through' : 'bg-cyan-500/10 text-cyan-300 border-cyan-500/20'
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
         </div>
+      )}
+
+      <div className="flex gap-3">
+        <div className="relative flex-1 min-h-[460px] max-h-[520px] bg-black/60 rounded-xl border border-white/5 flex items-center justify-center overflow-auto">
+          {isLoading && !data ? (
+            <div className="text-xs text-slate-500">Carregando grafo…</div>
+          ) : nothingAtAll ? (
+            <DiscoveryOnboarding onConfigureDiscovery={onConfigureDiscovery} hasAgent={!!status && status.agent_count > 0} hasTargets={!!status && status.discovery_targets > 0} />
+          ) : nodes.length === 0 ? (
+            <div className="flex flex-col items-center gap-2 text-slate-500 px-6 text-center">
+              <ServerCog className="w-8 h-8 text-slate-600" />
+              <p className="text-sm font-bold text-slate-400">Nenhum ativo com os filtros atuais</p>
+              <p className="text-[11px] max-w-md">Ajuste a busca ou os filtros de tipo/origem acima.</p>
+            </div>
+          ) : (
+            <svg width={layout.width} height={layout.height} viewBox={`0 0 ${layout.width} ${layout.height}`} className="block">
+              <defs>
+                <pattern id="topo-grid" width="24" height="24" patternUnits="userSpaceOnUse">
+                  <path d="M 24 0 L 0 0 0 24" fill="none" stroke="rgba(255,255,255,0.015)" strokeWidth="1" />
+                </pattern>
+              </defs>
+              <rect width="100%" height="100%" fill="url(#topo-grid)" />
+
+              {/* Tier band labels */}
+              {layout.tiers.map((t) => (
+                <text key={t.key} x={10} y={t.y - 26} className="fill-slate-600 font-bold uppercase" fontSize="8" letterSpacing="1">
+                  {t.label}
+                </text>
+              ))}
+
+              {/* Physical edges (LLDP/CDP) */}
+              {edges.map((e, i) => {
+                const s = layout.pos[e.source];
+                const t = layout.pos[e.target];
+                if (!s || !t) return null;
+                const active = selectedId === e.source || selectedId === e.target;
+                return (
+                  <g key={`e-${i}`}>
+                    <line
+                      x1={s.x}
+                      y1={s.y}
+                      x2={t.x}
+                      y2={t.y}
+                      stroke={active ? 'rgba(56,189,248,0.8)' : 'rgba(56,189,248,0.28)'}
+                      strokeWidth={active ? 2 : 1.25}
+                    />
+                    <title>{`${nodesById[e.source]?.label} (${e.local_port || '?'}) ↔ ${nodesById[e.target]?.label} (${e.remote_port || '?'}) · ${e.protocol.toUpperCase()}`}</title>
+                  </g>
+                );
+              })}
+
+              {/* Nodes */}
+              {nodes.map((node) => {
+                const p = layout.pos[node.id];
+                if (!p) return null;
+                const color = nodeColor(node);
+                const label = node.label.length > 15 ? node.label.slice(0, 14) + '…' : node.label;
+                const isSel = selectedId === node.id;
+                return (
+                  <g key={node.id} className="cursor-pointer" onClick={() => setSelectedId(isSel ? null : node.id)}>
+                    <title>{`${node.label}\n${originLabel(node.origin)}${node.vendor ? ` · ${node.vendor}` : ''}${node.kind ? ` · ${node.kind}` : ''}`}</title>
+                    {node.unresolved_alerts > 0 && (
+                      <circle cx={p.x} cy={p.y} r="26" className="fill-none animate-ping" stroke={color.ring} strokeWidth="1" />
+                    )}
+                    {isSel && <circle cx={p.x} cy={p.y} r="27" className="fill-none" stroke="#e2e8f0" strokeWidth="1.5" strokeDasharray="2 2" />}
+                    <circle cx={p.x} cy={p.y} r="21" fill={color.fill} stroke={color.stroke} strokeWidth="2" strokeDasharray={node.origin === 'neighbor' ? '3 2' : undefined} />
+                    <text x={p.x} y={p.y - 1} className="fill-slate-100 font-bold" fontSize="8" textAnchor="middle">{label}</text>
+                    <text x={p.x} y={p.y + 9} className="fill-slate-400" fontSize="6.5" textAnchor="middle">
+                      {node.unresolved_alerts > 0 ? `${node.unresolved_alerts} aberto(s)` : kindLabel(node.kind)}
+                    </text>
+                  </g>
+                );
+              })}
+            </svg>
+          )}
+          <div className="absolute bottom-3 left-4 text-[10px] text-slate-500 bg-black/60 border border-white/5 px-2.5 py-1 rounded-md pointer-events-none">
+            💡 <em>Clique num ativo para ver detalhes. Linhas = enlaces físicos LLDP/CDP.</em>
+          </div>
+        </div>
+
+        {/* Node drill-down panel */}
+        {selected && (
+          <NodeDetailPanel
+            node={selected}
+            edges={allEdges}
+            nodesById={nodesById}
+            onClose={() => setSelectedId(null)}
+            onFilterAlerts={() => onSearchTermChange(selected.label)}
+          />
+        )}
       </div>
     </div>
   );
+}
+
+// NodeDetailPanel shows the drill-down for one asset: identity, origin/severity, physical neighbours,
+// and a cross-link to scope the Alerts tab to it.
+function NodeDetailPanel({
+  node,
+  edges,
+  nodesById,
+  onClose,
+  onFilterAlerts,
+}: {
+  node: GraphNode;
+  edges: GraphEdge[];
+  nodesById: Record<string, GraphNode>;
+  onClose: () => void;
+  onFilterAlerts: () => void;
+}) {
+  const neighbours = edges
+    .filter((e) => e.source === node.id || e.target === node.id)
+    .map((e) => {
+      const otherId = e.source === node.id ? e.target : e.source;
+      const localPort = e.source === node.id ? e.local_port : e.remote_port;
+      const remotePort = e.source === node.id ? e.remote_port : e.local_port;
+      return { label: nodesById[otherId]?.label ?? otherId, protocol: e.protocol, localPort, remotePort };
+    });
+
+  return (
+    <div className="w-64 shrink-0 bg-black/50 rounded-xl border border-white/10 p-4 flex flex-col gap-3 max-h-[520px] overflow-auto">
+      <div className="flex items-start justify-between gap-2">
+        <div>
+          <p className="text-sm font-extrabold text-slate-100 break-all">{node.label}</p>
+          <p className="text-[10px] text-slate-500 font-mono">{node.id}</p>
+        </div>
+        <button onClick={onClose} className="p-1 rounded text-slate-500 hover:text-slate-200 hover:bg-white/10">
+          <X className="w-3.5 h-3.5" />
+        </button>
+      </div>
+
+      <div className="flex flex-wrap gap-1.5">
+        <Chip>{originLabel(node.origin)}</Chip>
+        <Chip>{kindLabel(node.kind)}</Chip>
+        {node.vendor && <Chip>{node.vendor}</Chip>}
+      </div>
+
+      {node.unresolved_alerts > 0 ? (
+        <div className="p-2.5 rounded-lg bg-rose-950/20 border border-rose-500/25">
+          <p className="text-[11px] font-bold text-rose-300">{node.unresolved_alerts} alerta(s) em aberto</p>
+          <p className="text-[10px] text-rose-400/80 uppercase">pior severidade: {node.worst_severity || '—'}</p>
+        </div>
+      ) : (
+        <div className="p-2.5 rounded-lg bg-emerald-950/15 border border-emerald-500/20">
+          <p className="text-[11px] font-bold text-emerald-300">Sem alertas em aberto</p>
+        </div>
+      )}
+
+      <div>
+        <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">Vizinhos físicos ({neighbours.length})</p>
+        {neighbours.length === 0 ? (
+          <p className="text-[11px] text-slate-600">Nenhum enlace LLDP/CDP descoberto.</p>
+        ) : (
+          <ul className="flex flex-col gap-1">
+            {neighbours.map((nb, i) => (
+              <li key={i} className="text-[11px] text-slate-300 flex flex-col bg-white/[0.03] rounded-md px-2 py-1">
+                <span className="font-bold text-slate-200">{nb.label}</span>
+                <span className="text-[9px] text-slate-500 uppercase">
+                  {nb.protocol} · {nb.localPort || '?'} ↔ {nb.remotePort || '?'}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      <button
+        onClick={onFilterAlerts}
+        className="mt-auto flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold text-cyan-100 bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-500/30 transition-all"
+      >
+        <Search className="w-3.5 h-3.5" /> Filtrar alertas por este ativo
+      </button>
+    </div>
+  );
+}
+
+function Chip({ children }: { children: React.ReactNode }) {
+  return <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-white/5 text-slate-300 border border-white/10">{children}</span>;
 }
 
 // StatusStrip shows whether active discovery is wired up, so the graph state is never a mystery.
@@ -225,9 +385,7 @@ function StatusStrip({ status, onConfigureDiscovery }: { status: TopologyStatus;
           {agent.connected ? <Wifi className="w-3.5 h-3.5" /> : <WifiOff className="w-3.5 h-3.5" />}
           {agent.label}
         </span>
-        {status.last_seen && (
-          <span className="text-slate-500">Último contato: {relativeTime(status.last_seen)}</span>
-        )}
+        {status.last_seen && <span className="text-slate-500">Último contato: {relativeTime(status.last_seen)}</span>}
         <span className="text-slate-400">
           <strong className="text-slate-200">{status.discovery_targets}</strong> faixa(s) ·{' '}
           <strong className="text-slate-200">{status.discovered_devices}</strong> dispositivo(s) ·{' '}
@@ -246,8 +404,6 @@ function StatusStrip({ status, onConfigureDiscovery }: { status: TopologyStatus;
   );
 }
 
-// DiscoveryOnboarding is the strong empty-state shown when nothing has been discovered and there are no
-// telemetry hosts either — it explains what the topology is and exactly how to populate it.
 function DiscoveryOnboarding({ onConfigureDiscovery, hasAgent, hasTargets }: { onConfigureDiscovery?: () => void; hasAgent: boolean; hasTargets: boolean }) {
   return (
     <div className="flex flex-col items-center gap-3 text-slate-400 px-8 text-center max-w-lg">
@@ -287,13 +443,98 @@ function DiscoveryOnboarding({ onConfigureDiscovery, hasAgent, hasTargets }: { o
   );
 }
 
+// ---- layout ----
+
+// TIERS orders device roles top-to-bottom: perimeter → core → access → hosts → unmanaged neighbours.
+const TIERS: { key: string; label: string }[] = [
+  { key: 'perimeter', label: 'Perímetro (firewall)' },
+  { key: 'routing', label: 'Roteamento' },
+  { key: 'core', label: 'Comutação (switch)' },
+  { key: 'access', label: 'Acesso / servidores' },
+  { key: 'host', label: 'Hosts / telemetria' },
+  { key: 'neighbor', label: 'Vizinhos (não gerenciados)' },
+];
+
+function tierKey(kind: string): string {
+  switch (kind) {
+    case 'firewall':
+      return 'perimeter';
+    case 'router':
+      return 'routing';
+    case 'switch':
+      return 'core';
+    case 'access_point':
+    case 'server':
+    case 'hypervisor':
+    case 'network_device':
+      return 'access';
+    case 'neighbor':
+      return 'neighbor';
+    case 'host':
+      return 'host';
+    default:
+      return 'access';
+  }
+}
+
+type Layout = { pos: Record<string, { x: number; y: number }>; width: number; height: number; tiers: { key: string; label: string; y: number }[] };
+
+// computeLayout places nodes in horizontal bands by tier, wrapping wide tiers into sub-rows. Deterministic
+// (sorted by open-alerts then label) so the picture is stable across refreshes.
+function computeLayout(nodes: GraphNode[]): Layout {
+  const perRow = 8;
+  const dx = 108;
+  const dyRow = 96;
+  const bandGap = 34;
+  const topMargin = 48;
+
+  const byTier = new Map<string, GraphNode[]>();
+  for (const n of nodes) {
+    const k = tierKey(n.kind);
+    if (!byTier.has(k)) byTier.set(k, []);
+    byTier.get(k)!.push(n);
+  }
+  byTier.forEach((arr) => {
+    arr.sort((a, b) => (b.unresolved_alerts - a.unresolved_alerts) || a.label.localeCompare(b.label));
+  });
+
+  const pos: Record<string, { x: number; y: number }> = {};
+  const tierBands: { key: string; label: string; y: number }[] = [];
+  let y = topMargin;
+  let maxRowW = 0;
+
+  for (const tier of TIERS) {
+    const arr = byTier.get(tier.key);
+    if (!arr || arr.length === 0) continue;
+    tierBands.push({ key: tier.key, label: tier.label, y });
+    const rows = Math.ceil(arr.length / perRow);
+    for (let r = 0; r < rows; r++) {
+      const rowNodes = arr.slice(r * perRow, (r + 1) * perRow);
+      const rowW = rowNodes.length * dx;
+      maxRowW = Math.max(maxRowW, rowW);
+      const startX = -rowW / 2 + dx / 2;
+      rowNodes.forEach((n, i) => {
+        pos[n.id] = { x: startX + i * dx, y };
+      });
+      y += dyRow;
+    }
+    y += bandGap;
+  }
+
+  const width = Math.max(700, maxRowW + 90);
+  const height = Math.max(440, y + 10);
+  const cx = width / 2;
+  for (const id in pos) pos[id].x += cx;
+
+  return { pos, width, height, tiers: tierBands };
+}
+
 function agentState(s: TopologyStatus): { connected: boolean; label: string; className: string } {
   if (s.agent_count === 0) return { connected: false, label: 'Nenhum agente conectado', className: 'text-slate-400' };
   if (s.agent_connected) return { connected: true, label: 'Agente conectado', className: 'text-emerald-300' };
   return { connected: false, label: 'Agente sem contato recente', className: 'text-amber-300' };
 }
 
-// relativeTime renders a short pt-BR "há X" string from an ISO timestamp.
 function relativeTime(iso: string): string {
   const then = new Date(iso).getTime();
   if (Number.isNaN(then)) return '—';
@@ -303,8 +544,7 @@ function relativeTime(iso: string): string {
   if (mins < 60) return `há ${mins} min`;
   const hours = Math.floor(mins / 60);
   if (hours < 24) return `há ${hours}h`;
-  const days = Math.floor(hours / 24);
-  return `há ${days}d`;
+  return `há ${Math.floor(hours / 24)}d`;
 }
 
 function nodeColor(node: GraphNode): { fill: string; stroke: string; ring: string } {
@@ -319,8 +559,8 @@ function nodeColor(node: GraphNode): { fill: string; stroke: string; ring: strin
         return { fill: '#0f172a', stroke: '#38bdf8', ring: '#38bdf8' };
     }
   }
-  if (node.origin === 'neighbor') return { fill: '#0b0f19', stroke: '#64748b', ring: '#64748b' }; // slate (unmanaged)
-  return { fill: '#0f172a', stroke: '#10b981', ring: '#10b981' }; // operational
+  if (node.origin === 'neighbor') return { fill: '#0b0f19', stroke: '#64748b', ring: '#64748b' };
+  return { fill: '#0f172a', stroke: '#10b981', ring: '#10b981' };
 }
 
 function originLabel(origin: string): string {
@@ -350,6 +590,8 @@ function kindLabel(kind: string): string {
       return 'AP';
     case 'server':
       return 'servidor';
+    case 'hypervisor':
+      return 'hypervisor';
     case 'host':
       return 'host';
     case 'neighbor':
