@@ -637,6 +637,10 @@ func main() {
 	protectedListAlerts := middleware.JWTAuth(jwtSecret)(api.HandleListAlerts(appPool, alertRepo))
 	mux.Handle("/api/v1/alerts", protectedListAlerts)
 
+	// OCSF (Open Cybersecurity Schema Framework) export of the tenant's alerts as Detection Findings.
+	protectedAlertsOCSF := middleware.JWTAuth(jwtSecret)(api.HandleGetAlertsOCSF(appPool, alertRepo))
+	mux.Handle("/api/v1/alerts/ocsf", protectedAlertsOCSF)
+
 	protectedCleanupAlerts := middleware.JWTAuth(jwtSecret)(
 		middleware.RequireRole(model.RoleAdmin)(
 			api.HandleCleanupAlerts(appPool),
