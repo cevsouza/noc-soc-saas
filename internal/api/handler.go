@@ -549,8 +549,27 @@ func HandleResolveIncident(pgPool *pgxpool.Pool) http.HandlerFunc {
 					INSERT INTO incident_comments (incident_id, tenant_id, author, comment)
 					VALUES ($1, $2, 'Sistema', 'Incidente RESOLVIDO e finalizado pelo operador.')
 				`
-				_, err = tx.Exec(ctx, logQuery, req.ID, tenantID)
-				return err
+				if _, err = tx.Exec(ctx, logQuery, req.ID, tenantID); err != nil {
+					return err
+				}
+				// Auto-close the grouped incident (Fase 3 refino R1): if this alert belongs to a
+				// grouped incident and no sibling alert under it remains open, close the incident so
+				// resolving alerts one-by-one keeps the incident feed consistent with the alert feed.
+				// Only closes when nothing is left open — a still-open sibling keeps the incident open.
+				if _, err = tx.Exec(ctx, `
+					UPDATE incidents i
+					SET status = 'resolved', resolved_at = NOW(), updated_at = NOW()
+					WHERE i.tenant_id = $1
+					  AND i.status <> 'resolved'
+					  AND i.id = (SELECT incident_id FROM alerts WHERE id = $2 AND created_at = $3 AND tenant_id = $1)
+					  AND NOT EXISTS (
+						SELECT 1 FROM alerts a
+						WHERE a.tenant_id = $1 AND a.incident_id = i.id AND a.status <> 'resolved'
+					  )
+				`, tenantID, req.ID, req.CreatedAt); err != nil {
+					return err
+				}
+				return nil
 			}
 			return nil
 		})

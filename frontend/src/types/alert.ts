@@ -18,6 +18,7 @@ export interface Alert {
   acknowledged_at?: string;
   ai_diagnostic?: string;
   fingerprint?: string;
+  incident_id?: string;
 }
 
 export interface AlertStats {

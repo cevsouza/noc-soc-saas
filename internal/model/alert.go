@@ -45,4 +45,8 @@ type Alert struct {
 	// Fingerprint is a SHA256 content hash (tenant+source+external_id, or a fallback seed when
 	// external_id is empty) used for dedupe correlation. Set once at creation, immutable.
 	Fingerprint string `json:"fingerprint,omitempty"`
+	// IncidentID links this raw alert to the grouped incident (Fase 3/3b) it belongs to, when the
+	// worker managed to group it. Nil for ungrouped alerts (e.g. system/watchdog alerts). Read-only
+	// here — the worker sets it via attachIncident.
+	IncidentID *uuid.UUID `json:"incident_id,omitempty"`
 }
