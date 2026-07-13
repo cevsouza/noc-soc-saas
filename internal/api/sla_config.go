@@ -84,6 +84,13 @@ func loadTenantSLATargets(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID) (m
 	return mergeSLATargets(overrides), nil
 }
 
+// LoadEffectiveSLATargets is the exported wrapper the worker's SLA-escalation monitor uses to read a
+// tenant's effective per-severity SLA targets (defaults overridden by tenant_sla) inside the tenant
+// RLS transaction. Kept here so the canonical targets stay defined in one place.
+func LoadEffectiveSLATargets(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID) (map[string]SLATarget, error) {
+	return loadTenantSLATargets(ctx, tx, tenantID)
+}
+
 // orderedSLATargets returns the effective targets as a fixed-order slice (fatal→info).
 func orderedSLATargets(effective map[string]SLATarget) []SLATarget {
 	out := make([]SLATarget, 0, len(severityOrder))

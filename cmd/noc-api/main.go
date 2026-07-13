@@ -235,6 +235,7 @@ func main() {
 	wp := worker.NewWorkerPool(appPool, redisClient, numWorkers)
 	wp.Start(ctx)
 	wp.StartWatchdog(ctx)
+	wp.StartSLAEscalationMonitor(ctx)
 	wp.StartMappingEngine(ctx)
 	defer wp.Stop()
 
