@@ -704,9 +704,16 @@ func main() {
 	mux.Handle("/api/v1/reports/operational/stats", protectedGetOperationalStats)
 
 	// Incidents (Fase 3/3b): the grouped-investigation view — recurring alerts of the same problem
-	// collapsed into one incident. Same authenticated-user access level as the alerts feed.
+	// collapsed into one incident. List is read-only for any authenticated user; acknowledging or
+	// resolving an incident requires at least analyst_l1 (excludes read_only).
 	protectedGetIncidents := middleware.JWTAuth(jwtSecret)(api.HandleGetIncidents(appPool))
 	mux.Handle("/api/v1/incidents", protectedGetIncidents)
+	protectedIncidentAlerts := middleware.JWTAuth(jwtSecret)(api.HandleGetIncidentAlerts(appPool))
+	mux.Handle("/api/v1/incidents/alerts", protectedIncidentAlerts)
+	protectedAckIncidentGroup := middleware.JWTAuth(jwtSecret)(middleware.RequireRole(model.RoleAnalystL1)(api.HandleAcknowledgeIncidentGroup(appPool)))
+	mux.Handle("/api/v1/incidents/acknowledge", protectedAckIncidentGroup)
+	protectedResolveIncidentGroup := middleware.JWTAuth(jwtSecret)(middleware.RequireRole(model.RoleAnalystL1)(api.HandleResolveIncidentGroup(appPool)))
+	mux.Handle("/api/v1/incidents/resolve", protectedResolveIncidentGroup)
 
 	// Real asset topology: the tenant's actual reporting hosts derived from its alert stream,
 	// replacing the old hardcoded 6-node SVG. Same authenticated-user access level as SLA stats.

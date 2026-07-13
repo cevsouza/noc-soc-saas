@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Activity, Network, Settings, Target } from 'lucide-react';
+import { Activity, Network, Settings, Siren, Target } from 'lucide-react';
 import { useAuth } from '@/lib/auth-context';
 import { useTenantSelection } from '@/lib/tenant-context';
 import { useAlertsSocket } from '@/lib/use-alerts-socket';
@@ -13,10 +13,11 @@ import { AlertsSearchBar } from '@/components/alerts/alerts-search-bar';
 import { AlertsTable } from '@/components/alerts/alerts-table';
 import { AlertDetailSheet } from '@/components/alerts/alert-detail-sheet';
 import { LegacyCockpitPanels } from '@/components/legacy-cockpit-panels';
+import { IncidentsView } from '@/components/incidents/incidents-view';
 import { GlobalSearchPalette } from '@/components/global-search-palette';
 import type { Alert, AlertSeverity, AlertStatus, SearchAlertResult, SearchTenantResult } from '@/types';
 
-type CockpitTab = 'alerts' | 'topology' | 'settings';
+type CockpitTab = 'alerts' | 'incidents' | 'topology' | 'settings';
 type SeverityFilterValue = 'all' | 'fatal' | 'critical' | 'warning' | 'info';
 
 const TAB_BUTTON_CLASS = (active: boolean) =>
@@ -146,6 +147,10 @@ export default function CockpitPage() {
               <Activity className="w-3.5 h-3.5" />
               Painel de Alertas
             </button>
+            <button onClick={() => setCockpitTab('incidents')} className={TAB_BUTTON_CLASS(cockpitTab === 'incidents')}>
+              <Siren className="w-3.5 h-3.5" />
+              Incidentes
+            </button>
             <button onClick={() => setCockpitTab('topology')} className={TAB_BUTTON_CLASS(cockpitTab === 'topology')}>
               <Network className="w-3.5 h-3.5" />
               Topologia CMDB &amp; Ativos
@@ -195,7 +200,11 @@ export default function CockpitPage() {
             </>
           )}
 
-          {cockpitTab !== 'alerts' && (
+          {cockpitTab === 'incidents' && (
+            <IncidentsView tenantId={selectedTenantIds.length === 1 ? selectedTenantIds[0] : undefined} />
+          )}
+
+          {(cockpitTab === 'topology' || cockpitTab === 'settings') && (
             <LegacyCockpitPanels cockpitTab={cockpitTab} onSearchTermChange={setSearchTerm} />
           )}
         </section>
