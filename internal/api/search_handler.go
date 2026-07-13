@@ -64,7 +64,7 @@ func resolveSearchTenantIDs(claims *middleware.JWTClaims, tenantsParam string, i
 		if err != nil {
 			continue
 		}
-		if parsed == claims.TenantID || claims.GlobalRole == model.RoleAdmin {
+		if parsed == claims.TenantID || model.IsPlatformAdmin(claims.GlobalRole) {
 			tenantIDs = append(tenantIDs, parsed)
 			continue
 		}

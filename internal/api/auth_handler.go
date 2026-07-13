@@ -410,8 +410,12 @@ func HandleAdminCreateUser(pgPool *pgxpool.Pool) http.HandlerFunc {
 			return
 		}
 
-		// Validate role
-		if req.Role != model.RoleAdmin && req.Role != model.RoleOperator && req.Role != model.RoleViewer {
+		// Validate role — accepts the granular tenant roles (read_only, analyst_l1/l2/l3,
+		// tenant_admin) as well as the legacy admin/operator/viewer. Platform roles
+		// (platform_admin, mssp_analyst) are not assignable here: this field sets the tenant-scoped
+		// role, and only the legacy "admin" additionally implies platform admin for backward
+		// compatibility (see model.IsPlatformAdmin).
+		if !model.IsValidTenantRole(req.Role) {
 			http.Error(w, "Bad Request: Invalid role specified", http.StatusBadRequest)
 			return
 		}

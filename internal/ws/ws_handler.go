@@ -129,7 +129,7 @@ func ServeWS(hub *Hub, pgPool *pgxpool.Pool, jwtSecret []byte) http.HandlerFunc 
 				if err != nil {
 					continue
 				}
-				if parsed == operatorClaims.TenantID || operatorClaims.GlobalRole == model.RoleAdmin {
+				if parsed == operatorClaims.TenantID || model.IsPlatformAdmin(operatorClaims.GlobalRole) {
 					tenantIDs = append(tenantIDs, parsed)
 					continue
 				}

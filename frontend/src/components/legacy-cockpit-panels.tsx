@@ -1568,9 +1568,18 @@ export function LegacyCockpitPanels({ cockpitTab, onSearchTermChange }: LegacyCo
                             onChange={(e) => setAdminUserRole(e.target.value)}
                             className="bg-[#0b0f19] border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-violet-500 transition-all"
                           >
-                            <option value="operator">Operator (Operador - Acesso de Leitura/Ação)</option>
-                            <option value="admin">Admin (Administrador - Acesso Completo/Cofre/Usuários)</option>
-                            <option value="viewer">Viewer (Visualizador - Apenas Leitura de Painéis)</option>
+                            <optgroup label="Papéis granulares (SOC/NOC)">
+                              <option value="read_only">Read-Only (Somente leitura de painéis)</option>
+                              <option value="analyst_l1">Analyst L1 (Triagem)</option>
+                              <option value="analyst_l2">Analyst L2 (Investigação/Ação)</option>
+                              <option value="analyst_l3">Analyst L3 (Resposta avançada)</option>
+                              <option value="tenant_admin">Tenant Admin (Admin do cliente)</option>
+                            </optgroup>
+                            <optgroup label="Legado (compatível)">
+                              <option value="operator">Operator (≈ Analyst L2)</option>
+                              <option value="admin">Admin (Acesso completo + plataforma)</option>
+                              <option value="viewer">Viewer (≈ Read-Only)</option>
+                            </optgroup>
                           </select>
                         </div>
 

@@ -45,7 +45,7 @@ func ResolveTenantScope(ctx context.Context, r *http.Request, pgPool *pgxpool.Po
 		return uuid.Nil, &ScopeError{http.StatusBadRequest, "Bad Request: invalid tenant_id"}
 	}
 
-	if claims.GlobalRole == model.RoleAdmin {
+	if model.IsPlatformAdmin(claims.GlobalRole) {
 		var exists bool
 		if err := pgPool.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM tenants WHERE id = $1)", requestedID).Scan(&exists); err != nil || !exists {
 			return uuid.Nil, &ScopeError{http.StatusNotFound, "Not Found: tenant does not exist"}
@@ -83,7 +83,7 @@ func AllTenantsScope(ctx context.Context, r *http.Request) (bool, error) {
 	if !ok {
 		return false, &ScopeError{http.StatusUnauthorized, "Unauthorized: missing authentication"}
 	}
-	if claims.GlobalRole != model.RoleAdmin {
+	if !model.IsPlatformAdmin(claims.GlobalRole) {
 		return false, &ScopeError{http.StatusForbidden, "Forbidden: platform admin required for tenant_id=all"}
 	}
 	return true, nil

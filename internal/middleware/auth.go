@@ -157,8 +157,18 @@ func ClaimsFromContext(ctx context.Context) (*JWTClaims, bool) {
 	return claims, ok
 }
 
-// RequireRole checks if the authenticated user has one of the allowed roles.
+// RequireRole gates on the caller's tenant-scoped role using the privilege HIERARCHY, not exact
+// string matching: the caller passes if their tenant role meets or exceeds the LEAST-privileged
+// role among allowedRoles. So RequireRole(RoleAdmin, RoleOperator) admits anyone at operator level
+// or above (operator, analyst_l3, tenant_admin, admin), exactly matching the previous "admin or
+// operator" intent while also understanding the new granular roles. See model.tenantRoleRank.
 func RequireRole(allowedRoles ...model.UserRole) func(http.Handler) http.Handler {
+	minRank := -1
+	for _, allowed := range allowedRoles {
+		if rank := model.TenantRoleRank(allowed); minRank == -1 || rank < minRank {
+			minRank = rank
+		}
+	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			claims, ok := ClaimsFromContext(r.Context())
@@ -167,15 +177,7 @@ func RequireRole(allowedRoles ...model.UserRole) func(http.Handler) http.Handler
 				return
 			}
 
-			roleAllowed := false
-			for _, allowed := range allowedRoles {
-				if claims.Role == allowed {
-					roleAllowed = true
-					break
-				}
-			}
-
-			if !roleAllowed {
+			if model.TenantRoleRank(claims.Role) < minRank {
 				http.Error(w, "Forbidden: Insufficient privileges", http.StatusForbidden)
 				return
 			}
@@ -190,6 +192,12 @@ func RequireRole(allowedRoles ...model.UserRole) func(http.Handler) http.Handler
 // caller's own tenant (e.g. creating/deleting tenants), since any tenant's own admin has
 // Role==admin but that must not authorize acting on other tenants.
 func RequireGlobalRole(allowedRoles ...model.UserRole) func(http.Handler) http.Handler {
+	minRank := -1
+	for _, allowed := range allowedRoles {
+		if rank := model.PlatformRoleRank(allowed); minRank == -1 || rank < minRank {
+			minRank = rank
+		}
+	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			claims, ok := ClaimsFromContext(r.Context())
@@ -198,15 +206,10 @@ func RequireGlobalRole(allowedRoles ...model.UserRole) func(http.Handler) http.H
 				return
 			}
 
-			roleAllowed := false
-			for _, allowed := range allowedRoles {
-				if claims.GlobalRole == allowed {
-					roleAllowed = true
-					break
-				}
-			}
-
-			if !roleAllowed {
+			// Platform-scope hierarchy: RequireGlobalRole(RoleAdmin) requires rank 100, which only
+			// platform_admin (and the legacy "admin") satisfy — mssp_analyst (rank 60) does not, so
+			// it never gains platform-admin powers.
+			if model.PlatformRoleRank(claims.GlobalRole) < minRank {
 				http.Error(w, "Forbidden: platform admin privileges required", http.StatusForbidden)
 				return
 			}

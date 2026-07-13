@@ -43,7 +43,7 @@ func HandleGetTenants(pgPool *pgxpool.Pool) http.HandlerFunc {
 
 		var rows pgx.Rows
 		var err error
-		if claims.GlobalRole == model.RoleAdmin {
+		if model.IsPlatformAdmin(claims.GlobalRole) {
 			rows, err = pgPool.Query(ctx, "SELECT id, name, slug FROM tenants WHERE status = 'active' ORDER BY name")
 		} else {
 			rows, err = pgPool.Query(ctx, `
