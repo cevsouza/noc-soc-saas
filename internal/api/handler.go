@@ -570,18 +570,6 @@ func HandleResolveIncident(pgPool *pgxpool.Pool) http.HandlerFunc {
 	}
 }
 
-// slaTargetMinutesBySeverity mirrors the per-severity SLA targets already shown to users in
-// frontend/src/components/alerts/sla-countdown.tsx (lines 19-24) and duplicated again in
-// workers/sla_report_generator.py — this is the single canonical definition of "SLA
-// compliance" for incident response across the whole product. Keep all three in sync if the
-// targets ever change (Go can't import the TS/Python source, hence the duplication).
-var slaTargetMinutesBySeverity = map[string]float64{
-	"fatal":    15,
-	"critical": 30,
-	"warning":  120,
-	"info":     480,
-}
-
 // severityOrder fixes the display/serialization order of SLASeverityBreakdown entries —
 // fatal (most urgent) through info (least), independent of SQL row order.
 var severityOrder = []string{"fatal", "critical", "warning", "info"}
@@ -687,12 +675,21 @@ func deriveSLAExecutiveStats(rows []severityRow) SLAExecutiveStats {
 // computeSLAExecutiveStats is the single canonical place that computes MTTA/MTTR/SLA-compliance
 // for a tenant over the last 30 days. HandleGetSLAReport calls this directly.
 func computeSLAExecutiveStats(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID) (SLAExecutiveStats, error) {
+	// Per-tenant SLA targets (tenant_sla overrides merged onto the built-in defaults). The
+	// resolution/compliance target is the MTTR target; a severity a tenant hasn't customized falls
+	// back to the default.
+	effective, err := loadTenantSLATargets(ctx, tx, tenantID)
+	if err != nil {
+		return SLAExecutiveStats{}, err
+	}
+
 	// VALUES-seeded so all four severities always appear in the result (a plain GROUP BY on
 	// alerts.severity would silently drop any severity with zero alerts in the window).
 	// COUNT(a.id) (not COUNT(*)) is required so unmatched LEFT JOIN rows count as 0, not 1.
+	// Targets are parameterized ($2..$5) so they come from the tenant's config, not a hardcode.
 	query := `
 		WITH severity_targets (severity, target_minutes) AS (
-			VALUES ('fatal', 15::numeric), ('critical', 30::numeric), ('warning', 120::numeric), ('info', 480::numeric)
+			VALUES ('fatal', $2::numeric), ('critical', $3::numeric), ('warning', $4::numeric), ('info', $5::numeric)
 		)
 		SELECT
 			st.severity,
@@ -715,7 +712,11 @@ func computeSLAExecutiveStats(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID
 		   AND a.created_at >= NOW() - INTERVAL '30 days'
 		GROUP BY st.severity, st.target_minutes
 	`
-	rows, err := tx.Query(ctx, query, tenantID)
+	rows, err := tx.Query(ctx, query, tenantID,
+		effective["fatal"].MTTRTargetMinutes,
+		effective["critical"].MTTRTargetMinutes,
+		effective["warning"].MTTRTargetMinutes,
+		effective["info"].MTTRTargetMinutes)
 	if err != nil {
 		return SLAExecutiveStats{}, err
 	}
@@ -738,7 +739,7 @@ func computeSLAExecutiveStats(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID
 		if row, ok := bySeverity[sev]; ok {
 			orderedRows = append(orderedRows, row)
 		} else {
-			orderedRows = append(orderedRows, severityRow{severity: sev, targetMinutes: slaTargetMinutesBySeverity[sev]})
+			orderedRows = append(orderedRows, severityRow{severity: sev, targetMinutes: effective[sev].MTTRTargetMinutes})
 		}
 	}
 
@@ -746,7 +747,7 @@ func computeSLAExecutiveStats(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID
 }
 
 // HandleGetSLAReport calculates MTTA/MTTR/SLA-compliance averages for a tenant, broken down by
-// severity — the canonical incident-response SLA definition (see slaTargetMinutesBySeverity).
+// severity, using the tenant's configured SLA targets (see loadTenantSLATargets / tenant_sla).
 func HandleGetSLAReport(pgPool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		tenantID, err := middleware.ResolveTenantScope(r.Context(), r, pgPool)

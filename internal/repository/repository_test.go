@@ -437,3 +437,60 @@ func TestAuditAppendOnly(t *testing.T) {
 	}
 }
 
+// TestTenantSLAIsolation is the cross-tenant leak test for the new tenant_sla table (migration
+// 000018): tenant A writes an SLA override, tenant B must not be able to read it under RLS.
+func TestTenantSLAIsolation(t *testing.T) {
+	pool := getTestPool(t)
+	defer pool.Close()
+
+	ctx := context.Background()
+	tenantA := uuid.New()
+	tenantB := uuid.New()
+	if _, err := pool.Exec(ctx, "INSERT INTO tenants (id, name, slug, status) VALUES ($1, 'SLA A', 'sla-iso-a', 'active')", tenantA); err != nil {
+		t.Fatalf("insert tenant A: %v", err)
+	}
+	defer pool.Exec(ctx, "DELETE FROM tenants WHERE id = $1", tenantA)
+	if _, err := pool.Exec(ctx, "INSERT INTO tenants (id, name, slug, status) VALUES ($1, 'SLA B', 'sla-iso-b', 'active')", tenantB); err != nil {
+		t.Fatalf("insert tenant B: %v", err)
+	}
+	defer pool.Exec(ctx, "DELETE FROM tenants WHERE id = $1", tenantB)
+
+	// Tenant A writes a custom SLA target for 'critical' inside its RLS context.
+	ctxA := db.WithTenantID(ctx, tenantA)
+	if err := db.ExecuteInTenantTx(ctxA, pool, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctxA, `INSERT INTO tenant_sla (tenant_id, severity, mtta_target_minutes, mttr_target_minutes) VALUES ($1, 'critical', 7, 21)`, tenantA)
+		return err
+	}); err != nil {
+		t.Fatalf("tenant A failed to write SLA: %v", err)
+	}
+
+	// Tenant B must see zero rows (RLS blocks cross-tenant reads).
+	ctxB := db.WithTenantID(ctx, tenantB)
+	if err := db.ExecuteInTenantTx(ctxB, pool, func(tx pgx.Tx) error {
+		var count int
+		if err := tx.QueryRow(ctxB, `SELECT COUNT(*) FROM tenant_sla`).Scan(&count); err != nil {
+			return err
+		}
+		if count != 0 {
+			t.Errorf("SECURITY BREACH: tenant B saw %d tenant_sla row(s) belonging to tenant A", count)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("tenant B transaction failed: %v", err)
+	}
+
+	// Tenant A can read its own row back.
+	if err := db.ExecuteInTenantTx(ctxA, pool, func(tx pgx.Tx) error {
+		var mttr float64
+		if err := tx.QueryRow(ctxA, `SELECT mttr_target_minutes FROM tenant_sla WHERE severity = 'critical'`).Scan(&mttr); err != nil {
+			return err
+		}
+		if mttr != 21 {
+			t.Errorf("tenant A read back mttr=%v, want 21", mttr)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("tenant A read-back failed: %v", err)
+	}
+}
+

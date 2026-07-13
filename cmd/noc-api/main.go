@@ -685,6 +685,18 @@ func main() {
 	protectedGetSLAReport := middleware.JWTAuth(jwtSecret)(api.HandleGetSLAReport(appPool))
 	mux.Handle("/api/v1/reports/sla/stats", protectedGetSLAReport)
 
+	// Per-tenant SLA config (Fase 3): GET the effective targets (defaults + overrides); PUT to
+	// customize, gated to tenant admins. The SLA report reads these targets instead of a hardcode.
+	getSLAConfig := api.HandleGetSLAConfig(appPool)
+	setSLAConfig := middleware.RequireRole(model.RoleTenantAdmin)(api.HandleSetSLAConfig(appPool))
+	mux.Handle("/api/v1/reports/sla/config", middleware.JWTAuth(jwtSecret)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPut {
+			setSLAConfig.ServeHTTP(w, r)
+			return
+		}
+		getSLAConfig.ServeHTTP(w, r)
+	})))
+
 	// Operational KPI bundle (Fase 6 fatia 1): tactical NOC/SOC metrics (triage backlog, alert
 	// noise ratio, top offenders, automation ROI, MITRE breakdown, silent telemetry sources) that
 	// complement the SLA executive report. Same authenticated-user access level as SLA stats.
