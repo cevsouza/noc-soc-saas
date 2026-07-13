@@ -777,6 +777,20 @@ func main() {
 	// tab's onboarding state so an empty graph explains itself instead of degrading silently.
 	mux.Handle("/api/v1/topology/status", middleware.JWTAuth(jwtSecret)(api.HandleGetTopologyStatus(appPool)))
 
+	// CMDB assets (topology slice T2): managed overlay (business criticality, owner, location, tags,
+	// notes) on top of the discovered inventory, plus manual-only assets. One route, method-dispatched —
+	// GET lists the merged CMDB (any authenticated user), POST/DELETE mutate (tenant admins). Single
+	// registration avoids a ServeMux "multiple registrations" collision.
+	assetsGet := api.HandleGetAssets(appPool)
+	assetsMutate := middleware.RequireRole(model.RoleTenantAdmin)(api.HandleMutateAssets(appPool))
+	mux.Handle("/api/v1/assets", middleware.JWTAuth(jwtSecret)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			assetsGet.ServeHTTP(w, r)
+			return
+		}
+		assetsMutate.ServeHTTP(w, r)
+	})))
+
 	// Global search (alerts/runbooks/tenants), scoped to whatever tenants the caller has access to
 	protectedSearch := middleware.JWTAuth(jwtSecret)(api.HandleGlobalSearch(appPool))
 	mux.Handle("/api/v1/search", protectedSearch)

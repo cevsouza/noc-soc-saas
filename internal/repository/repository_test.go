@@ -783,6 +783,45 @@ func TestDiscoveredDevicesIsolation(t *testing.T) {
 	}
 }
 
+func TestAssetsIsolation(t *testing.T) {
+	pool := getTestPool(t)
+	defer pool.Close()
+
+	ctx := context.Background()
+	tenantA := uuid.New()
+	tenantB := uuid.New()
+	if _, err := pool.Exec(ctx, "INSERT INTO tenants (id, name, slug, status) VALUES ($1, 'Asset A', 'asset-iso-a', 'active')", tenantA); err != nil {
+		t.Fatalf("insert tenant A: %v", err)
+	}
+	defer pool.Exec(ctx, "DELETE FROM tenants WHERE id = $1", tenantA)
+	if _, err := pool.Exec(ctx, "INSERT INTO tenants (id, name, slug, status) VALUES ($1, 'Asset B', 'asset-iso-b', 'active')", tenantB); err != nil {
+		t.Fatalf("insert tenant B: %v", err)
+	}
+	defer pool.Exec(ctx, "DELETE FROM tenants WHERE id = $1", tenantB)
+
+	ctxA := db.WithTenantID(ctx, tenantA)
+	if err := db.ExecuteInTenantTx(ctxA, pool, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctxA, `INSERT INTO assets (tenant_id, identifier, name, business_criticality) VALUES ($1, '10.0.0.1', 'gw', 'critical')`, tenantA)
+		return err
+	}); err != nil {
+		t.Fatalf("tenant A failed to create asset: %v", err)
+	}
+
+	ctxB := db.WithTenantID(ctx, tenantB)
+	if err := db.ExecuteInTenantTx(ctxB, pool, func(tx pgx.Tx) error {
+		var count int
+		if err := tx.QueryRow(ctxB, `SELECT COUNT(*) FROM assets`).Scan(&count); err != nil {
+			return err
+		}
+		if count != 0 {
+			t.Errorf("SECURITY BREACH: tenant B saw %d asset(s) belonging to tenant A", count)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("tenant B transaction failed: %v", err)
+	}
+}
+
 func TestDiscoveredLinksIsolation(t *testing.T) {
 	pool := getTestPool(t)
 	defer pool.Close()

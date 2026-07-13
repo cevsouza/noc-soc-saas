@@ -11,6 +11,7 @@ import {
   Cpu,
   Eye,
   EyeOff,
+  Boxes,
   FileText,
   HelpCircle,
   Layers,
@@ -34,6 +35,7 @@ import { AccessControlPanel } from '@/components/settings/access-control-panel';
 import { OperationalKpisPanel } from '@/components/settings/operational-kpis-panel';
 import { TopologyView } from '@/components/settings/topology-view';
 import { NetworkDiscoveryPanel } from '@/components/settings/network-discovery-panel';
+import { AssetsPanel } from '@/components/settings/assets-panel';
 import { SuppressionRulesPanel } from '@/components/settings/suppression-rules-panel';
 import type { SLAExecutiveStats } from '@/types';
 
@@ -607,6 +609,18 @@ export function LegacyCockpitPanels({ cockpitTab, onSearchTermChange, onNavigate
                 >
                   <Radar className="w-3.5 h-3.5 text-cyan-400" />
                   <span>Descoberta de Rede</span>
+                </button>
+                <button
+                  onClick={() => {
+                    setSelectedIntegrationTool('assets');
+                    setValidationResult(null);
+                  }}
+                  className={`w-full px-3 py-2 rounded-lg text-left text-xs font-bold transition-all flex items-center gap-2 ${
+                    selectedIntegrationTool === 'assets' ? 'bg-white/5 text-white border-l-2 border-cyan-400' : 'text-slate-400 hover:bg-white/[0.02] hover:text-slate-200'
+                  }`}
+                >
+                  <Boxes className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>CMDB &amp; Ativos</span>
                 </button>
 
                 {user?.role === 'admin' && (
@@ -1541,6 +1555,8 @@ export function LegacyCockpitPanels({ cockpitTab, onSearchTermChange, onNavigate
                   <ResponseActionsPanel />
                 ) : selectedIntegrationTool === 'network_discovery' ? (
                   <NetworkDiscoveryPanel tenantId={selectedTenant?.id} />
+                ) : selectedIntegrationTool === 'assets' ? (
+                  <AssetsPanel tenantId={selectedTenant?.id} />
                 ) : selectedIntegrationTool === 'suppression' ? (
                   <SuppressionRulesPanel tenantId={selectedTenant?.id} />
                 ) : selectedIntegrationTool === 'access_admin' ? (
