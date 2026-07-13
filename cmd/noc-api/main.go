@@ -710,10 +710,12 @@ func main() {
 	mux.Handle("/api/v1/incidents", protectedGetIncidents)
 	protectedIncidentAlerts := middleware.JWTAuth(jwtSecret)(api.HandleGetIncidentAlerts(appPool))
 	mux.Handle("/api/v1/incidents/alerts", protectedIncidentAlerts)
+	// Distinct paths from the legacy alert-level ack/resolve above (which already own
+	// /api/v1/incidents/{acknowledge,resolve} and act on a single alert by id+created_at).
 	protectedAckIncidentGroup := middleware.JWTAuth(jwtSecret)(middleware.RequireRole(model.RoleAnalystL1)(api.HandleAcknowledgeIncidentGroup(appPool)))
-	mux.Handle("/api/v1/incidents/acknowledge", protectedAckIncidentGroup)
+	mux.Handle("/api/v1/incidents/group/acknowledge", protectedAckIncidentGroup)
 	protectedResolveIncidentGroup := middleware.JWTAuth(jwtSecret)(middleware.RequireRole(model.RoleAnalystL1)(api.HandleResolveIncidentGroup(appPool)))
-	mux.Handle("/api/v1/incidents/resolve", protectedResolveIncidentGroup)
+	mux.Handle("/api/v1/incidents/group/resolve", protectedResolveIncidentGroup)
 
 	// Real asset topology: the tenant's actual reporting hosts derived from its alert stream,
 	// replacing the old hardcoded 6-node SVG. Same authenticated-user access level as SLA stats.

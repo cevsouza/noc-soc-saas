@@ -94,7 +94,7 @@ export function IncidentsView({ tenantId }: { tenantId?: string }) {
     setActioningId(confirmTarget.id);
     setConfirmError(null);
     try {
-      const endpoint = confirmIntent === 'acknowledge' ? '/api/v1/incidents/acknowledge' : '/api/v1/incidents/resolve';
+      const endpoint = confirmIntent === 'acknowledge' ? '/api/v1/incidents/group/acknowledge' : '/api/v1/incidents/group/resolve';
       const res = await apiFetch(`${endpoint}${tenantId ? `?tenant_id=${tenantId}` : ''}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
