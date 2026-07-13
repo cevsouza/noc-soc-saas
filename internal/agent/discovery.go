@@ -52,12 +52,14 @@ type DiscoveredDevice struct {
 	DeviceType  string `json:"device_type"`
 }
 
-// Scanner probes a single host for its SNMP identity and its physical neighbours. Probe's ok is false
-// when the host doesn't answer; Neighbors returns the host's LLDP/CDP adjacencies (topology slice B),
-// empty when it speaks neither.
+// Scanner probes a single host for its SNMP identity, its physical neighbours, and its ARP cache.
+// Probe's ok is false when the host doesn't answer; Neighbors returns the host's LLDP/CDP adjacencies
+// (topology slice B), empty when it speaks neither; ARPTable returns the IP↔MAC entries in the device's
+// ARP cache (topology slice T5), used to find non-SNMP hosts.
 type Scanner interface {
 	Probe(target DiscoveryTarget, ip string) (DiscoveredDevice, bool)
 	Neighbors(target DiscoveryTarget, ip string) []NeighborLink
+	ARPTable(target DiscoveryTarget, ip string) []ARPHost
 }
 
 // expandCIDR returns the host addresses inside a CIDR, excluding the network and broadcast addresses
@@ -149,12 +151,15 @@ func classifyByRole(d string) string {
 }
 
 // Discover sweeps every target's CIDR, probing each host with bounded concurrency, and returns the
-// deduplicated set of responders (last-writer-wins per IP across overlapping targets) plus the
-// physical neighbour links walked from each responder (topology slice B). A target whose CIDR can't be
-// expanded is skipped (its error is returned aggregated) rather than aborting the run.
-func Discover(scanner Scanner, targets []DiscoveryTarget) ([]DiscoveredDevice, []NeighborLink, error) {
+// deduplicated set of responders (last-writer-wins per IP across overlapping targets), the physical
+// neighbour links walked from each responder (topology slice B), and the non-SNMP hosts learned from
+// responders' ARP caches (topology slice T5, deduplicated and excluding IPs that are themselves SNMP
+// responders). A target whose CIDR can't be expanded is skipped (its error is returned aggregated)
+// rather than aborting the run.
+func Discover(scanner Scanner, targets []DiscoveryTarget) ([]DiscoveredDevice, []NeighborLink, []ARPHost, error) {
 	found := map[string]DiscoveredDevice{}
 	var links []NeighborLink
+	arpRaw := map[string]ARPHost{}
 	var mu sync.Mutex
 	var errs []string
 
@@ -179,11 +184,17 @@ func Discover(scanner Scanner, targets []DiscoveryTarget) ([]DiscoveredDevice, [
 					if !ok {
 						continue
 					}
-					// Only responders get a neighbour walk (skipping dead hosts keeps the sweep cheap).
+					// Only responders get a neighbour + ARP walk (skipping dead hosts keeps it cheap).
 					nbrs := scanner.Neighbors(t, ip)
+					arps := scanner.ARPTable(t, ip)
 					mu.Lock()
 					found[dev.IP] = dev
 					links = append(links, nbrs...)
+					for _, a := range arps {
+						if _, exists := arpRaw[a.IP]; !exists {
+							arpRaw[a.IP] = a
+						}
+					}
 					mu.Unlock()
 				}
 			}()
@@ -199,10 +210,19 @@ func Discover(scanner Scanner, targets []DiscoveryTarget) ([]DiscoveredDevice, [
 	for _, d := range found {
 		out = append(out, d)
 	}
-	if len(errs) > 0 {
-		return out, links, fmt.Errorf("discovery: %s", strings.Join(errs, "; "))
+	// ARP hosts that are themselves SNMP responders are already devices — drop them so the inventory
+	// isn't downgraded to an endpoint entry.
+	arpHosts := make([]ARPHost, 0, len(arpRaw))
+	for ip, a := range arpRaw {
+		if _, isDevice := found[ip]; isDevice {
+			continue
+		}
+		arpHosts = append(arpHosts, a)
 	}
-	return out, links, nil
+	if len(errs) > 0 {
+		return out, links, arpHosts, fmt.Errorf("discovery: %s", strings.Join(errs, "; "))
+	}
+	return out, links, arpHosts, nil
 }
 
 // snmpScanner is the real SNMP v2c probe.

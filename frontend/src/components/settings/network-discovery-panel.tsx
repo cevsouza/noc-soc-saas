@@ -210,6 +210,7 @@ export function NetworkDiscoveryPanel({ tenantId }: { tenantId?: string }) {
                   <th className="text-left font-bold py-2 px-2">Nome (sysName)</th>
                   <th className="text-left font-bold py-2 px-2">Fabricante</th>
                   <th className="text-left font-bold py-2 px-2">Tipo</th>
+                  <th className="text-left font-bold py-2 px-2">Origem</th>
                   <th className="text-left font-bold py-2 px-2">Visto por último</th>
                 </tr>
               </thead>
@@ -217,12 +218,19 @@ export function NetworkDiscoveryPanel({ tenantId }: { tenantId?: string }) {
                 {devices.map((d) => (
                   <tr key={d.id} className="border-b border-white/[0.03] hover:bg-white/[0.02]">
                     <td className="py-2 px-2 font-mono text-slate-300">{d.ip}</td>
-                    <td className="py-2 px-2 text-slate-200">{d.sysname || '—'}</td>
-                    <td className="py-2 px-2 text-slate-300">{d.vendor || 'unknown'}</td>
+                    <td className="py-2 px-2 text-slate-200">{d.sysname || (d.mac ? <span className="font-mono text-[10px] text-slate-400">{d.mac}</span> : '—')}</td>
+                    <td className="py-2 px-2 text-slate-300">{d.vendor || (d.source === 'arp' ? '—' : 'unknown')}</td>
                     <td className="py-2 px-2">
                       <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-300 border border-cyan-500/20">
                         {deviceTypeLabel(d.device_type)}
                       </span>
+                    </td>
+                    <td className="py-2 px-2">
+                      {d.source === 'arp' ? (
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-violet-500/10 text-violet-300 border border-violet-500/20">ARP</span>
+                      ) : (
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-300 border border-emerald-500/20">SNMP</span>
+                      )}
                     </td>
                     <td className="py-2 px-2 text-slate-500">{new Date(d.last_seen).toLocaleString()}</td>
                   </tr>
@@ -294,6 +302,8 @@ function deviceTypeLabel(t: string): string {
       return 'Servidor';
     case 'hypervisor':
       return 'Hypervisor';
+    case 'endpoint':
+      return 'Endpoint';
     default:
       return 'Rede';
   }

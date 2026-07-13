@@ -471,6 +471,7 @@ function tierKey(kind: string): string {
     case 'neighbor':
       return 'neighbor';
     case 'host':
+    case 'endpoint':
       return 'host';
     default:
       return 'access';
@@ -594,6 +595,8 @@ function kindLabel(kind: string): string {
       return 'hypervisor';
     case 'host':
       return 'host';
+    case 'endpoint':
+      return 'endpoint';
     case 'neighbor':
       return 'vizinho';
     default:

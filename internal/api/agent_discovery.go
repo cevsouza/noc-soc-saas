@@ -254,12 +254,19 @@ type DiscoveredLinkIn struct {
 	Protocol        string `json:"protocol"`
 }
 
-// AgentDiscoveryRequest is the agent's discovery push batch: identified devices plus the physical
-// neighbour edges walked from them.
+// ARPHostIn is one non-SNMP host learned from a device's ARP cache (topology slice T5).
+type ARPHostIn struct {
+	IP  string `json:"ip"`
+	MAC string `json:"mac"`
+}
+
+// AgentDiscoveryRequest is the agent's discovery push batch: identified devices, the physical neighbour
+// edges walked from them, and the non-SNMP hosts learned from their ARP caches.
 type AgentDiscoveryRequest struct {
-	AgentID uuid.UUID            `json:"agent_id"`
-	Devices []DiscoveredDeviceIn `json:"devices"`
-	Links   []DiscoveredLinkIn   `json:"links"`
+	AgentID  uuid.UUID            `json:"agent_id"`
+	Devices  []DiscoveredDeviceIn `json:"devices"`
+	Links    []DiscoveredLinkIn   `json:"links"`
+	ARPHosts []ARPHostIn          `json:"arp_hosts"`
 }
 
 // HandleAgentDiscovery upserts the batch of discovered devices into the tenant inventory. API-key auth
@@ -285,20 +292,39 @@ func HandleAgentDiscovery(pgPool *pgxpool.Pool) http.HandlerFunc {
 					continue // ignore a malformed IP rather than failing the batch
 				}
 				_, e := tx.Exec(ctx, `
-					INSERT INTO discovered_devices (tenant_id, ip, sysname, sysdescr, sysobjectid, vendor, device_type, first_seen, last_seen)
-					VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
+					INSERT INTO discovered_devices (tenant_id, ip, sysname, sysdescr, sysobjectid, vendor, device_type, source, first_seen, last_seen)
+					VALUES ($1, $2, $3, $4, $5, $6, $7, 'snmp', NOW(), NOW())
 					ON CONFLICT (tenant_id, ip) DO UPDATE SET
 						sysname = EXCLUDED.sysname,
 						sysdescr = EXCLUDED.sysdescr,
 						sysobjectid = EXCLUDED.sysobjectid,
 						vendor = EXCLUDED.vendor,
 						device_type = EXCLUDED.device_type,
+						source = 'snmp',
 						last_seen = NOW()
 				`, tenantID, d.IP, d.SysName, d.SysDescr, d.SysObjectID, d.Vendor, d.DeviceType)
 				if e != nil {
 					return e
 				}
 				accepted++
+			}
+			// ARP-learned non-SNMP hosts (topology slice T5). Insert as a minimal 'endpoint' with its MAC;
+			// on conflict, only refresh last_seen/MAC — never downgrade a richer SNMP-discovered row's
+			// identity (the SNMP path above always wins for a device that also answers SNMP).
+			for _, a := range req.ARPHosts {
+				if net.ParseIP(a.IP) == nil {
+					continue
+				}
+				_, e := tx.Exec(ctx, `
+					INSERT INTO discovered_devices (tenant_id, ip, device_type, mac, source, first_seen, last_seen)
+					VALUES ($1, $2, 'endpoint', $3, 'arp', NOW(), NOW())
+					ON CONFLICT (tenant_id, ip) DO UPDATE SET
+						mac = CASE WHEN EXCLUDED.mac <> '' THEN EXCLUDED.mac ELSE discovered_devices.mac END,
+						last_seen = NOW()
+				`, tenantID, a.IP, a.MAC)
+				if e != nil {
+					return e
+				}
 			}
 			// Physical neighbour edges (topology slice B): upsert on the stable identity so re-walking
 			// refreshes last_seen instead of duplicating.
@@ -350,6 +376,8 @@ type DiscoveredDevice struct {
 	SysObjectID string    `json:"sysobjectid"`
 	Vendor      string    `json:"vendor"`
 	DeviceType  string    `json:"device_type"`
+	MAC         string    `json:"mac"`
+	Source      string    `json:"source"` // "snmp" | "arp"
 	FirstSeen   time.Time `json:"first_seen"`
 	LastSeen    time.Time `json:"last_seen"`
 }
@@ -367,7 +395,7 @@ func HandleGetDiscoveredDevices(pgPool *pgxpool.Pool) http.HandlerFunc {
 		list := make([]DiscoveredDevice, 0)
 		err = db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
 			rows, e := tx.Query(ctx, `
-				SELECT id, ip, sysname, sysdescr, sysobjectid, vendor, device_type, first_seen, last_seen
+				SELECT id, ip, sysname, sysdescr, sysobjectid, vendor, device_type, mac, source, first_seen, last_seen
 				FROM discovered_devices WHERE tenant_id = $1 ORDER BY last_seen DESC LIMIT 500
 			`, tenantID)
 			if e != nil {
@@ -376,7 +404,7 @@ func HandleGetDiscoveredDevices(pgPool *pgxpool.Pool) http.HandlerFunc {
 			defer rows.Close()
 			for rows.Next() {
 				var d DiscoveredDevice
-				if e := rows.Scan(&d.ID, &d.IP, &d.SysName, &d.SysDescr, &d.SysObjectID, &d.Vendor, &d.DeviceType, &d.FirstSeen, &d.LastSeen); e != nil {
+				if e := rows.Scan(&d.ID, &d.IP, &d.SysName, &d.SysDescr, &d.SysObjectID, &d.Vendor, &d.DeviceType, &d.MAC, &d.Source, &d.FirstSeen, &d.LastSeen); e != nil {
 					return e
 				}
 				list = append(list, d)

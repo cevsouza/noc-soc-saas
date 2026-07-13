@@ -47,6 +47,7 @@ func (wp *WorkerPool) enforceRetention(ctx context.Context) {
 		return
 	}
 	metricsDays := envInt64("METRICS_RETENTION_DAYS", 30)
+	discoveryDays := envInt64("DISCOVERY_RETENTION_DAYS", 30)
 	for _, tid := range tenantIDs {
 		tctx := db.WithTenantID(ctx, tid)
 		var days int
@@ -56,6 +57,15 @@ func (wp *WorkerPool) enforceRetention(ctx context.Context) {
 			// Metrics retention: fixed window for every tenant (raw SNMP samples grow fast; the
 			// graphs only need a recent window). Independent of the opt-in alert retention below.
 			if _, e := tx.Exec(tctx, `DELETE FROM agent_metrics WHERE tenant_id = $1 AND ts < NOW() - make_interval(days => $2)`, tid, metricsDays); e != nil {
+				return e
+			}
+			// Discovery pruning (topology slice T5): a decommissioned device/link stops being re-observed
+			// by the sweep, so last_seen goes stale. Fixed window for every tenant, keeping the inventory
+			// and the topology graph from accumulating dead nodes/edges forever.
+			if _, e := tx.Exec(tctx, `DELETE FROM discovered_devices WHERE tenant_id = $1 AND last_seen < NOW() - make_interval(days => $2)`, tid, discoveryDays); e != nil {
+				return e
+			}
+			if _, e := tx.Exec(tctx, `DELETE FROM discovered_links WHERE tenant_id = $1 AND last_seen < NOW() - make_interval(days => $2)`, tid, discoveryDays); e != nil {
 				return e
 			}
 			// Alerts retention: opt-in per tenant_retention.

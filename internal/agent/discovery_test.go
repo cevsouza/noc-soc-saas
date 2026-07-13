@@ -74,10 +74,12 @@ func TestClassifyDevice(t *testing.T) {
 	}
 }
 
-// fakeScanner answers only for the IPs in its map, and reports a canned neighbour per responder.
+// fakeScanner answers only for the IPs in its map, and reports canned neighbours + ARP hosts per
+// responder.
 type fakeScanner struct {
-	live  map[string]DiscoveredDevice
-	nbrs  map[string][]NeighborLink
+	live map[string]DiscoveredDevice
+	nbrs map[string][]NeighborLink
+	arps map[string][]ARPHost
 }
 
 func (f fakeScanner) Probe(_ DiscoveryTarget, ip string) (DiscoveredDevice, bool) {
@@ -92,14 +94,22 @@ func (f fakeScanner) Neighbors(_ DiscoveryTarget, ip string) []NeighborLink {
 	return f.nbrs[ip]
 }
 
+func (f fakeScanner) ARPTable(_ DiscoveryTarget, ip string) []ARPHost {
+	return f.arps[ip]
+}
+
 func TestDiscover(t *testing.T) {
 	scanner := fakeScanner{live: map[string]DiscoveredDevice{
 		"192.168.1.1": {SysName: "gw", Vendor: "MikroTik", DeviceType: "router"},
 		"192.168.1.2": {SysName: "sw", Vendor: "Cisco", DeviceType: "switch"},
 	}, nbrs: map[string][]NeighborLink{
 		"192.168.1.2": {{LocalIP: "192.168.1.2", LocalPort: "1", RemoteSysName: "gw", Protocol: "lldp"}},
+	}, arps: map[string][]ARPHost{
+		// The switch's ARP cache knows a non-SNMP endpoint AND the router (a device) — the latter must
+		// be filtered from the ARP result since it's already inventoried via SNMP.
+		"192.168.1.2": {{IP: "192.168.1.50", MAC: "aa:bb:cc:00:11:22"}, {IP: "192.168.1.1", MAC: "de:ad:be:ef:00:01"}},
 	}}
-	devices, links, err := Discover(scanner, []DiscoveryTarget{{CIDR: "192.168.1.0/29"}})
+	devices, links, arps, err := Discover(scanner, []DiscoveryTarget{{CIDR: "192.168.1.0/29"}})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -108,6 +118,9 @@ func TestDiscover(t *testing.T) {
 	}
 	if len(links) != 1 || links[0].RemoteSysName != "gw" {
 		t.Errorf("got links %+v, want 1 link to gw", links)
+	}
+	if len(arps) != 1 || arps[0].IP != "192.168.1.50" || arps[0].MAC != "aa:bb:cc:00:11:22" {
+		t.Errorf("got arp hosts %+v, want only the non-SNMP endpoint 192.168.1.50", arps)
 	}
 	sort.Slice(devices, func(i, j int) bool { return devices[i].IP < devices[j].IP })
 	if devices[0].IP != "192.168.1.1" || devices[0].Vendor != "MikroTik" {
@@ -118,7 +131,7 @@ func TestDiscover(t *testing.T) {
 	}
 
 	// A bad CIDR is skipped with an aggregated error, but good targets still return.
-	devices, _, err = Discover(scanner, []DiscoveryTarget{{CIDR: "bad"}, {CIDR: "192.168.1.0/29"}})
+	devices, _, _, err = Discover(scanner, []DiscoveryTarget{{CIDR: "bad"}, {CIDR: "192.168.1.0/29"}})
 	if err == nil {
 		t.Error("expected aggregated error for bad CIDR")
 	}

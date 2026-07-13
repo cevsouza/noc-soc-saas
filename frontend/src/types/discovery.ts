@@ -17,6 +17,8 @@ export interface DiscoveredDevice {
   sysobjectid: string;
   vendor: string;
   device_type: string;
+  mac: string;
+  source: 'snmp' | 'arp'; // how it was found (topology slice T5: ARP finds non-SNMP hosts)
   first_seen: string;
   last_seen: string;
 }
