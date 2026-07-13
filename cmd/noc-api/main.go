@@ -558,6 +558,14 @@ func main() {
 		}
 	}))
 
+	// Usage metering (Fase 6): tenant-plane (own tenant) vs control-plane (all tenants, MSSP operator).
+	mux.Handle("/api/v1/usage", middleware.JWTAuth(jwtSecret)(api.HandleGetTenantUsage(appPool)))
+	mux.Handle("/api/v1/admin/usage", middleware.JWTAuth(jwtSecret)(
+		middleware.RequireGlobalRole(model.RoleAdmin)(
+			api.HandleGetPlatformUsage(appPool),
+		),
+	))
+
 	// SLA PDF Report Download Endpoint (resolves auth via ?token= — kept unauthenticated at the
 	// route level since browser downloads can't set an Authorization header; security instead
 	// comes from ResolveTenantFromToken now only accepting a signed JWT or a real API key, never
