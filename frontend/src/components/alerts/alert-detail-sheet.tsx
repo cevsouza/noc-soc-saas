@@ -338,8 +338,9 @@ function LokiLogsTab({ alert }: { alert: Alert }) {
     if (!host) return;
     setLoading(true);
     try {
+      const at = new Date(alert.created_at).getTime();
       const res = await apiFetchJson<{ logs: string[] }>(
-        `/api/v1/loki/logs?host=${encodeURIComponent(host)}&tenant_id=${alert.tenant_id}`,
+        `/api/v1/loki/logs?host=${encodeURIComponent(host)}&at=${at}&tenant_id=${alert.tenant_id}`,
       );
       setLogs(res.logs || []);
       setLive(true);
@@ -356,7 +357,7 @@ function LokiLogsTab({ alert }: { alert: Alert }) {
         <span className="text-[10px] uppercase font-bold tracking-wider text-slate-500 flex items-center gap-1.5 min-w-0">
           <FileText className="w-3.5 h-3.5 text-orange-400 shrink-0" />
           <span className="truncate">
-            Logs de <b className="text-slate-300">{host || '—'}</b> · {live ? 'ao vivo' : 'no momento do incidente'} ({logs.length})
+            Logs de <b className="text-slate-300">{host || '—'}</b> · janela do incidente ±15 min{live ? ' · recarregado' : ''} ({logs.length})
           </span>
         </span>
         <button
@@ -380,7 +381,7 @@ function LokiLogsTab({ alert }: { alert: Alert }) {
           <p className="text-[11px] text-slate-600 max-w-sm leading-relaxed">
             <b>Como usar:</b> configure o conector em <b>Central de Conectores → Grafana Loki</b> (URL, usuário e senha).
             Os logs são coletados automaticamente quando o alerta dispara (warning/critical/fatal); use <b>Recarregar</b>
-            para buscar a janela atual ao vivo.
+            para rebuscar a janela do incidente (±15 min).
           </p>
         </div>
       )}

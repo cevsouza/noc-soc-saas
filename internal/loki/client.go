@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"strconv"
 	"time"
 
 	"noc-api/internal/db"
@@ -80,8 +81,14 @@ func (c *LokiClient) getLokiConfig(ctx context.Context, tenantID uuid.UUID) (*Lo
 	return &cfg, nil
 }
 
-// FetchHostLogs gets the last 50 log lines for a host/IP from Loki using LogQL
-func (c *LokiClient) FetchHostLogs(ctx context.Context, tenantID uuid.UUID, host string) ([]string, error) {
+// incidentLogWindow is how far before/after the reference time FetchHostLogs looks in Loki, so the
+// logs shown match the incident's moment instead of Loki's default "last hour from now".
+const incidentLogWindow = 15 * time.Minute
+
+// FetchHostLogs gets up to 50 log lines for a host/IP from Loki around the reference time `at`. When
+// `at` is the zero time, Loki's default window (last hour) is used. Callers pass the alert timestamp
+// so the window is centered on the incident, not on "now".
+func (c *LokiClient) FetchHostLogs(ctx context.Context, tenantID uuid.UUID, host string, at time.Time) ([]string, error) {
 	tenantCtx := db.WithTenantID(ctx, tenantID)
 	cfg, err := c.getLokiConfig(tenantCtx, tenantID)
 	if err != nil {
@@ -109,6 +116,12 @@ func (c *LokiClient) FetchHostLogs(ctx context.Context, tenantID uuid.UUID, host
 	q.Set("query", logql)
 	q.Set("limit", "50")
 	q.Set("direction", "backward")
+	// Center the query on the incident time (±incidentLogWindow) so we don't show unrelated logs
+	// from "now" — Loki wants start/end as unix nanoseconds.
+	if !at.IsZero() {
+		q.Set("start", strconv.FormatInt(at.Add(-incidentLogWindow).UnixNano(), 10))
+		q.Set("end", strconv.FormatInt(at.Add(incidentLogWindow).UnixNano(), 10))
+	}
 	u.RawQuery = q.Encode()
 
 	req, err := http.NewRequestWithContext(ctx, "GET", u.String(), nil)

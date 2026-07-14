@@ -3,7 +3,9 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	"noc-api/internal/db"
 	"noc-api/internal/loki"
@@ -34,7 +36,13 @@ func HandleGetHostLogs(pgPool *pgxpool.Pool) http.HandlerFunc {
 			http.Error(w, "Bad Request: host is required", http.StatusBadRequest)
 			return
 		}
-		logs, err := client.FetchHostLogs(r.Context(), tenantID, host)
+		// ?at= is the incident time (unix ms): the query window is centered on it so a later reload
+		// still shows the incident's logs, not "now". Defaults to now when omitted.
+		at := time.Now()
+		if atMs, perr := strconv.ParseInt(strings.TrimSpace(r.URL.Query().Get("at")), 10, 64); perr == nil && atMs > 0 {
+			at = time.UnixMilli(atMs)
+		}
+		logs, err := client.FetchHostLogs(r.Context(), tenantID, host, at)
 		if err != nil {
 			logs = []string{}
 		}
