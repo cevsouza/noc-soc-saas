@@ -1,0 +1,13 @@
+apiVersion: 1
+
+contactPoints:
+  - orgId: 1
+    name: NOC-SOC
+    receivers:
+      - uid: noc-soc-webhook
+        type: webhook
+        settings:
+          # __NOC_URL__ / __NOC_TOKEN__ substituídos pelo setup a partir do .env
+          url: '__NOC_URL__/api/v1/ingest/grafana?token=__NOC_TOKEN__'
+          httpMethod: POST
+        disableResolveMessage: false

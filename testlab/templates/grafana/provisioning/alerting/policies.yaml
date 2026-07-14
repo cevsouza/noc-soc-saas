@@ -1,0 +1,7 @@
+apiVersion: 1
+
+# Roteia todos os alertas do Grafana para o contact point do NOC.
+policies:
+  - orgId: 1
+    receiver: NOC-SOC
+    group_by: ['grafana_folder', 'alertname']

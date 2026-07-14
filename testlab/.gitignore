@@ -1,0 +1,5 @@
+# Segredo local — nunca versionar
+.env
+
+# Configs renderizadas a partir de templates/ (contêm o token)
+/rendered/

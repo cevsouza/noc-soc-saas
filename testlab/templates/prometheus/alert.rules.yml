@@ -1,0 +1,23 @@
+groups:
+  - name: noc-testlab
+    rules:
+      # Regra que dispara SEMPRE (vector(1) = 1) — serve para provar a conexão
+      # com o NOC sem depender de nenhuma condição real. É seguro deixar ligada:
+      # o Alertmanager reenvia a cada repeat_interval (10 min).
+      - alert: NocLabHeartbeat
+        expr: vector(1) > 0
+        for: 0m
+        labels:
+          severity: warning
+          instance: lab-prometheus
+        annotations:
+          summary: "Teste de conexão NOC — heartbeat do lab (Prometheus → Alertmanager)"
+
+      # Exemplo mais realista: dispara se o próprio Prometheus ficar sem coletar.
+      - alert: PrometheusTargetDown
+        expr: up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Alvo de coleta caiu no lab: {{ $labels.instance }}"

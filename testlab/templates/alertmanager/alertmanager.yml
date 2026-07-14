@@ -1,0 +1,13 @@
+route:
+  receiver: noc-soc
+  group_by: ['alertname']
+  group_wait: 10s
+  group_interval: 1m
+  repeat_interval: 10m
+
+receivers:
+  - name: noc-soc
+    webhook_configs:
+      # __NOC_URL__ e __NOC_TOKEN__ são substituídos pelo setup a partir do .env
+      - url: '__NOC_URL__/api/v1/ingest/prometheus?token=__NOC_TOKEN__'
+        send_resolved: true
