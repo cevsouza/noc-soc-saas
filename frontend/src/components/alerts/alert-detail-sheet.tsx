@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Brain, CheckCircle2, Cpu, LayoutDashboard, RefreshCw, Zap } from 'lucide-react';
+import { Brain, CheckCircle2, Cpu, FileText, LayoutDashboard, RefreshCw, Zap } from 'lucide-react';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { apiFetch, apiFetchJson } from '@/lib/api-client';
@@ -301,15 +301,58 @@ export function AlertDetailSheet({ alert, onOpenChange, onStatusChange, userRole
 
             {TAB_ITEMS.filter((t) => t.value !== 'general').map((tab) => (
               <TabsContent key={tab.value} value={tab.value} className="mt-0">
-                <div className="flex flex-col items-center justify-center gap-2 py-16 text-slate-500">
-                  <RefreshCw className="w-6 h-6 text-slate-600" />
-                  <p className="text-xs">{tab.label} — em breve nesta nova interface.</p>
-                </div>
+                {tab.value === 'logs' ? (
+                  <LokiLogsTab alert={alert} />
+                ) : (
+                  <div className="flex flex-col items-center justify-center gap-2 py-16 text-slate-500">
+                    <RefreshCw className="w-6 h-6 text-slate-600" />
+                    <p className="text-xs">{tab.label} — em breve nesta nova interface.</p>
+                  </div>
+                )}
               </TabsContent>
             ))}
           </div>
         </Tabs>
       </SheetContent>
     </Sheet>
+  );
+}
+
+// LokiLogsTab renders the host log lines the worker captured from Grafana Loki at the moment the
+// alert fired (stored on ai_analysis.loki_logs for warning/critical/fatal alerts). Empty when Loki
+// isn't configured for the tenant or no matching lines were found for the host.
+function LokiLogsTab({ alert }: { alert: Alert }) {
+  const raw = alert.ai_analysis?.loki_logs;
+  const logs = Array.isArray(raw) ? raw.filter((l): l is string => typeof l === 'string') : [];
+  const host = (alert.ai_analysis?.host as string) || alert.payload?.host || '—';
+
+  if (logs.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center gap-2 py-14 text-center text-slate-500">
+        <FileText className="w-6 h-6 text-slate-600" />
+        <p className="text-xs">
+          Nenhum log do Loki para <b className="text-slate-300">{String(host)}</b> neste alerta.
+        </p>
+        <p className="text-[11px] text-slate-600 max-w-sm leading-relaxed">
+          Os logs do host são coletados automaticamente no momento do incidente (alertas warning/critical/fatal),
+          desde que o conector <b>Grafana Loki</b> esteja configurado em <b>Central de Conectores → Grafana Loki</b>
+          (URL, usuário e senha).
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center gap-2 text-[10px] uppercase font-bold tracking-wider text-slate-500">
+        <FileText className="w-3.5 h-3.5 text-orange-400" />
+        <span>
+          Logs do host <b className="text-slate-300">{String(host)}</b> no momento do incidente ({logs.length})
+        </span>
+      </div>
+      <pre className="bg-black border border-white/5 rounded-lg p-3 text-[10px] font-mono text-emerald-300/90 overflow-x-auto max-h-[60vh] whitespace-pre-wrap select-text leading-relaxed">
+        {logs.join('\n')}
+      </pre>
+    </div>
   );
 }
