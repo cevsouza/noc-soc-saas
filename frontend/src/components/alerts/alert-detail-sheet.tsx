@@ -5,6 +5,7 @@ import { Brain, CheckCircle2, Clock, Code2, Cpu, FileText, LayoutDashboard, Refr
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { apiFetch, apiFetchJson } from '@/lib/api-client';
+import { useAuth } from '@/lib/auth-context';
 import type { Alert, AlertStatus, Runbook } from '@/types';
 
 interface AlertDetailSheetProps {
@@ -325,37 +326,64 @@ export function AlertDetailSheet({ alert, onOpenChange, onStatusChange, userRole
 // alert fired (stored on ai_analysis.loki_logs for warning/critical/fatal alerts). Empty when Loki
 // isn't configured for the tenant or no matching lines were found for the host.
 function LokiLogsTab({ alert }: { alert: Alert }) {
-  const raw = alert.ai_analysis?.loki_logs;
-  const logs = Array.isArray(raw) ? raw.filter((l): l is string => typeof l === 'string') : [];
-  const host = (alert.ai_analysis?.host as string) || alert.payload?.host || '—';
+  const snapshot = Array.isArray(alert.ai_analysis?.loki_logs)
+    ? (alert.ai_analysis!.loki_logs as unknown[]).filter((l): l is string => typeof l === 'string')
+    : [];
+  const host = String((alert.ai_analysis?.host as string) || alert.payload?.host || '');
+  const [logs, setLogs] = useState<string[]>(snapshot);
+  const [live, setLive] = useState(false);
+  const [loading, setLoading] = useState(false);
 
-  if (logs.length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center gap-2 py-14 text-center text-slate-500">
-        <FileText className="w-6 h-6 text-slate-600" />
-        <p className="text-xs">
-          Nenhum log do Loki para <b className="text-slate-300">{String(host)}</b> neste alerta.
-        </p>
-        <p className="text-[11px] text-slate-600 max-w-sm leading-relaxed">
-          Os logs do host são coletados automaticamente no momento do incidente (alertas warning/critical/fatal),
-          desde que o conector <b>Grafana Loki</b> esteja configurado em <b>Central de Conectores → Grafana Loki</b>
-          (URL, usuário e senha).
-        </p>
-      </div>
-    );
-  }
+  const reload = async () => {
+    if (!host) return;
+    setLoading(true);
+    try {
+      const res = await apiFetchJson<{ logs: string[] }>(
+        `/api/v1/loki/logs?host=${encodeURIComponent(host)}&tenant_id=${alert.tenant_id}`,
+      );
+      setLogs(res.logs || []);
+      setLive(true);
+    } catch {
+      /* keep snapshot on failure */
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
     <div className="flex flex-col gap-2">
-      <div className="flex items-center gap-2 text-[10px] uppercase font-bold tracking-wider text-slate-500">
-        <FileText className="w-3.5 h-3.5 text-orange-400" />
-        <span>
-          Logs do host <b className="text-slate-300">{String(host)}</b> no momento do incidente ({logs.length})
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[10px] uppercase font-bold tracking-wider text-slate-500 flex items-center gap-1.5 min-w-0">
+          <FileText className="w-3.5 h-3.5 text-orange-400 shrink-0" />
+          <span className="truncate">
+            Logs de <b className="text-slate-300">{host || '—'}</b> · {live ? 'ao vivo' : 'no momento do incidente'} ({logs.length})
+          </span>
         </span>
+        <button
+          type="button"
+          onClick={reload}
+          disabled={loading || !host}
+          className="px-2 py-1 rounded-md bg-white/5 hover:bg-white/10 disabled:opacity-40 border border-white/10 text-[10px] font-bold uppercase tracking-wider text-slate-300 transition-all cursor-pointer flex items-center gap-1.5 shrink-0"
+        >
+          <RefreshCw className={`w-3 h-3 ${loading ? 'animate-spin' : ''}`} /> Recarregar
+        </button>
       </div>
-      <pre className="bg-black border border-white/5 rounded-lg p-3 text-[10px] font-mono text-emerald-300/90 overflow-x-auto max-h-[60vh] whitespace-pre-wrap select-text leading-relaxed">
-        {logs.join('\n')}
-      </pre>
+
+      {logs.length > 0 ? (
+        <pre className="bg-black border border-white/5 rounded-lg p-3 text-[10px] font-mono text-emerald-300/90 overflow-x-auto max-h-[58vh] whitespace-pre-wrap select-text leading-relaxed">
+          {logs.join('\n')}
+        </pre>
+      ) : (
+        <div className="flex flex-col items-center justify-center gap-2 py-12 text-center text-slate-500">
+          <FileText className="w-6 h-6 text-slate-600" />
+          <p className="text-xs">Nenhum log do Loki para <b className="text-slate-300">{host || 'este host'}</b>.</p>
+          <p className="text-[11px] text-slate-600 max-w-sm leading-relaxed">
+            <b>Como usar:</b> configure o conector em <b>Central de Conectores → Grafana Loki</b> (URL, usuário e senha).
+            Os logs são coletados automaticamente quando o alerta dispara (warning/critical/fatal); use <b>Recarregar</b>
+            para buscar a janela atual ao vivo.
+          </p>
+        </div>
+      )}
     </div>
   );
 }
@@ -434,34 +462,140 @@ function TimelineTab({ alert }: { alert: Alert }) {
 // live embedded Grafana panel would need a configured dashboard URL — noted here — so meanwhile this
 // gives the operator the values captured at incident time.
 function GrafanaTab({ alert }: { alert: Alert }) {
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
+  const host = String((alert.ai_analysis?.host as string) || alert.payload?.host || '');
   const metrics = Object.entries(alert.payload || {}).filter(
     ([k, v]) => typeof v === 'number' && k !== 'occurrences',
   ) as [string, number][];
 
+  const [embedUrl, setEmbedUrl] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [dashInput, setDashInput] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [iframeFailed, setIframeFailed] = useState(false);
+
+  const loadEmbed = async () => {
+    setLoading(true);
+    setIframeFailed(false);
+    try {
+      const created = new Date(alert.created_at).getTime();
+      const from = created - 30 * 60 * 1000;
+      const to = created + 30 * 60 * 1000;
+      const res = await apiFetchJson<{ url: string }>(
+        `/api/v1/integrations/grafana-embed?host=${encodeURIComponent(host)}&from=${from}&to=${to}&tenant_id=${alert.tenant_id}`,
+      );
+      setEmbedUrl(res.url || '');
+    } catch {
+      setEmbedUrl('');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadEmbed();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [alert.id]);
+
+  const saveDashboard = async () => {
+    if (!dashInput.trim()) return;
+    setSaving(true);
+    try {
+      await apiFetch(`/api/v1/vault/secret?tenant_id=${alert.tenant_id}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: 'grafana_dashboard_url', value: dashInput.trim() }),
+      });
+      setDashInput('');
+      await loadEmbed();
+    } catch {
+      /* ignore */
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <div className="flex flex-col gap-3">
-      <span className="text-[10px] uppercase font-bold tracking-wider text-slate-500 flex items-center gap-1.5">
-        <LayoutDashboard className="w-3.5 h-3.5 text-orange-400" /> Métricas do host no incidente
-      </span>
-      {metrics.length > 0 ? (
-        <div className="grid grid-cols-2 md:grid-cols-3 gap-2.5">
-          {metrics.map(([k, v]) => (
-            <div key={k} className="rounded-xl bg-black/30 border border-white/5 p-3">
-              <div className="text-[10px] font-mono uppercase tracking-wider text-slate-500 truncate">{k}</div>
-              <div className="text-lg font-extrabold text-slate-100 mt-0.5">{v}</div>
-            </div>
-          ))}
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[10px] uppercase font-bold tracking-wider text-slate-500 flex items-center gap-1.5">
+          <LayoutDashboard className="w-3.5 h-3.5 text-orange-400" /> Painel do host {host && <>· <b className="text-slate-300">{host}</b></>}
+        </span>
+        {embedUrl && (
+          <a
+            href={embedUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="px-2 py-1 rounded-md bg-white/5 hover:bg-white/10 border border-white/10 text-[10px] font-bold uppercase tracking-wider text-slate-300 transition-all"
+          >
+            Abrir no Grafana ↗
+          </a>
+        )}
+      </div>
+
+      {/* Live embedded panel when a dashboard URL is configured */}
+      {embedUrl && !iframeFailed ? (
+        <iframe
+          src={embedUrl}
+          title="Grafana"
+          className="w-full rounded-lg border border-white/10 bg-black"
+          style={{ height: 360 }}
+          onError={() => setIframeFailed(true)}
+        />
+      ) : embedUrl && iframeFailed ? (
+        <div className="rounded-lg bg-amber-950/15 border border-amber-500/20 p-3 text-[11px] text-amber-200">
+          O Grafana bloqueou a exibição embutida. Use <b>Abrir no Grafana ↗</b> acima, ou habilite o embedding no
+          Grafana (<code>allow_embedding = true</code> + acesso anônimo ou painel público).
         </div>
-      ) : (
-        <div className="flex flex-col items-center justify-center gap-2 py-10 text-center text-slate-500">
-          <LayoutDashboard className="w-6 h-6 text-slate-600" />
-          <p className="text-xs">Este alerta não trouxe métricas numéricas no payload.</p>
+      ) : null}
+
+      {/* Metrics captured at incident time (always useful, and the fallback when there's no panel) */}
+      {metrics.length > 0 && (
+        <div>
+          <span className="text-[10px] uppercase font-bold tracking-wider text-slate-500">Métricas no momento do incidente</span>
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-2.5 mt-1.5">
+            {metrics.map(([k, v]) => (
+              <div key={k} className="rounded-xl bg-black/30 border border-white/5 p-3">
+                <div className="text-[10px] font-mono uppercase tracking-wider text-slate-500 truncate">{k}</div>
+                <div className="text-lg font-extrabold text-slate-100 mt-0.5">{v}</div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
-      <p className="text-[11px] text-slate-600 leading-relaxed border-t border-white/5 pt-3">
-        Dica: para abrir o painel ao vivo do host, conecte seu Grafana no host e cole o link do dashboard nas
-        anotações do alerta — o painel embutido ao vivo entra numa próxima evolução desta aba.
-      </p>
+
+      {/* Setup: shown when no dashboard is configured (procedure in-app) */}
+      {!loading && !embedUrl && (
+        <div className="rounded-xl bg-black/30 border border-white/5 p-3 flex flex-col gap-2">
+          <span className="text-[10px] uppercase font-bold tracking-wider text-cyan-400/80">Como habilitar o painel ao vivo</span>
+          <ol className="text-[11px] text-slate-400 leading-relaxed list-decimal pl-4 flex flex-col gap-1">
+            <li>No Grafana, abra o painel do host → <b>Share → Embed</b> e copie a URL (algo como <code>.../d-solo/UID/slug?panelId=1</code>).</li>
+            <li>Troque o host e o tempo por variáveis: use <code>{'{host}'}</code>, <code>{'{from}'}</code> e <code>{'{to}'}</code> (ex.: <code>&amp;var-instance={'{host}'}&amp;from={'{from}'}&amp;to={'{to}'}</code>).</li>
+            <li>No Grafana, habilite <code>allow_embedding=true</code> (e acesso anônimo ou painel público) para a exibição embutida funcionar.</li>
+            {isAdmin ? <li>Cole a URL abaixo e salve — vale para todos os alertas deste cliente.</li> : <li>Peça a um administrador para colar essa URL na configuração do cliente.</li>}
+          </ol>
+          {isAdmin && (
+            <div className="flex items-center gap-2 mt-1">
+              <input
+                value={dashInput}
+                onChange={(e) => setDashInput(e.target.value)}
+                placeholder="https://grafana.suaempresa.com/d-solo/UID/host?panelId=1&var-instance={host}&from={from}&to={to}&theme=dark"
+                className="flex-1 rounded-lg bg-black/40 border border-white/10 px-3 py-2 text-[11px] text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-orange-500/40"
+              />
+              <button
+                type="button"
+                onClick={saveDashboard}
+                disabled={saving || !dashInput.trim()}
+                className="px-3 py-2 rounded-lg bg-orange-600/20 hover:bg-orange-600/30 disabled:opacity-40 text-orange-300 text-[10px] font-bold uppercase tracking-wider border border-orange-500/25 transition-all cursor-pointer shrink-0"
+              >
+                {saving ? '…' : 'Salvar'}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+      {loading && <div className="text-[11px] text-slate-500 flex items-center gap-1.5 py-2"><RefreshCw className="w-3 h-3 animate-spin" /> carregando painel…</div>}
     </div>
   );
 }

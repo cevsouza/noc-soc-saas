@@ -919,6 +919,10 @@ func main() {
 	protectedIncidentChat := middleware.JWTAuth(jwtSecret)(api.HandleIncidentChat(appPool))
 	protectedIncidentComments := middleware.JWTAuth(jwtSecret)(api.HandleIncidentComments(appPool))
 	mux.Handle("/api/v1/incidents/chat", protectedIncidentChat)
+
+	// Observability helpers for the alert detail: live Loki re-fetch + Grafana embed URL builder.
+	mux.Handle("/api/v1/loki/logs", middleware.JWTAuth(jwtSecret)(api.HandleGetHostLogs(appPool)))
+	mux.Handle("/api/v1/integrations/grafana-embed", middleware.JWTAuth(jwtSecret)(api.HandleGrafanaEmbed(appPool)))
 	mux.Handle("/api/v1/incidents/comments", protectedIncidentComments)
 
 	// Runbooks execution audit logs endpoint
