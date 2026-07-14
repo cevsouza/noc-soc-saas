@@ -36,7 +36,7 @@ Pronto. Agora acompanhe no cockpit → **Alertas** e **Incidentes**.
 
 | Ferramenta | Acesso local | Ação para gerar alerta | Esforço |
 |---|---|---|---|
-| **Prometheus + Alertmanager** | http://localhost:9090 · :9093 | **Nenhuma** — a regra `NocLabHeartbeat` dispara sozinha em ~1 min e reenvia a cada 10 min | ✅ automático |
+| **Prometheus + Alertmanager** | http://localhost:9090 · :9093 | **Nenhuma** — `NocLabHeartbeat` dispara em ~1 min; `EndpointDown` abre/fecha sozinho (gerador de problemas) | ✅ automático |
 | **Grafana** | http://localhost:3000 (admin/admin) | Alerting → Contact points → **NOC-SOC** → botão **Test** | 1 clique |
 | **Uptime Kuma** | http://localhost:3001 | Config manual (abaixo) | poucos cliques |
 | **Zabbix** (opcional) | http://localhost:8080 (Admin/zabbix) | Config manual (abaixo) | avançado |
@@ -44,6 +44,13 @@ Pronto. Agora acompanhe no cockpit → **Alertas** e **Incidentes**.
 > A **prova mais rápida** de que tudo funciona é o Prometheus: em ~1 minuto você deve ver o alerta
 > `NocLabHeartbeat` aparecer em **Alertas**, virar **Incidente** e ganhar um *risk score*. Reenvios
 > mostram o dedupe/recorrência.
+
+### Gerador de problemas (automático)
+O serviço `flaky-target` fica **90s no ar e 45s fora**, em loop. O Prometheus sonda ele (via
+`blackbox-exporter`) e dispara o alerta **`EndpointDown`** quando cai — e o **resolve** quando volta.
+Ou seja: incidentes realistas que **abrem e fecham sozinhos** a cada ~2 minutos, sem você forçar nada.
+O **Uptime Kuma** também pode monitorar esse mesmo alvo: use a URL `http://flaky-target:8080` ao criar
+o monitor (os dois containers estão na mesma rede).
 
 ### Uptime Kuma (manual)
 O Kuma não tem provisionamento por arquivo, então são alguns cliques na UI:

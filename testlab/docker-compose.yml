@@ -46,6 +46,22 @@ services:
     ports:
       - "3001:3001"
 
+  # ---- Gerador de problemas: fica no ar 90s, cai 45s, repete. Alvo realista ----
+  # (o Prometheus sonda via blackbox e dispara EndpointDown sozinho; o Uptime Kuma
+  #  também pode monitorar http://flaky-target:8080).
+  flaky-target:
+    image: python:3.12-alpine
+    restart: unless-stopped
+    command:
+      - sh
+      - -c
+      - "while true; do echo UP; timeout 90 python3 -m http.server 8080 || true; echo DOWN; sleep 45; done"
+
+  # ---- Blackbox exporter: o Prometheus usa ele para "pingar" URLs/portas ----
+  blackbox-exporter:
+    image: prom/blackbox-exporter:v0.25.0
+    restart: unless-stopped
+
   # ================= Zabbix (opcional) =================
   # Mais pesado (sobe em ~2-3 min). Só inicia com:  docker compose --profile zabbix up -d
   zabbix-db:

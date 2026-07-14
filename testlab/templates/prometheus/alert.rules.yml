@@ -21,3 +21,14 @@ groups:
           severity: critical
         annotations:
           summary: "Alvo de coleta caiu no lab: {{ $labels.instance }}"
+
+      # Gerador de problemas: dispara quando a sonda blackbox falha (flaky-target
+      # fica fora do ar a cada ciclo) e RESOLVE quando volta — incidentes que
+      # abrem e fecham sozinhos, como na vida real.
+      - alert: EndpointDown
+        expr: probe_success == 0
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "Endpoint fora do ar: {{ $labels.instance }}"
