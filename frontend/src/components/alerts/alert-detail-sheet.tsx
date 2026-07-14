@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Brain, CheckCircle2, Cpu, FileText, LayoutDashboard, RefreshCw, Zap } from 'lucide-react';
+import { Brain, CheckCircle2, Clock, Code2, Cpu, FileText, LayoutDashboard, RefreshCw, Send, Sparkles, Zap } from 'lucide-react';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { apiFetch, apiFetchJson } from '@/lib/api-client';
@@ -303,12 +303,15 @@ export function AlertDetailSheet({ alert, onOpenChange, onStatusChange, userRole
               <TabsContent key={tab.value} value={tab.value} className="mt-0">
                 {tab.value === 'logs' ? (
                   <LokiLogsTab alert={alert} />
-                ) : (
-                  <div className="flex flex-col items-center justify-center gap-2 py-16 text-slate-500">
-                    <RefreshCw className="w-6 h-6 text-slate-600" />
-                    <p className="text-xs">{tab.label} — em breve nesta nova interface.</p>
-                  </div>
-                )}
+                ) : tab.value === 'grafana' ? (
+                  <GrafanaTab alert={alert} />
+                ) : tab.value === 'raw' ? (
+                  <RawTab alert={alert} />
+                ) : tab.value === 'timeline' ? (
+                  <TimelineTab alert={alert} />
+                ) : tab.value === 'chat' ? (
+                  <CoPilotTab alert={alert} />
+                ) : null}
               </TabsContent>
             ))}
           </div>
@@ -353,6 +356,202 @@ function LokiLogsTab({ alert }: { alert: Alert }) {
       <pre className="bg-black border border-white/5 rounded-lg p-3 text-[10px] font-mono text-emerald-300/90 overflow-x-auto max-h-[60vh] whitespace-pre-wrap select-text leading-relaxed">
         {logs.join('\n')}
       </pre>
+    </div>
+  );
+}
+
+// RawTab shows the full alert object as pretty-printed JSON — the ground truth for debugging and for
+// copying into a ticket.
+function RawTab({ alert }: { alert: Alert }) {
+  const json = JSON.stringify(alert, null, 2);
+  const [copied, setCopied] = useState(false);
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center justify-between">
+        <span className="text-[10px] uppercase font-bold tracking-wider text-slate-500 flex items-center gap-1.5">
+          <Code2 className="w-3.5 h-3.5 text-cyan-400" /> JSON bruto do alerta
+        </span>
+        <button
+          type="button"
+          onClick={() => {
+            navigator.clipboard.writeText(json).then(() => {
+              setCopied(true);
+              setTimeout(() => setCopied(false), 1400);
+            });
+          }}
+          className="px-2 py-1 rounded-md bg-white/5 hover:bg-white/10 border border-white/10 text-[10px] font-bold uppercase tracking-wider text-slate-300 transition-all cursor-pointer"
+        >
+          {copied ? 'copiado ✓' : 'copiar'}
+        </button>
+      </div>
+      <pre className="bg-black border border-white/5 rounded-lg p-3 text-[10px] font-mono text-slate-300 overflow-auto max-h-[62vh] whitespace-pre select-text leading-relaxed">
+        {json}
+      </pre>
+    </div>
+  );
+}
+
+// TimelineTab reconstructs the alert lifecycle from its timestamps — created → recurrences → ack →
+// resolved — plus the current status, so an operator sees the sequence at a glance.
+function TimelineTab({ alert }: { alert: Alert }) {
+  const fmt = (t?: string) => (t ? new Date(t).toLocaleString() : '—');
+  const occ = (alert.payload?.occurrences as number) || 1;
+
+  const events: { label: string; time?: string; tone: 'sky' | 'amber' | 'emerald' | 'slate' }[] = [
+    { label: 'Alerta criado', time: alert.created_at, tone: 'sky' },
+  ];
+  if (occ > 1) events.push({ label: `Recorrência — ${occ} ocorrências (dedupe)`, time: alert.updated_at, tone: 'amber' });
+  if (alert.acknowledged_at) events.push({ label: 'Reconhecido (Acknowledge)', time: alert.acknowledged_at, tone: 'amber' });
+  if (alert.resolved_at) events.push({ label: 'Resolvido', time: alert.resolved_at, tone: 'emerald' });
+  events.push({ label: `Status atual: ${alert.status}`, time: alert.updated_at, tone: alert.status === 'resolved' ? 'emerald' : 'slate' });
+
+  const dot: Record<string, string> = {
+    sky: 'bg-sky-400', amber: 'bg-amber-400', emerald: 'bg-emerald-400', slate: 'bg-slate-500',
+  };
+
+  return (
+    <div className="flex flex-col gap-1 py-2">
+      <span className="text-[10px] uppercase font-bold tracking-wider text-slate-500 flex items-center gap-1.5 mb-2">
+        <Clock className="w-3.5 h-3.5 text-violet-400" /> Linha do tempo do alerta
+      </span>
+      <div className="relative pl-5">
+        <div className="absolute left-[6px] top-1 bottom-1 w-px bg-white/10" />
+        {events.map((e, i) => (
+          <div key={i} className="relative flex items-start gap-3 pb-4 last:pb-0">
+            <span className={`absolute -left-5 top-1 w-3 h-3 rounded-full border-2 border-black ${dot[e.tone]}`} />
+            <div className="flex flex-col">
+              <span className="text-xs text-slate-200 font-semibold">{e.label}</span>
+              <span className="text-[10px] font-mono text-slate-500">{fmt(e.time)}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// GrafanaTab surfaces the numeric metrics carried on the alert payload (CPU, memory, latency, …). A
+// live embedded Grafana panel would need a configured dashboard URL — noted here — so meanwhile this
+// gives the operator the values captured at incident time.
+function GrafanaTab({ alert }: { alert: Alert }) {
+  const metrics = Object.entries(alert.payload || {}).filter(
+    ([k, v]) => typeof v === 'number' && k !== 'occurrences',
+  ) as [string, number][];
+
+  return (
+    <div className="flex flex-col gap-3">
+      <span className="text-[10px] uppercase font-bold tracking-wider text-slate-500 flex items-center gap-1.5">
+        <LayoutDashboard className="w-3.5 h-3.5 text-orange-400" /> Métricas do host no incidente
+      </span>
+      {metrics.length > 0 ? (
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-2.5">
+          {metrics.map(([k, v]) => (
+            <div key={k} className="rounded-xl bg-black/30 border border-white/5 p-3">
+              <div className="text-[10px] font-mono uppercase tracking-wider text-slate-500 truncate">{k}</div>
+              <div className="text-lg font-extrabold text-slate-100 mt-0.5">{v}</div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="flex flex-col items-center justify-center gap-2 py-10 text-center text-slate-500">
+          <LayoutDashboard className="w-6 h-6 text-slate-600" />
+          <p className="text-xs">Este alerta não trouxe métricas numéricas no payload.</p>
+        </div>
+      )}
+      <p className="text-[11px] text-slate-600 leading-relaxed border-t border-white/5 pt-3">
+        Dica: para abrir o painel ao vivo do host, conecte seu Grafana no host e cole o link do dashboard nas
+        anotações do alerta — o painel embutido ao vivo entra numa próxima evolução desta aba.
+      </p>
+    </div>
+  );
+}
+
+// CoPilotTab is an interactive AI assistant over the incident (POST /api/v1/incidents/chat). It opens
+// with the AI diagnostic (when the Python worker produced one) and lets the operator ask follow-ups;
+// each exchange is also saved to the incident's investigation timeline server-side.
+function CoPilotTab({ alert }: { alert: Alert }) {
+  const opening = typeof alert.ai_diagnostic === 'string' && alert.ai_diagnostic
+    ? alert.ai_diagnostic
+    : (alert.ai_analysis?.description as string) || '';
+  const [messages, setMessages] = useState<{ role: 'user' | 'ai'; text: string }[]>(
+    opening ? [{ role: 'ai', text: opening }] : [],
+  );
+  const [input, setInput] = useState('');
+  const [sending, setSending] = useState(false);
+
+  const send = async () => {
+    const prompt = input.trim();
+    if (!prompt || sending) return;
+    setMessages((m) => [...m, { role: 'user', text: prompt }]);
+    setInput('');
+    setSending(true);
+    try {
+      const res = await apiFetchJson<{ response: string }>(
+        `/api/v1/incidents/chat?tenant_id=${alert.tenant_id}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ incident_id: alert.id, created_at: alert.created_at, prompt }),
+        },
+      );
+      setMessages((m) => [...m, { role: 'ai', text: res.response }]);
+    } catch {
+      setMessages((m) => [...m, { role: 'ai', text: 'Não consegui responder agora. Verifique se a IA (Gemini) está configurada no ambiente.' }]);
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-3">
+      <span className="text-[10px] uppercase font-bold tracking-wider text-slate-500 flex items-center gap-1.5">
+        <Sparkles className="w-3.5 h-3.5 text-violet-400" /> Co-Pilot — assistente de investigação
+      </span>
+
+      <div className="flex flex-col gap-2 max-h-[46vh] overflow-y-auto pr-1">
+        {messages.length === 0 && (
+          <p className="text-[11px] text-slate-600 py-6 text-center">
+            Pergunte ao Co-Pilot sobre este incidente — ex.: “qual a causa provável?” ou “que passos de contenção você sugere?”.
+          </p>
+        )}
+        {messages.map((m, i) => (
+          <div
+            key={i}
+            className={`text-xs leading-relaxed rounded-xl px-3 py-2 border whitespace-pre-wrap break-words ${
+              m.role === 'user'
+                ? 'bg-cyan-600/10 border-cyan-500/20 text-slate-200 self-end max-w-[85%]'
+                : 'bg-violet-950/20 border-violet-500/15 text-slate-300 self-start max-w-[92%]'
+            }`}
+          >
+            {m.text}
+          </div>
+        ))}
+        {sending && <div className="text-[11px] text-slate-500 self-start flex items-center gap-1.5"><RefreshCw className="w-3 h-3 animate-spin" /> pensando…</div>}
+      </div>
+
+      <div className="flex items-end gap-2 border-t border-white/5 pt-3">
+        <textarea
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault();
+              send();
+            }
+          }}
+          placeholder="Pergunte ao Co-Pilot… (Enter envia, Shift+Enter quebra linha)"
+          rows={2}
+          className="flex-1 resize-y rounded-lg bg-black/40 border border-white/10 px-3 py-2 text-[11px] text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-violet-500/40"
+        />
+        <button
+          type="button"
+          onClick={send}
+          disabled={sending || !input.trim()}
+          className="px-3 py-2 rounded-lg bg-violet-600/20 hover:bg-violet-600/30 disabled:opacity-40 text-violet-300 text-[10px] font-bold uppercase tracking-wider border border-violet-500/25 transition-all cursor-pointer flex items-center gap-1.5 shrink-0"
+        >
+          <Send className="w-3.5 h-3.5" /> Enviar
+        </button>
+      </div>
     </div>
   );
 }
