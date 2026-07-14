@@ -12,7 +12,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"net"
+	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -21,8 +23,12 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// IndicatorTypeIP is the only indicator type recorded in fatia 1 (domain/hash come in fatia 2).
-const IndicatorTypeIP = "ip"
+// Indicator types recorded in the shared aggregate.
+const (
+	IndicatorTypeIP     = "ip"
+	IndicatorTypeDomain = "domain"
+	IndicatorTypeHash   = "hash"
+)
 
 // Indicator is one extracted IOC.
 type Indicator struct {
@@ -33,30 +39,89 @@ type Indicator struct {
 // payloadIPKeys are the common payload fields that carry a source IP across the various connectors.
 var payloadIPKeys = []string{"src_ip", "source_ip", "sourceip", "client_ip", "clientip", "ip", "remote_addr", "src", "source_address"}
 
-// ExtractIndicators pulls shareable IOCs from an alert's host + raw payload. Only PUBLIC IPs are
-// returned: RFC1918 private, loopback, link-local and other non-global addresses are dropped so a
-// tenant's internal topology is never shared. Pure and unit-testable; results are de-duplicated.
+// payloadDomainKeys carry a domain / FQDN across connectors (EDR/DNS/proxy sources).
+var payloadDomainKeys = []string{"domain", "fqdn", "dns_query", "query", "hostname", "url"}
+
+// payloadHashKeys carry a file hash (md5/sha1/sha256) across EDR/AV sources.
+var payloadHashKeys = []string{"sha256", "sha1", "md5", "file_hash", "filehash", "hash"}
+
+// hexHashRe matches an md5 (32), sha1 (40) or sha256 (64) hex digest.
+var hexHashRe = regexp.MustCompile(`^[a-f0-9]{32}$|^[a-f0-9]{40}$|^[a-f0-9]{64}$`)
+
+// domainRe is a loose domain/FQDN matcher: labels separated by dots ending in a 2+ char alpha TLD.
+var domainRe = regexp.MustCompile(`^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$`)
+
+// ExtractIndicators pulls shareable IOCs from an alert's host + raw payload: public IPs, domains and
+// file hashes. Only PUBLIC IPs are returned (RFC1918 private, loopback, link-local and other
+// non-global addresses are dropped so a tenant's internal topology is never shared). Pure and
+// unit-testable; results are de-duplicated across (type, value).
 func ExtractIndicators(host string, payload map[string]interface{}) []Indicator {
 	seen := map[string]bool{}
 	var out []Indicator
-	add := func(raw string) {
-		ip := parsePublicIP(raw)
-		if ip == "" || seen[ip] {
+	add := func(typ, val string) {
+		if val == "" {
 			return
 		}
-		seen[ip] = true
-		out = append(out, Indicator{Type: IndicatorTypeIP, Value: ip})
+		key := typ + ":" + val
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		out = append(out, Indicator{Type: typ, Value: val})
+	}
+	str := func(v interface{}) string {
+		s, _ := v.(string)
+		return s
 	}
 
-	add(host)
+	add(IndicatorTypeIP, parsePublicIP(host))
 	for _, k := range payloadIPKeys {
 		if v, ok := payload[k]; ok {
-			if s, ok := v.(string); ok {
-				add(s)
-			}
+			add(IndicatorTypeIP, parsePublicIP(str(v)))
+		}
+	}
+	for _, k := range payloadDomainKeys {
+		if v, ok := payload[k]; ok {
+			add(IndicatorTypeDomain, parseDomain(str(v)))
+		}
+	}
+	for _, k := range payloadHashKeys {
+		if v, ok := payload[k]; ok {
+			add(IndicatorTypeHash, parseHash(str(v)))
 		}
 	}
 	return out
+}
+
+// parseDomain normalises s to a lowercase domain/FQDN, extracting the host from a URL when given one.
+// Returns "" if s is empty, an IP, or not a plausible domain. Pure.
+func parseDomain(s string) string {
+	s = strings.TrimSpace(strings.ToLower(s))
+	if s == "" {
+		return ""
+	}
+	if strings.Contains(s, "://") {
+		if u, err := url.Parse(s); err == nil && u.Hostname() != "" {
+			s = u.Hostname()
+		}
+	}
+	s = strings.TrimSuffix(s, ".")
+	if net.ParseIP(s) != nil { // an IP is not a domain
+		return ""
+	}
+	if len(s) > 253 || !domainRe.MatchString(s) {
+		return ""
+	}
+	return s
+}
+
+// parseHash normalises s to a lowercase md5/sha1/sha256 hex digest, or "" if it isn't one. Pure.
+func parseHash(s string) string {
+	s = strings.TrimSpace(strings.ToLower(s))
+	if !hexHashRe.MatchString(s) {
+		return ""
+	}
+	return s
 }
 
 // parsePublicIP returns the canonical string form of s if it is a routable public IP, else "".
@@ -130,6 +195,64 @@ type SharedIndicator struct {
 	TenantCount      int       `json:"tenant_count"`
 	FirstSeen        time.Time `json:"first_seen"`
 	LastSeen         time.Time `json:"last_seen"`
+}
+
+// OtherTenantSightings returns how many OTHER opted-in tenants have seen this event's indicators —
+// the cross-tenant corroboration signal that drives risk enrichment (B6 fatia 2). "Other" excludes
+// the observing tenant itself (identified by its own tenant_hash), so a tenant's repeated sightings
+// of its own indicator never inflate the signal. Returns the max across the event's indicators.
+func OtherTenantSightings(ctx context.Context, pool *pgxpool.Pool, tenantHash string, indicators []Indicator) (int, error) {
+	max := 0
+	for _, ind := range indicators {
+		var tenantCount int
+		err := pool.QueryRow(ctx, `SELECT tenant_count FROM threat_intel_indicators WHERE indicator_type = $1 AND indicator_value = $2`, ind.Type, ind.Value).Scan(&tenantCount)
+		if errors.Is(err, pgx.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return 0, err
+		}
+		var mine int
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM threat_intel_contributions WHERE indicator_type = $1 AND indicator_value = $2 AND tenant_hash = $3`, ind.Type, ind.Value, tenantHash).Scan(&mine); err != nil {
+			return 0, err
+		}
+		if others := tenantCount - mine; others > max {
+			max = others
+		}
+	}
+	return max, nil
+}
+
+// indicatorLabels are the human labels used when summarizing IOCs in an investigation note.
+var indicatorLabels = map[string]string{IndicatorTypeIP: "IP", IndicatorTypeDomain: "domínio", IndicatorTypeHash: "hash"}
+
+// Summarize renders a compact human list of indicators for an incident note (e.g. "IP 8.8.8.8,
+// domínio evil.com"). Pure.
+func Summarize(indicators []Indicator) string {
+	parts := make([]string, 0, len(indicators))
+	for _, ind := range indicators {
+		label := indicatorLabels[ind.Type]
+		if label == "" {
+			label = ind.Type
+		}
+		parts = append(parts, label+" "+ind.Value)
+	}
+	return strings.Join(parts, ", ")
+}
+
+// FleetRiskBonus maps the number of OTHER tenants that have seen an indicator to a risk-score bonus.
+// More corroborating tenants ⇒ higher confidence the indicator is genuinely malicious. Pure.
+func FleetRiskBonus(otherTenants int) int {
+	switch {
+	case otherTenants >= 5:
+		return 30
+	case otherTenants >= 3:
+		return 20
+	case otherTenants >= 1:
+		return 10
+	default:
+		return 0
+	}
 }
 
 // TopShared returns the most widely-seen indicators (by distinct-tenant count, then recency). The

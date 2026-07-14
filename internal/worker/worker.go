@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os/exec"
@@ -235,16 +236,17 @@ func (wp *WorkerPool) processEvent(ctx context.Context, event model.UnifiedIncid
 		return err
 	}
 
-	// Contribute observed IOCs to the cross-tenant threat-intel aggregate (Backlog B6). Best-effort
-	// and post-commit: gated on the tenant's opt-in, only public IPs are shared, and a failure here
-	// never affects alert creation. Runs on the shared (non-RLS) global tables.
-	wp.contributeThreatIntel(ctx, event)
+	// Cross-tenant threat intel (Backlog B6). Best-effort and post-commit: gated on the tenant's
+	// opt-in, only public IPs/domains/hashes are shared, and a failure here never affects alert
+	// creation. Consumes the aggregate (risk enrichment) before contributing this event's own sighting.
+	wp.contributeThreatIntel(ctx, tenantCtx, event, fingerprint)
 	return nil
 }
 
 // contributeThreatIntel records the event's shareable indicators into the global threat-intel
-// aggregate, but only if the observing tenant has opted in. Never fatal.
-func (wp *WorkerPool) contributeThreatIntel(ctx context.Context, event model.UnifiedIncident) {
+// aggregate (opt-in only) and enriches the incident's risk when those indicators have cross-tenant
+// corroboration. Never fatal.
+func (wp *WorkerPool) contributeThreatIntel(ctx, tenantCtx context.Context, event model.UnifiedIncident, fingerprint string) {
 	var optIn bool
 	if err := wp.pgPool.QueryRow(ctx, `SELECT threat_intel_opt_in FROM tenants WHERE id = $1`, event.TenantID).Scan(&optIn); err != nil || !optIn {
 		return
@@ -253,8 +255,50 @@ func (wp *WorkerPool) contributeThreatIntel(ctx context.Context, event model.Uni
 	if len(indicators) == 0 {
 		return
 	}
-	if err := threatintel.Record(ctx, wp.pgPool, threatintel.TenantHash(event.TenantID), indicators); err != nil {
+	tenantHash := threatintel.TenantHash(event.TenantID)
+
+	// Consume BEFORE contributing so this tenant's own new sighting isn't counted as corroboration.
+	others, err := threatintel.OtherTenantSightings(ctx, wp.pgPool, tenantHash, indicators)
+	if err != nil {
+		log.Printf("[ThreatIntel warning] sightings lookup failed for tenant %s: %v", event.TenantID, err)
+	}
+
+	if err := threatintel.Record(ctx, wp.pgPool, tenantHash, indicators); err != nil {
 		log.Printf("[ThreatIntel warning] contribution failed for tenant %s: %v", event.TenantID, err)
+	}
+
+	if bonus := threatintel.FleetRiskBonus(others); bonus > 0 {
+		wp.enrichIncidentWithFleetIntel(tenantCtx, event, fingerprint, indicators, others, bonus)
+	}
+}
+
+// enrichIncidentWithFleetIntel raises the grouped incident's risk score and drops an investigation
+// note when the event's IOCs have cross-tenant corroboration (seen by other opted-in tenants).
+// Best-effort inside the tenant RLS tx; a failure only skips the enrichment.
+func (wp *WorkerPool) enrichIncidentWithFleetIntel(tenantCtx context.Context, event model.UnifiedIncident, fingerprint string, indicators []threatintel.Indicator, others, bonus int) {
+	err := db.ExecuteInTenantTx(tenantCtx, wp.pgPool, func(tx pgx.Tx) error {
+		var incID uuid.UUID
+		e := tx.QueryRow(tenantCtx, `
+			SELECT id FROM incidents
+			WHERE tenant_id = $1 AND fingerprint = $2 AND status <> 'resolved'
+			ORDER BY last_seen DESC LIMIT 1
+		`, event.TenantID, fingerprint).Scan(&incID)
+		if errors.Is(e, pgx.ErrNoRows) {
+			return nil
+		}
+		if e != nil {
+			return e
+		}
+		if _, e := tx.Exec(tenantCtx, `UPDATE incidents SET risk_score = LEAST(100, risk_score + $2), updated_at = NOW() WHERE id = $1 AND tenant_id = $3`, incID, bonus, event.TenantID); e != nil {
+			return e
+		}
+		note := fmt.Sprintf("🛡️ Threat intel: %s visto por %d outro(s) tenant(s) na frota — risco +%d (confiança cross-tenant).",
+			threatintel.Summarize(indicators), others, bonus)
+		_, e = tx.Exec(tenantCtx, `INSERT INTO incident_comments (incident_id, tenant_id, author, comment) VALUES ($1, $2, '🛡️ Threat Intel (frota)', $3)`, incID, event.TenantID, note)
+		return e
+	})
+	if err != nil {
+		log.Printf("[ThreatIntel warning] enrichment failed for tenant %s: %v", event.TenantID, err)
 	}
 }
 
