@@ -73,6 +73,9 @@ type UserDTO struct {
 	Email string         `json:"email"`
 	Name  string         `json:"name"`
 	Role  model.UserRole `json:"role"`
+	// GlobalRole is the platform-wide (MSSP) role, distinct from the tenant-scoped Role. The frontend
+	// uses it to gate control-plane surfaces (e.g. the MSSP usage dashboard) to platform admins.
+	GlobalRole model.UserRole `json:"global_role"`
 }
 
 type TenantDTO struct {
@@ -359,10 +362,11 @@ func HandleLogin(pgPool *pgxpool.Pool, jwtSecret []byte) http.HandlerFunc {
 		resp := AuthResponse{
 			Token: token,
 			User: UserDTO{
-				ID:    userID,
-				Email: req.Email,
-				Name:  name,
-				Role:  model.UserRole(tenantRoleStr),
+				ID:         userID,
+				Email:      req.Email,
+				Name:       name,
+				Role:       model.UserRole(tenantRoleStr),
+				GlobalRole: model.UserRole(globalRole),
 			},
 			Tenant: TenantDTO{
 				ID:   tenantID,

@@ -6,6 +6,7 @@ import {
   Activity,
   Ban,
   BellOff,
+  Building2,
   Check,
   Copy,
   Cpu,
@@ -33,6 +34,7 @@ import { RunbookApprovalsPanel } from '@/components/settings/runbook-approvals-p
 import { ResponseActionsPanel } from '@/components/settings/response-actions-panel';
 import { AccessControlPanel } from '@/components/settings/access-control-panel';
 import { OperationalKpisPanel } from '@/components/settings/operational-kpis-panel';
+import { ControlPlanePanel } from '@/components/settings/control-plane-panel';
 import { TopologyView } from '@/components/settings/topology-view';
 import { NetworkDiscoveryPanel } from '@/components/settings/network-discovery-panel';
 import { AssetsPanel } from '@/components/settings/assets-panel';
@@ -560,6 +562,20 @@ export function LegacyCockpitPanels({ cockpitTab, onSearchTermChange, onNavigate
                   <Activity className="w-3.5 h-3.5 text-cyan-400" />
                   <span>KPIs Operacionais</span>
                 </button>
+                {user?.global_role === 'admin' && (
+                  <button
+                    onClick={() => {
+                      setSelectedIntegrationTool('control_plane');
+                      setValidationResult(null);
+                    }}
+                    className={`w-full px-3 py-2 rounded-lg text-left text-xs font-bold transition-all flex items-center gap-2 ${
+                      selectedIntegrationTool === 'control_plane' ? 'bg-white/5 text-white border-l-2 border-cyan-400' : 'text-slate-400 hover:bg-white/[0.02] hover:text-slate-200'
+                    }`}
+                  >
+                    <Building2 className="w-3.5 h-3.5 text-cyan-400" />
+                    <span>Control-Plane (MSSP)</span>
+                  </button>
+                )}
 
                 <span className="text-[9px] font-bold text-slate-500 uppercase tracking-widest px-2.5 py-2 mt-4">Auto-Healing</span>
                 <button
@@ -1549,6 +1565,8 @@ export function LegacyCockpitPanels({ cockpitTab, onSearchTermChange, onNavigate
                   </div>
                 ) : selectedIntegrationTool === 'operational_kpis' ? (
                   <OperationalKpisPanel tenantId={selectedTenant?.id} />
+                ) : selectedIntegrationTool === 'control_plane' ? (
+                  <ControlPlanePanel />
                 ) : selectedIntegrationTool === 'approvals_admin' ? (
                   <RunbookApprovalsPanel />
                 ) : selectedIntegrationTool === 'response_actions' ? (

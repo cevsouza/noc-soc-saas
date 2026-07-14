@@ -7,6 +7,10 @@ export interface SessionUser {
   email: string;
   name: string;
   role: UserRole;
+  // Platform-wide (MSSP) role, distinct from the tenant-scoped `role`. Set from the login response;
+  // used to gate control-plane surfaces (the MSSP usage dashboard) to platform admins. Optional so
+  // sessions persisted before this field existed still typecheck (they re-login to populate it).
+  global_role?: UserRole;
 }
 
 // Matches internal/api/auth_handler.go's UserListResponse (GET /api/v1/admin/users) — a
