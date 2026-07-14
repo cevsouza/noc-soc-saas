@@ -26,11 +26,15 @@ type Incident struct {
 	Severity    string     `json:"severity"`
 	Status      string     `json:"status"`
 	RiskScore   int        `json:"risk_score"`
-	AlertCount  int        `json:"alert_count"`
-	FirstSeen   time.Time  `json:"first_seen"`
-	LastSeen    time.Time  `json:"last_seen"`
-	CreatedAt   time.Time  `json:"created_at"`
-	ResolvedAt  *time.Time `json:"resolved_at,omitempty"`
+	// AssetCriticality is the business criticality of the managed CMDB asset this incident hits (T2),
+	// when its host resolves to one — it's the extra input (beyond severity + recurrence) that raised
+	// the risk score (B1). Empty when the host isn't a managed asset.
+	AssetCriticality string     `json:"asset_criticality,omitempty"`
+	AlertCount       int        `json:"alert_count"`
+	FirstSeen        time.Time  `json:"first_seen"`
+	LastSeen         time.Time  `json:"last_seen"`
+	CreatedAt        time.Time  `json:"created_at"`
+	ResolvedAt       *time.Time `json:"resolved_at,omitempty"`
 }
 
 // HandleGetIncidents lists the tenant's incidents (grouped alerts). Defaults to the most recently
@@ -61,7 +65,7 @@ func HandleGetIncidents(pgPool *pgxpool.Pool) http.HandlerFunc {
 		list := make([]Incident, 0)
 		err = db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
 			rows, err := tx.Query(ctx, `
-				SELECT id, fingerprint, title, severity, status, risk_score, alert_count, first_seen, last_seen, created_at, resolved_at
+				SELECT id, fingerprint, title, severity, status, risk_score, COALESCE(asset_criticality, ''), alert_count, first_seen, last_seen, created_at, resolved_at
 				FROM incidents
 				WHERE tenant_id = $1 AND ($2 = 'all' OR status = $2)`+domainClause+`
 				ORDER BY risk_score DESC, last_seen DESC
@@ -73,7 +77,7 @@ func HandleGetIncidents(pgPool *pgxpool.Pool) http.HandlerFunc {
 			defer rows.Close()
 			for rows.Next() {
 				var inc Incident
-				if err := rows.Scan(&inc.ID, &inc.Fingerprint, &inc.Title, &inc.Severity, &inc.Status, &inc.RiskScore,
+				if err := rows.Scan(&inc.ID, &inc.Fingerprint, &inc.Title, &inc.Severity, &inc.Status, &inc.RiskScore, &inc.AssetCriticality,
 					&inc.AlertCount, &inc.FirstSeen, &inc.LastSeen, &inc.CreatedAt, &inc.ResolvedAt); err != nil {
 					return err
 				}

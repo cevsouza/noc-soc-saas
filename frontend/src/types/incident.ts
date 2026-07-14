@@ -15,6 +15,9 @@ export interface Incident {
   severity: string;
   status: string;
   risk_score: number;
+  // Business criticality of the managed CMDB asset this incident hits (B1), when its host resolves
+  // to one — the input that raised the risk score. Empty/undefined when not a managed asset.
+  asset_criticality?: string;
   alert_count: number;
   first_seen: string;
   last_seen: string;

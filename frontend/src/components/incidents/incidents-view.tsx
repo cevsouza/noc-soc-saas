@@ -37,6 +37,14 @@ function riskClass(score: number): string {
   return 'bg-slate-500/15 text-slate-400 border-slate-500/25';
 }
 
+// Business criticality of the affected CMDB asset (B1). Only high/critical get a visible badge — they
+// are what raised the risk score above the ordinary-host baseline; low/medium are neutral.
+const CRIT_LABEL: Record<string, string> = { critical: 'ativo crítico', high: 'ativo importante' };
+function critClass(c: string): string {
+  if (c === 'critical') return 'bg-fuchsia-600/20 text-fuchsia-300 border-fuchsia-500/40';
+  return 'bg-purple-500/15 text-purple-300 border-purple-500/30';
+}
+
 // Incidents view (Fase 3/3b-cont): the grouped-investigation surface. Each row is an incident —
 // the recurring alerts of one problem collapsed together — with acknowledge/resolve actions and an
 // expandable list of the alerts it groups. Resolving closes the incident (a new occurrence opens a
@@ -179,9 +187,14 @@ export function IncidentsView({ tenantId, domain }: { tenantId?: string; domain?
                   {expandedId === inc.id ? <ChevronDown className="w-4 h-4 text-slate-400 mt-0.5 shrink-0" /> : <ChevronRight className="w-4 h-4 text-slate-400 mt-0.5 shrink-0" />}
                   <div className="flex flex-col gap-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <span className={`px-2 py-0.5 rounded text-[9px] font-extrabold uppercase tracking-wider border ${riskClass(inc.risk_score)}`} title="Score de risco dinâmico (severidade + recorrência)">
+                      <span className={`px-2 py-0.5 rounded text-[9px] font-extrabold uppercase tracking-wider border ${riskClass(inc.risk_score)}`} title="Score de risco dinâmico (severidade + recorrência + criticidade do ativo)">
                         risco {inc.risk_score}
                       </span>
+                      {inc.asset_criticality && CRIT_LABEL[inc.asset_criticality] && (
+                        <span className={`px-2 py-0.5 rounded text-[9px] font-extrabold uppercase tracking-wider border ${critClass(inc.asset_criticality)}`} title="Criticidade de negócio do ativo afetado (CMDB) — elevou o score de risco">
+                          {CRIT_LABEL[inc.asset_criticality]}
+                        </span>
+                      )}
                       <span className={`px-2 py-0.5 rounded text-[9px] font-extrabold uppercase tracking-wider border ${SEVERITY_CLASS[inc.severity] || 'bg-slate-500/10 text-slate-400 border-slate-500/25'}`}>{inc.severity}</span>
                       <span className={`px-2 py-0.5 rounded text-[9px] font-extrabold uppercase tracking-wider border ${STATUS_CLASS[inc.status] || 'bg-slate-500/10 text-slate-400 border-slate-500/25'}`}>{inc.status}</span>
                       <span className="text-sm font-bold text-slate-200 truncate">{inc.title}</span>
