@@ -67,8 +67,15 @@ export function useAlertsSocket(token: string | null, tenantIds: string[]): UseA
     };
   }, [token, tenantIds]);
 
+  // Reset the accumulated feed only when the USER (token) changes — never on a mere domain-scope
+  // change. The consumer already filters `alerts` by the selected tenants client-side, so keeping
+  // the list means narrowing the domain shows those alerts instantly instead of blanking out and
+  // waiting for the next live message (the WS sends no historical backlog on connect).
   useEffect(() => {
     setAlerts([]);
+  }, [token]);
+
+  useEffect(() => {
     connect();
     return () => {
       if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
