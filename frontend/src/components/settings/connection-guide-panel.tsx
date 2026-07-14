@@ -10,13 +10,35 @@ import type { ApiKeyInfo, CreatedApiKey } from '@/types';
 // send data in?" — without reading the source: the exact ingest URL per connector, a self-service
 // API key manager, and a ready-to-run example. Keys are scoped to the selected tenant.
 
-const CONNECTORS: { type: string; label: string; path: string }[] = [
+interface ConnectorMeta {
+  type: string;
+  label: string;
+  path: string;
+  hint?: string; // where to configure the webhook inside that vendor's own UI
+}
+
+const CONNECTORS: ConnectorMeta[] = [
   { type: 'generic', label: 'Genérico (formato normalizado)', path: '/api/v1/ingest' },
-  { type: 'prometheus', label: 'Prometheus Alertmanager', path: '/api/v1/ingest/prometheus' },
-  { type: 'grafana', label: 'Grafana Alerting', path: '/api/v1/ingest/grafana' },
-  { type: 'zabbix', label: 'Zabbix', path: '/api/v1/ingest/zabbix' },
-  { type: 'wazuh', label: 'Wazuh SIEM', path: '/api/v1/ingest/wazuh' },
-  { type: 'uptimekuma', label: 'Uptime Kuma', path: '/api/v1/ingest/uptimekuma' },
+  {
+    type: 'prometheus', label: 'Prometheus Alertmanager', path: '/api/v1/ingest/prometheus',
+    hint: 'No arquivo alertmanager.yml, adicione um receiver com webhook_configs → url apontando para esta URL.',
+  },
+  {
+    type: 'grafana', label: 'Grafana Alerting', path: '/api/v1/ingest/grafana',
+    hint: 'Grafana → Alerting → Contact points → Add contact point → Integration: Webhook → cole esta URL. Depois aponte a policy para ele.',
+  },
+  {
+    type: 'zabbix', label: 'Zabbix', path: '/api/v1/ingest/zabbix',
+    hint: 'Zabbix → Alertas → Tipos de mídia → Webhook. Parâmetros: alert_subject={ALERT.SUBJECT}, alert_message={ALERT.MESSAGE}, host={HOST.NAME}, severity={EVENT.SEVERITY}, trigger_id={TRIGGER.ID}, event_id={EVENT.ID}, event_value={EVENT.VALUE}. No script, faça req.post(<esta URL>, value).',
+  },
+  {
+    type: 'wazuh', label: 'Wazuh SIEM', path: '/api/v1/ingest/wazuh',
+    hint: 'No /var/ossec/etc/ossec.conf, adicione um bloco <integration> com <hook_url> apontando para esta URL e <alert_format>json</alert_format>. Reinicie o wazuh-manager.',
+  },
+  {
+    type: 'uptimekuma', label: 'Uptime Kuma', path: '/api/v1/ingest/uptimekuma',
+    hint: 'Uptime Kuma → Settings → Notifications → Setup Notification → Webhook. Content Type application/json e Post URL = esta URL.',
+  },
   { type: 'otlp', label: 'OpenTelemetry (OTLP/HTTP)', path: '/api/v1/ingest/otlp' },
   { type: 'icinga', label: 'Icinga / Nagios', path: '/api/v1/ingest/icinga' },
   { type: 'azuremonitor', label: 'Azure Monitor', path: '/api/v1/ingest/azuremonitor' },
@@ -47,7 +69,10 @@ function CopyButton({ text, label }: { text: string; label?: string }) {
   );
 }
 
-export function ConnectionGuidePanel({ tenantId }: { tenantId?: string }) {
+export function ConnectionGuidePanel({ tenantId, connectorType }: { tenantId?: string; connectorType?: string }) {
+  // When rendered inside a specific connector ("Configurar Zabbix"), focus the guide on just that
+  // connector; on the standalone "Como Conectar" tab, show the full multi-connector reference.
+  const focused = connectorType ? CONNECTORS.find((c) => c.type === connectorType) : undefined;
   const [keys, setKeys] = useState<ApiKeyInfo[]>([]);
   const [loading, setLoading] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -107,6 +132,9 @@ export function ConnectionGuidePanel({ tenantId }: { tenantId?: string }) {
   };
 
   const sampleKey = freshKey?.api_key || 'SUA_API_KEY';
+  // The ready URL each monitoring tool should POST to (credential inline as ?token=, which works for
+  // tools that only let you paste a URL). For the standalone tab, show the generic curl instead.
+  const focusedUrl = focused ? `${API_BASE_URL}${focused.path}?token=${sampleKey}` : '';
   const curlExample = `curl -X POST "${API_BASE_URL}/api/v1/ingest" \\
   -H "X-API-Key: ${sampleKey}" \\
   -H "Content-Type: application/json" \\
@@ -116,10 +144,12 @@ export function ConnectionGuidePanel({ tenantId }: { tenantId?: string }) {
     <div className="flex flex-col gap-5">
       <div>
         <h3 className="text-sm font-bold text-slate-200 flex items-center gap-2">
-          <Plug className="w-4 h-4 text-cyan-400" /> Como conectar suas fontes
+          <Plug className="w-4 h-4 text-cyan-400" /> {focused ? `Como conectar o ${focused.label}` : 'Como conectar suas fontes'}
         </h3>
         <p className="text-[11px] text-slate-500 mt-0.5 max-w-2xl">
-          Envie eventos para a plataforma em 3 passos. As chaves abaixo pertencem ao cliente selecionado no topo.
+          {focused
+            ? 'Gere uma chave abaixo e aponte o webhook desta ferramenta para a URL indicada. A chave pertence ao cliente selecionado no topo.'
+            : 'Envie eventos para a plataforma em 3 passos. As chaves abaixo pertencem ao cliente selecionado no topo.'}
         </p>
       </div>
 
@@ -130,7 +160,9 @@ export function ConnectionGuidePanel({ tenantId }: { tenantId?: string }) {
           <span className="text-xs font-bold text-slate-200">Ative a integração</span>
         </div>
         <p className="text-[11px] text-slate-400 ml-7">
-          Em <span className="text-slate-300 font-semibold">Integrações</span>, ative o conector do tipo de fonte que você vai usar (Zabbix, Prometheus, …). Um endpoint só aceita eventos com a integração ativa.
+          {focused
+            ? 'Ative este conector para o cliente na lista abaixo (um endpoint só aceita eventos com a integração ativa).'
+            : <>Em <span className="text-slate-300 font-semibold">Integrações</span>, ative o conector do tipo de fonte que você vai usar (Zabbix, Prometheus, …). Um endpoint só aceita eventos com a integração ativa.</>}
         </p>
       </div>
 
@@ -202,55 +234,75 @@ export function ConnectionGuidePanel({ tenantId }: { tenantId?: string }) {
         {error && <div className="ml-7 mt-2 text-[11px] text-rose-400">{error}</div>}
       </div>
 
-      {/* STEP 3 — endpoints + example */}
+      {/* STEP 3 — endpoint(s) + example */}
       <div className="rounded-xl bg-black/30 border border-white/5 p-4">
         <div className="flex items-center gap-2 mb-2">
           <span className="w-5 h-5 rounded-md bg-cyan-600/20 text-cyan-300 text-[11px] font-bold grid place-items-center">3</span>
           <span className="text-xs font-bold text-slate-200 flex items-center gap-1.5"><Zap className="w-3.5 h-3.5 text-violet-400" /> Aponte a fonte para o endpoint</span>
         </div>
-        <p className="text-[11px] text-slate-400 ml-7 mb-3">
-          Cada fonte envia o <strong className="text-slate-300">formato nativo do próprio vendor</strong> para o endpoint correspondente.
-        </p>
 
-        {/* Example */}
-        <div className="ml-7 mb-4">
-          <div className="flex items-center justify-between mb-1.5">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Exemplo pronto (genérico)</span>
-            <CopyButton text={curlExample} label="copiar comando" />
+        {focused ? (
+          <div className="ml-7">
+            <p className="text-[11px] text-slate-400 mb-2">
+              Cole esta URL no webhook do <strong className="text-slate-300">{focused.label}</strong> (a chave já vai embutida como <code className="text-cyan-300 bg-white/5 border border-white/10 rounded px-1 py-0.5 text-[10px]">?token=</code>):
+            </p>
+            <div className="flex items-center gap-2 mb-3">
+              <code className="flex-1 font-mono text-[11px] text-cyan-300 bg-black/50 border border-white/10 rounded-lg px-3 py-2 break-all">{focusedUrl}</code>
+              <CopyButton text={focusedUrl} label="copiar url" />
+            </div>
+            {focused.hint && (
+              <div className="rounded-lg bg-cyan-950/15 border border-cyan-500/15 p-3 text-[11px] text-slate-300 leading-relaxed">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-cyan-400/80">Onde configurar</span>
+                <p className="mt-1 mb-0 text-slate-400">{focused.hint}</p>
+              </div>
+            )}
+            <p className="text-[10px] text-slate-600 mt-2">
+              Se a ferramenta permitir cabeçalhos HTTP, você pode omitir o <code className="text-slate-400">?token=</code> e enviar <code className="text-slate-400">X-API-Key: {sampleKey === 'SUA_API_KEY' ? 'SUA_CHAVE' : sampleKey}</code>.
+            </p>
           </div>
-          <pre className="text-[11px] font-mono text-slate-300 bg-black/50 border border-white/10 rounded-lg p-3 overflow-x-auto whitespace-pre">{curlExample}</pre>
-          <p className="text-[10px] text-slate-600 mt-1.5">
-            Alternativa sem chave: acrescente <code className="text-slate-400">?token=SEU_TOKEN_DE_SESSAO</code> à URL (expira com a sessão).
-          </p>
-        </div>
-
-        {/* Endpoint table */}
-        <div className="ml-7 overflow-x-auto">
-          <table className="w-full text-[11px]">
-            <thead>
-              <tr className="text-slate-500 border-b border-white/5">
-                <th className="text-left font-semibold py-1.5 pr-3">Conector</th>
-                <th className="text-left font-semibold py-1.5">Endpoint</th>
-              </tr>
-            </thead>
-            <tbody>
-              {CONNECTORS.map((c) => {
-                const url = `${API_BASE_URL}${c.path}`;
-                return (
-                  <tr key={c.type} className="border-b border-white/[0.03]">
-                    <td className="py-1.5 pr-3 text-slate-400 whitespace-nowrap">{c.label}</td>
-                    <td className="py-1.5">
-                      <div className="flex items-center gap-2">
-                        <code className="font-mono text-[10px] text-cyan-300/90 break-all">{c.path}</code>
-                        <CopyButton text={url} />
-                      </div>
-                    </td>
+        ) : (
+          <>
+            <p className="text-[11px] text-slate-400 ml-7 mb-3">
+              Cada fonte envia o <strong className="text-slate-300">formato nativo do próprio vendor</strong> para o endpoint correspondente.
+            </p>
+            <div className="ml-7 mb-4">
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Exemplo pronto (genérico)</span>
+                <CopyButton text={curlExample} label="copiar comando" />
+              </div>
+              <pre className="text-[11px] font-mono text-slate-300 bg-black/50 border border-white/10 rounded-lg p-3 overflow-x-auto whitespace-pre">{curlExample}</pre>
+              <p className="text-[10px] text-slate-600 mt-1.5">
+                Em ferramentas que só aceitam URL, use <code className="text-slate-400">?token=SUA_CHAVE</code> no lugar do cabeçalho.
+              </p>
+            </div>
+            <div className="ml-7 overflow-x-auto">
+              <table className="w-full text-[11px]">
+                <thead>
+                  <tr className="text-slate-500 border-b border-white/5">
+                    <th className="text-left font-semibold py-1.5 pr-3">Conector</th>
+                    <th className="text-left font-semibold py-1.5">Endpoint</th>
                   </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+                </thead>
+                <tbody>
+                  {CONNECTORS.map((c) => {
+                    const url = `${API_BASE_URL}${c.path}`;
+                    return (
+                      <tr key={c.type} className="border-b border-white/[0.03]">
+                        <td className="py-1.5 pr-3 text-slate-400 whitespace-nowrap">{c.label}</td>
+                        <td className="py-1.5">
+                          <div className="flex items-center gap-2">
+                            <code className="font-mono text-[10px] text-cyan-300/90 break-all">{c.path}</code>
+                            <CopyButton text={url} />
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );

@@ -1015,6 +1015,12 @@ export function LegacyCockpitPanels({ cockpitTab, onSearchTermChange, onNavigate
                       {/* Push webhook forms */}
                       {['uptimekuma', 'zabbix', 'prometheus', 'wazuh', 'grafana'].includes(selectedIntegrationTool) ? (
                         <div className="flex flex-col gap-4">
+                          {/* Contextual connection guide (didactic): the simple /ingest + ?token= path,
+                              a self-service key and the vendor-specific "where to configure" hint. */}
+                          <div className="p-4 rounded-xl bg-white/[0.02] border border-white/5">
+                            <ConnectionGuidePanel tenantId={selectedTenant?.id} connectorType={selectedIntegrationTool} />
+                          </div>
+
                           {/* Active Integrations list */}
                           <div className="flex flex-col gap-2.5">
                             <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">
