@@ -42,7 +42,15 @@ func HandleGetHostLogs(pgPool *pgxpool.Pool) http.HandlerFunc {
 		if atMs, perr := strconv.ParseInt(strings.TrimSpace(r.URL.Query().Get("at")), 10, 64); perr == nil && atMs > 0 {
 			at = time.UnixMilli(atMs)
 		}
-		logs, err := client.FetchHostLogs(r.Context(), tenantID, host, at)
+		// ?window= is the half-window in minutes (each side of `at`); default 15, clamped to 1..1440.
+		window := loki.DefaultLogWindow
+		if m, perr := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("window"))); perr == nil && m > 0 {
+			if m > 1440 {
+				m = 1440
+			}
+			window = time.Duration(m) * time.Minute
+		}
+		logs, err := client.FetchHostLogs(r.Context(), tenantID, host, at, window)
 		if err != nil {
 			logs = []string{}
 		}

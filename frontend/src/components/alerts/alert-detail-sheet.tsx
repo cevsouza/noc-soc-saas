@@ -333,14 +333,21 @@ function LokiLogsTab({ alert }: { alert: Alert }) {
   const [logs, setLogs] = useState<string[]>(snapshot);
   const [live, setLive] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [windowMin, setWindowMin] = useState(15);
 
-  const reload = async () => {
+  const WINDOWS: { min: number; label: string }[] = [
+    { min: 5, label: '5 min' },
+    { min: 15, label: '15 min' },
+    { min: 60, label: '1 h' },
+  ];
+
+  const reload = async (win = windowMin) => {
     if (!host) return;
     setLoading(true);
     try {
       const at = new Date(alert.created_at).getTime();
       const res = await apiFetchJson<{ logs: string[] }>(
-        `/api/v1/loki/logs?host=${encodeURIComponent(host)}&at=${at}&tenant_id=${alert.tenant_id}`,
+        `/api/v1/loki/logs?host=${encodeURIComponent(host)}&at=${at}&window=${win}&tenant_id=${alert.tenant_id}`,
       );
       setLogs(res.logs || []);
       setLive(true);
@@ -353,21 +360,42 @@ function LokiLogsTab({ alert }: { alert: Alert }) {
 
   return (
     <div className="flex flex-col gap-2">
-      <div className="flex items-center justify-between gap-2">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
         <span className="text-[10px] uppercase font-bold tracking-wider text-slate-500 flex items-center gap-1.5 min-w-0">
           <FileText className="w-3.5 h-3.5 text-orange-400 shrink-0" />
           <span className="truncate">
-            Logs de <b className="text-slate-300">{host || '—'}</b> · janela do incidente ±15 min{live ? ' · recarregado' : ''} ({logs.length})
+            Logs de <b className="text-slate-300">{host || '—'}</b> · ±{live ? windowMin : 15} min do incidente ({logs.length})
           </span>
         </span>
-        <button
-          type="button"
-          onClick={reload}
-          disabled={loading || !host}
-          className="px-2 py-1 rounded-md bg-white/5 hover:bg-white/10 disabled:opacity-40 border border-white/10 text-[10px] font-bold uppercase tracking-wider text-slate-300 transition-all cursor-pointer flex items-center gap-1.5 shrink-0"
-        >
-          <RefreshCw className={`w-3 h-3 ${loading ? 'animate-spin' : ''}`} /> Recarregar
-        </button>
+        <div className="flex items-center gap-1.5 shrink-0">
+          {/* Janela em torno do horário do incidente */}
+          <div className="flex items-center rounded-md border border-white/10 overflow-hidden">
+            {WINDOWS.map((wnd) => (
+              <button
+                key={wnd.min}
+                type="button"
+                onClick={() => {
+                  setWindowMin(wnd.min);
+                  reload(wnd.min);
+                }}
+                disabled={loading || !host}
+                className={`px-2 py-1 text-[10px] font-bold uppercase tracking-wider transition-all cursor-pointer disabled:opacity-40 ${
+                  live && windowMin === wnd.min ? 'bg-orange-600/25 text-orange-300' : 'bg-white/5 hover:bg-white/10 text-slate-400'
+                }`}
+              >
+                {wnd.label}
+              </button>
+            ))}
+          </div>
+          <button
+            type="button"
+            onClick={() => reload()}
+            disabled={loading || !host}
+            className="px-2 py-1 rounded-md bg-white/5 hover:bg-white/10 disabled:opacity-40 border border-white/10 text-[10px] font-bold uppercase tracking-wider text-slate-300 transition-all cursor-pointer flex items-center gap-1.5"
+          >
+            <RefreshCw className={`w-3 h-3 ${loading ? 'animate-spin' : ''}`} /> Recarregar
+          </button>
+        </div>
       </div>
 
       {logs.length > 0 ? (

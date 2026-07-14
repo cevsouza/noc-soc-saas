@@ -81,14 +81,18 @@ func (c *LokiClient) getLokiConfig(ctx context.Context, tenantID uuid.UUID) (*Lo
 	return &cfg, nil
 }
 
-// incidentLogWindow is how far before/after the reference time FetchHostLogs looks in Loki, so the
-// logs shown match the incident's moment instead of Loki's default "last hour from now".
-const incidentLogWindow = 15 * time.Minute
+// DefaultLogWindow is how far before/after the reference time FetchHostLogs looks in Loki by default,
+// so the logs shown match the incident's moment instead of Loki's "last hour from now".
+const DefaultLogWindow = 15 * time.Minute
 
-// FetchHostLogs gets up to 50 log lines for a host/IP from Loki around the reference time `at`. When
-// `at` is the zero time, Loki's default window (last hour) is used. Callers pass the alert timestamp
-// so the window is centered on the incident, not on "now".
-func (c *LokiClient) FetchHostLogs(ctx context.Context, tenantID uuid.UUID, host string, at time.Time) ([]string, error) {
+// FetchHostLogs gets up to 50 log lines for a host/IP from Loki within `window` before/after the
+// reference time `at`. A non-positive window falls back to DefaultLogWindow; a zero `at` lets Loki
+// use its own default window. Callers pass the alert timestamp so the window is centered on the
+// incident, not on "now".
+func (c *LokiClient) FetchHostLogs(ctx context.Context, tenantID uuid.UUID, host string, at time.Time, window time.Duration) ([]string, error) {
+	if window <= 0 {
+		window = DefaultLogWindow
+	}
 	tenantCtx := db.WithTenantID(ctx, tenantID)
 	cfg, err := c.getLokiConfig(tenantCtx, tenantID)
 	if err != nil {
@@ -119,8 +123,8 @@ func (c *LokiClient) FetchHostLogs(ctx context.Context, tenantID uuid.UUID, host
 	// Center the query on the incident time (±incidentLogWindow) so we don't show unrelated logs
 	// from "now" — Loki wants start/end as unix nanoseconds.
 	if !at.IsZero() {
-		q.Set("start", strconv.FormatInt(at.Add(-incidentLogWindow).UnixNano(), 10))
-		q.Set("end", strconv.FormatInt(at.Add(incidentLogWindow).UnixNano(), 10))
+		q.Set("start", strconv.FormatInt(at.Add(-window).UnixNano(), 10))
+		q.Set("end", strconv.FormatInt(at.Add(window).UnixNano(), 10))
 	}
 	u.RawQuery = q.Encode()
 

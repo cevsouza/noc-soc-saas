@@ -331,7 +331,7 @@ func (wp *WorkerPool) createNewAlert(ctx context.Context, tx pgx.Tx, event model
 
 	// Fetch host logs on demand from Loki if severity is warning/critical/fatal
 	if event.Host != "" && (event.Severity == model.SeverityWarning || event.Severity == model.SeverityCritical || event.Severity == model.SeverityFatal) {
-		logs, err := wp.lokiClient.FetchHostLogs(ctx, event.TenantID, event.Host, event.Timestamp)
+		logs, err := wp.lokiClient.FetchHostLogs(ctx, event.TenantID, event.Host, event.Timestamp, loki.DefaultLogWindow)
 		if err == nil {
 			newAlert.AIAnalysis["loki_logs"] = logs
 		} else {
