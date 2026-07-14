@@ -626,6 +626,22 @@ func main() {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}))
 
+	// Cross-tenant threat intel (B6 fatia 1): tenant-plane read of the anonymized aggregate (opt-in
+	// gated inside the handler) + an admin-only opt-in toggle.
+	mux.Handle("/api/v1/threat-intel", middleware.JWTAuth(jwtSecret)(api.HandleGetThreatIntel(appPool)))
+	protectedThreatIntelOptIn := middleware.JWTAuth(jwtSecret)(
+		middleware.RequireRole(model.RoleAdmin)(
+			api.HandleSetThreatIntelOptIn(appPool),
+		),
+	)
+	mux.Handle("/api/v1/threat-intel/settings", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPut {
+			protectedThreatIntelOptIn.ServeHTTP(w, r)
+			return
+		}
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}))
+
 	// SLA PDF Report Download Endpoint (resolves auth via ?token= — kept unauthenticated at the
 	// route level since browser downloads can't set an Authorization header; security instead
 	// comes from ResolveTenantFromToken now only accepting a signed JWT or a real API key, never

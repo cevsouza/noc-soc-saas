@@ -14,6 +14,7 @@ import {
   EyeOff,
   Boxes,
   FileText,
+  Globe,
   HelpCircle,
   Layers,
   Lock,
@@ -35,6 +36,7 @@ import { ResponseActionsPanel } from '@/components/settings/response-actions-pan
 import { AccessControlPanel } from '@/components/settings/access-control-panel';
 import { OperationalKpisPanel } from '@/components/settings/operational-kpis-panel';
 import { ControlPlanePanel } from '@/components/settings/control-plane-panel';
+import { ThreatIntelPanel } from '@/components/settings/threat-intel-panel';
 import { TopologyView } from '@/components/settings/topology-view';
 import { NetworkDiscoveryPanel } from '@/components/settings/network-discovery-panel';
 import { AssetsPanel } from '@/components/settings/assets-panel';
@@ -637,6 +639,18 @@ export function LegacyCockpitPanels({ cockpitTab, onSearchTermChange, onNavigate
                 >
                   <Boxes className="w-3.5 h-3.5 text-cyan-400" />
                   <span>CMDB &amp; Ativos</span>
+                </button>
+                <button
+                  onClick={() => {
+                    setSelectedIntegrationTool('threat_intel');
+                    setValidationResult(null);
+                  }}
+                  className={`w-full px-3 py-2 rounded-lg text-left text-xs font-bold transition-all flex items-center gap-2 ${
+                    selectedIntegrationTool === 'threat_intel' ? 'bg-white/5 text-white border-l-2 border-cyan-400' : 'text-slate-400 hover:bg-white/[0.02] hover:text-slate-200'
+                  }`}
+                >
+                  <Globe className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>Inteligência de Ameaças</span>
                 </button>
 
                 {user?.role === 'admin' && (
@@ -1567,6 +1581,8 @@ export function LegacyCockpitPanels({ cockpitTab, onSearchTermChange, onNavigate
                   <OperationalKpisPanel tenantId={selectedTenant?.id} />
                 ) : selectedIntegrationTool === 'control_plane' ? (
                   <ControlPlanePanel />
+                ) : selectedIntegrationTool === 'threat_intel' ? (
+                  <ThreatIntelPanel />
                 ) : selectedIntegrationTool === 'approvals_admin' ? (
                   <RunbookApprovalsPanel />
                 ) : selectedIntegrationTool === 'response_actions' ? (

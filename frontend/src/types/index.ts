@@ -17,3 +17,4 @@ export * from './discovery';
 export * from './asset';
 export * from './usage';
 export * from './plan';
+export * from './threat-intel';

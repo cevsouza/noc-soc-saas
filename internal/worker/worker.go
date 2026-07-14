@@ -20,6 +20,7 @@ import (
 	"noc-api/internal/notifier"
 	"noc-api/internal/queue"
 	"noc-api/internal/repository"
+	"noc-api/internal/threatintel"
 	"noc-api/internal/security"
 
 	"github.com/google/uuid"
@@ -228,9 +229,33 @@ func (wp *WorkerPool) processEvent(ctx context.Context, event model.UnifiedIncid
 	}
 
 	// DEBOUNCE MISS: This is a brand new alert. Insert and track it in Redis.
-	return db.ExecuteInTenantTx(tenantCtx, wp.pgPool, func(tx pgx.Tx) error {
+	if err := db.ExecuteInTenantTx(tenantCtx, wp.pgPool, func(tx pgx.Tx) error {
 		return wp.createNewAlert(tenantCtx, tx, event, debounceKey, fingerprint)
-	})
+	}); err != nil {
+		return err
+	}
+
+	// Contribute observed IOCs to the cross-tenant threat-intel aggregate (Backlog B6). Best-effort
+	// and post-commit: gated on the tenant's opt-in, only public IPs are shared, and a failure here
+	// never affects alert creation. Runs on the shared (non-RLS) global tables.
+	wp.contributeThreatIntel(ctx, event)
+	return nil
+}
+
+// contributeThreatIntel records the event's shareable indicators into the global threat-intel
+// aggregate, but only if the observing tenant has opted in. Never fatal.
+func (wp *WorkerPool) contributeThreatIntel(ctx context.Context, event model.UnifiedIncident) {
+	var optIn bool
+	if err := wp.pgPool.QueryRow(ctx, `SELECT threat_intel_opt_in FROM tenants WHERE id = $1`, event.TenantID).Scan(&optIn); err != nil || !optIn {
+		return
+	}
+	indicators := threatintel.ExtractIndicators(event.Host, event.RawPayload)
+	if len(indicators) == 0 {
+		return
+	}
+	if err := threatintel.Record(ctx, wp.pgPool, threatintel.TenantHash(event.TenantID), indicators); err != nil {
+		log.Printf("[ThreatIntel warning] contribution failed for tenant %s: %v", event.TenantID, err)
+	}
 }
 
 func (wp *WorkerPool) createNewAlert(ctx context.Context, tx pgx.Tx, event model.UnifiedIncident, debounceKey string, fingerprint string) error {
