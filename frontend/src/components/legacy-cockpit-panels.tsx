@@ -19,6 +19,7 @@ import {
   Layers,
   Lock,
   Palette,
+  Plug,
   Radar,
   RefreshCw,
   ShieldAlert,
@@ -37,6 +38,7 @@ import { AccessControlPanel } from '@/components/settings/access-control-panel';
 import { OperationalKpisPanel } from '@/components/settings/operational-kpis-panel';
 import { ControlPlanePanel } from '@/components/settings/control-plane-panel';
 import { ThreatIntelPanel } from '@/components/settings/threat-intel-panel';
+import { ConnectionGuidePanel } from '@/components/settings/connection-guide-panel';
 import { TopologyView } from '@/components/settings/topology-view';
 import { NetworkDiscoveryPanel } from '@/components/settings/network-discovery-panel';
 import { AssetsPanel } from '@/components/settings/assets-panel';
@@ -523,6 +525,19 @@ export function LegacyCockpitPanels({ cockpitTab, onSearchTermChange, onNavigate
                 >
                   <Activity className="w-3.5 h-3.5 text-cyan-400" />
                   <span>Central de Conectores</span>
+                </button>
+                <button
+                  onClick={() => {
+                    setSelectedIntegrationTool('connection_guide');
+                    setActiveSubTool(null);
+                    setValidationResult(null);
+                  }}
+                  className={`w-full px-3 py-2 rounded-lg text-left text-xs font-bold transition-all flex items-center gap-2 ${
+                    selectedIntegrationTool === 'connection_guide' ? 'bg-white/5 text-white border-l-2 border-cyan-400' : 'text-slate-400 hover:bg-white/[0.02] hover:text-slate-200'
+                  }`}
+                >
+                  <Plug className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>Como Conectar</span>
                 </button>
 
                 <span className="text-[9px] font-bold text-slate-500 uppercase tracking-widest px-2.5 py-2 mt-4">Personalização</span>
@@ -1581,6 +1596,8 @@ export function LegacyCockpitPanels({ cockpitTab, onSearchTermChange, onNavigate
                   <OperationalKpisPanel tenantId={selectedTenant?.id} />
                 ) : selectedIntegrationTool === 'control_plane' ? (
                   <ControlPlanePanel />
+                ) : selectedIntegrationTool === 'connection_guide' ? (
+                  <ConnectionGuidePanel tenantId={selectedTenant?.id} />
                 ) : selectedIntegrationTool === 'threat_intel' ? (
                   <ThreatIntelPanel />
                 ) : selectedIntegrationTool === 'approvals_admin' ? (

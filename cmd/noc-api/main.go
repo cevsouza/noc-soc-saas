@@ -664,6 +664,27 @@ func main() {
 	)
 	mux.Handle("/api/v1/integrations/webhook-secret", protectedWebhookSecret)
 
+	// Self-service ingestion API keys (in-app onboarding): tenant admin mints/lists/revokes keys used
+	// with the X-API-Key header on the /ingest/* endpoints. One route, method-dispatched.
+	listAPIKeys := api.HandleListAPIKeys(appPool)
+	createAPIKey := api.HandleCreateAPIKey(appPool)
+	revokeAPIKey := api.HandleRevokeAPIKey(appPool, redisClient)
+	protectedAPIKeys := middleware.JWTAuth(jwtSecret)(
+		middleware.RequireRole(model.RoleAdmin)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.Method {
+			case http.MethodGet:
+				listAPIKeys.ServeHTTP(w, r)
+			case http.MethodPost:
+				createAPIKey.ServeHTTP(w, r)
+			case http.MethodDelete:
+				revokeAPIKey.ServeHTTP(w, r)
+			default:
+				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			}
+		})),
+	)
+	mux.Handle("/api/v1/integrations/api-keys", protectedAPIKeys)
+
 	// Tenant management routes (GET for listing active tenants, POST/DELETE are platform-wide
 	// actions not scoped to the caller's own tenant, so they require GlobalRole==admin —
 	// a tenant-level admin (Role==admin) must NOT be able to create or delete other tenants).
