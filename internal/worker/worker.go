@@ -473,7 +473,7 @@ func (wp *WorkerPool) triggerSOARPlaybooks(ctx context.Context, alert *model.Ale
 					VALUES ($1, $2, '🤖 SOAR Auto-Healing Engine', $3)
 				`
 				commentText := fmt.Sprintf("🤖 **SOAR Playbook Auto-Trigger [%s]**: Status: %s\n\n```bash\n%s\n```", rbName, execStatus, output)
-				_, err = tx.Exec(ctxBg, logQuery, alert.ID, alert.TenantID, commentText)
+				_, err = tx.Exec(ctxBg, logQuery, incidentRef(alert), alert.TenantID, commentText)
 				if err != nil {
 					return err
 				}
@@ -482,7 +482,7 @@ func (wp *WorkerPool) triggerSOARPlaybooks(ctx context.Context, alert *model.Ale
 					INSERT INTO runbook_execution_logs (tenant_id, runbook_id, incident_id, operator_name, script, output, status)
 					VALUES ($1, $2, $3, $4, $5, $6, $7)
 				`
-				_, err = tx.Exec(ctxBg, auditQuery, alert.TenantID, rID, alert.ID, "🤖 SOAR Auto-Healing Engine", rbScript, output, execStatus)
+				_, err = tx.Exec(ctxBg, auditQuery, alert.TenantID, rID, incidentRef(alert), "🤖 SOAR Auto-Healing Engine", rbScript, output, execStatus)
 				if err != nil {
 					return err
 				}
@@ -663,7 +663,7 @@ func (wp *WorkerPool) createRunbookApprovalRequest(ctx context.Context, runbookI
 		_, err := tx.Exec(ctx, `
 			INSERT INTO runbook_approval_requests (tenant_id, runbook_id, incident_id, reason, requested_by)
 			VALUES ($1, $2, $3, $4, 'SOAR Auto-Healing Engine')
-		`, alert.TenantID, runbookID, alert.ID, reason)
+		`, alert.TenantID, runbookID, incidentRef(alert), reason)
 		if err != nil {
 			return err
 		}
@@ -672,7 +672,7 @@ func (wp *WorkerPool) createRunbookApprovalRequest(ctx context.Context, runbookI
 		_, err = tx.Exec(ctx, `
 			INSERT INTO incident_comments (incident_id, tenant_id, author, comment)
 			VALUES ($1, $2, '🤖 SOAR Auto-Healing Engine', $3)
-		`, alert.ID, alert.TenantID, commentText)
+		`, incidentRef(alert), alert.TenantID, commentText)
 		return err
 	})
 

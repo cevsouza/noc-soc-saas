@@ -37,7 +37,21 @@ func (wp *WorkerPool) attachIncident(ctx context.Context, tx pgx.Tx, alert *mode
 	}
 	if cErr := sp.Commit(ctx); cErr != nil {
 		log.Printf("[Incident] Failed to commit incident grouping for alert %s: %v", alert.ID, cErr)
+		return
 	}
+	// Expose the grouped incident id on the in-memory alert so downstream SOAR/approval/comment
+	// artifacts (B1 fatia 2) attach to the real incident, not the raw alert id.
+	alert.IncidentID = &incidentID
+}
+
+// incidentRef returns the id that incident-scoped artifacts (comments, approval requests, execution
+// logs) should attach to: the grouped incident when the alert was grouped, falling back to the
+// alert's own id if grouping didn't run (keeps the legacy incident≡alert behavior as a safety net).
+func incidentRef(alert *model.Alert) uuid.UUID {
+	if alert.IncidentID != nil {
+		return *alert.IncidentID
+	}
+	return alert.ID
 }
 
 // incidentSeverityRank ranks severities so an incident can track the WORST severity seen across the

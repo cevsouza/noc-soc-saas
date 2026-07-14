@@ -1,6 +1,29 @@
 package worker
 
-import "testing"
+import (
+	"testing"
+
+	"noc-api/internal/model"
+
+	"github.com/google/uuid"
+)
+
+func TestIncidentRef(t *testing.T) {
+	alertID := uuid.New()
+	incID := uuid.New()
+
+	// No grouping (legacy incident≡alert): falls back to the alert's own id.
+	ungrouped := &model.Alert{ID: alertID}
+	if got := incidentRef(ungrouped); got != alertID {
+		t.Errorf("incidentRef(ungrouped) = %v, want alert id %v", got, alertID)
+	}
+
+	// Grouped: uses the real incident id so artifacts attach to the incident.
+	grouped := &model.Alert{ID: alertID, IncidentID: &incID}
+	if got := incidentRef(grouped); got != incID {
+		t.Errorf("incidentRef(grouped) = %v, want incident id %v", got, incID)
+	}
+}
 
 func TestWorseSeverity(t *testing.T) {
 	cases := []struct{ a, b, want string }{

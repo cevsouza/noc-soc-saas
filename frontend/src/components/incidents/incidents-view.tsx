@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, RefreshCw, ShieldCheck, Siren } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, MessageSquarePlus, RefreshCw, ShieldCheck, Siren } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -11,7 +11,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { apiFetch, apiFetchJson } from '@/lib/api-client';
-import type { Incident, IncidentAlert } from '@/types';
+import type { Incident, IncidentAlert, IncidentComment } from '@/types';
 
 type Filter = 'open' | 'acknowledged' | 'resolved' | 'all';
 type Intent = 'acknowledge' | 'resolve';
@@ -55,6 +55,9 @@ export function IncidentsView({ tenantId, domain }: { tenantId?: string; domain?
   const [isLoading, setIsLoading] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [alerts, setAlerts] = useState<Record<string, IncidentAlert[]>>({});
+  const [comments, setComments] = useState<Record<string, IncidentComment[]>>({});
+  const [noteDraft, setNoteDraft] = useState<Record<string, string>>({});
+  const [postingId, setPostingId] = useState<string | null>(null);
   const [confirmTarget, setConfirmTarget] = useState<Incident | null>(null);
   const [confirmIntent, setConfirmIntent] = useState<Intent | null>(null);
   const [confirmError, setConfirmError] = useState<string | null>(null);
@@ -92,6 +95,37 @@ export function IncidentsView({ tenantId, domain }: { tenantId?: string; domain?
       } catch (err) {
         console.error('Failed to fetch incident alerts:', err);
       }
+    }
+    if (!comments[inc.id]) {
+      await refreshComments(inc.id);
+    }
+  };
+
+  const refreshComments = async (incidentID: string) => {
+    try {
+      const data = await apiFetchJson<IncidentComment[]>(`/api/v1/incidents/comments?incident_id=${incidentID}${qtenant}`);
+      setComments((prev) => ({ ...prev, [incidentID]: data || [] }));
+    } catch (err) {
+      console.error('Failed to fetch incident comments:', err);
+    }
+  };
+
+  const postNote = async (incidentID: string) => {
+    const text = (noteDraft[incidentID] || '').trim();
+    if (!text || postingId) return;
+    setPostingId(incidentID);
+    try {
+      const created = await apiFetchJson<IncidentComment>(`/api/v1/incidents/comments${tenantId ? `?tenant_id=${tenantId}` : ''}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ incident_id: incidentID, comment: text }),
+      });
+      setComments((prev) => ({ ...prev, [incidentID]: [...(prev[incidentID] || []), created] }));
+      setNoteDraft((prev) => ({ ...prev, [incidentID]: '' }));
+    } catch (err) {
+      console.error('Failed to post note:', err);
+    } finally {
+      setPostingId(null);
     }
   };
 
@@ -246,6 +280,46 @@ export function IncidentsView({ tenantId, domain }: { tenantId?: string; domain?
                       ))}
                     </div>
                   )}
+
+                  {/* Investigation timeline (B1 fatia 2): notes live on the incident, alongside the
+                      SOAR/approval audit trail the worker now stamps with the real incident id. */}
+                  <div className="mt-4 pt-3 border-t border-white/5">
+                    <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-2">Notas da investigação</div>
+                    {!comments[inc.id] ? (
+                      <div className="text-[11px] text-slate-500">Carregando notas…</div>
+                    ) : comments[inc.id].length === 0 ? (
+                      <div className="text-[11px] text-slate-600 mb-2">Nenhuma nota ainda. Registre o que foi investigado ou decidido.</div>
+                    ) : (
+                      <div className="flex flex-col gap-2 mb-2">
+                        {comments[inc.id].map((c) => (
+                          <div key={c.id} className="text-[11px] bg-black/30 border border-white/5 rounded-lg px-3 py-2">
+                            <div className="flex items-center justify-between gap-2 mb-1">
+                              <span className="font-bold text-slate-300 truncate">{c.author}</span>
+                              <span className="text-slate-600 shrink-0">{new Date(c.created_at).toLocaleString()}</span>
+                            </div>
+                            <div className="text-slate-400 whitespace-pre-wrap break-words">{c.comment}</div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <div className="flex items-start gap-2">
+                      <textarea
+                        value={noteDraft[inc.id] || ''}
+                        onChange={(e) => setNoteDraft((prev) => ({ ...prev, [inc.id]: e.target.value }))}
+                        placeholder="Adicionar uma nota à investigação…"
+                        rows={2}
+                        className="flex-1 resize-y rounded-lg bg-black/40 border border-white/10 px-3 py-2 text-[11px] text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-violet-500/40"
+                      />
+                      <button
+                        onClick={() => postNote(inc.id)}
+                        disabled={postingId === inc.id || !(noteDraft[inc.id] || '').trim()}
+                        className="px-3 py-2 rounded-lg bg-violet-600/20 hover:bg-violet-600/30 disabled:opacity-40 text-violet-300 text-[10px] font-bold uppercase tracking-wider border border-violet-500/25 transition-all cursor-pointer flex items-center gap-1.5 shrink-0"
+                      >
+                        {postingId === inc.id ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <MessageSquarePlus className="w-3.5 h-3.5" />}
+                        Nota
+                      </button>
+                    </div>
+                  </div>
                 </div>
               )}
             </div>

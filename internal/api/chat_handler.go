@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
+	"noc-api/internal/audit"
 	"noc-api/internal/db"
 	"noc-api/internal/middleware"
 
@@ -13,6 +15,20 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// CommentResponse is one incident_comments row as returned by the incident timeline endpoints.
+type CommentResponse struct {
+	ID        uuid.UUID `json:"id"`
+	Author    string    `json:"author"`
+	Comment   string    `json:"comment"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// AddCommentRequest is the body of POST /api/v1/incidents/comments (a plain investigation note).
+type AddCommentRequest struct {
+	IncidentID uuid.UUID `json:"incident_id"`
+	Comment    string    `json:"comment"`
+}
 
 type IncidentChatRequest struct {
 	IncidentID uuid.UUID `json:"incident_id"`
@@ -119,8 +135,15 @@ func HandleIncidentChat(pgPool *pgxpool.Pool) http.HandlerFunc {
 	}
 }
 
-// HandleGetIncidentComments returns the chat timeline / comments for a specific incident.
-func HandleGetIncidentComments(pgPool *pgxpool.Pool) http.HandlerFunc {
+// HandleIncidentComments serves an incident's investigation timeline (incident_comments). Single
+// route, method-dispatched (avoids a second ServeMux registration on the same path):
+//   - GET  ?incident_id=  → list the comments (ascending).
+//   - POST {incident_id, comment} → append a plain investigation note authored by the current user.
+//
+// B1 fatia 2: notes live on the real incident (the grouped investigation), the same id the worker
+// now stamps on SOAR/approval artifacts — so a human's notes and the automation's audit trail share
+// one timeline. Any authenticated member of the tenant may read and post (collaborative, low-risk).
+func HandleIncidentComments(pgPool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		tenantID, err := middleware.ResolveTenantScope(r.Context(), r, pgPool)
 		if err != nil {
@@ -129,54 +152,106 @@ func HandleGetIncidentComments(pgPool *pgxpool.Pool) http.HandlerFunc {
 		}
 		ctx := db.WithTenantID(r.Context(), tenantID)
 
-		incidentIDStr := r.URL.Query().Get("incident_id")
-		if incidentIDStr == "" {
-			http.Error(w, "Missing incident_id parameter", http.StatusBadRequest)
-			return
-		}
-		incidentID, err := uuid.Parse(incidentIDStr)
-		if err != nil {
-			http.Error(w, "Invalid incident_id format", http.StatusBadRequest)
-			return
-		}
-
-		type CommentResponse struct {
-			ID        uuid.UUID `json:"id"`
-			Author    string    `json:"author"`
-			Comment   string    `json:"comment"`
-			CreatedAt time.Time `json:"created_at"`
-		}
-
-		list := make([]CommentResponse, 0)
-
-		err = db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
-			query := `
-				SELECT id, author, comment, created_at 
-				FROM incident_comments 
-				WHERE incident_id = $1 AND tenant_id = $2 
-				ORDER BY created_at ASC
-			`
-			rows, err := tx.Query(ctx, query, incidentID, tenantID)
-			if err != nil {
-				return err
+		switch r.Method {
+		case http.MethodGet:
+			incidentIDStr := r.URL.Query().Get("incident_id")
+			if incidentIDStr == "" {
+				http.Error(w, "Missing incident_id parameter", http.StatusBadRequest)
+				return
 			}
-			defer rows.Close()
+			incidentID, perr := uuid.Parse(incidentIDStr)
+			if perr != nil {
+				http.Error(w, "Invalid incident_id format", http.StatusBadRequest)
+				return
+			}
 
-			for rows.Next() {
-				var c CommentResponse
-				if err := rows.Scan(&c.ID, &c.Author, &c.Comment, &c.CreatedAt); err == nil {
-					list = append(list, c)
+			list := make([]CommentResponse, 0)
+			err = db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
+				rows, e := tx.Query(ctx, `
+					SELECT id, author, comment, created_at
+					FROM incident_comments
+					WHERE incident_id = $1 AND tenant_id = $2
+					ORDER BY created_at ASC
+				`, incidentID, tenantID)
+				if e != nil {
+					return e
+				}
+				defer rows.Close()
+				for rows.Next() {
+					var c CommentResponse
+					if e := rows.Scan(&c.ID, &c.Author, &c.Comment, &c.CreatedAt); e == nil {
+						list = append(list, c)
+					}
+				}
+				return rows.Err()
+			})
+			if err != nil {
+				http.Error(w, "Failed to query comments", http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(list)
+
+		case http.MethodPost:
+			var req AddCommentRequest
+			if derr := json.NewDecoder(r.Body).Decode(&req); derr != nil || req.IncidentID == uuid.Nil {
+				http.Error(w, "Invalid payload: incident_id and comment are required", http.StatusBadRequest)
+				return
+			}
+			req.Comment = strings.TrimSpace(req.Comment)
+			if req.Comment == "" {
+				http.Error(w, "Bad Request: comment cannot be empty", http.StatusBadRequest)
+				return
+			}
+			if len(req.Comment) > 4000 {
+				http.Error(w, "Bad Request: comment too long (max 4000)", http.StatusBadRequest)
+				return
+			}
+
+			claims, _ := middleware.ClaimsFromContext(r.Context())
+			author := "Operador"
+			var actorID uuid.UUID
+			if claims != nil {
+				actorID = claims.UserID
+				if claims.Email != "" {
+					author = claims.Email
 				}
 			}
-			return rows.Err()
-		})
 
-		if err != nil {
-			http.Error(w, "Failed to query comments", http.StatusInternalServerError)
-			return
+			var created CommentResponse
+			err = db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
+				// Guard: only comment on an incident that belongs to this tenant (defends against a
+				// forged/foreign incident_id — the bare column has no FK to incidents).
+				var exists bool
+				if e := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM incidents WHERE id = $1 AND tenant_id = $2)`, req.IncidentID, tenantID).Scan(&exists); e != nil {
+					return e
+				}
+				if !exists {
+					return errIncidentNotFound
+				}
+				return tx.QueryRow(ctx, `
+					INSERT INTO incident_comments (incident_id, tenant_id, author, comment)
+					VALUES ($1, $2, $3, $4)
+					RETURNING id, author, comment, created_at
+				`, req.IncidentID, tenantID, author, req.Comment).Scan(&created.ID, &created.Author, &created.Comment, &created.CreatedAt)
+			})
+			if err == errIncidentNotFound {
+				http.Error(w, "Incident not found", http.StatusNotFound)
+				return
+			}
+			if err != nil {
+				http.Error(w, "Failed to save comment", http.StatusInternalServerError)
+				return
+			}
+			audit.Record(ctx, pgPool, audit.Entry{TenantID: tenantID, UserID: actorID, Action: "incident.comment", Resource: req.IncidentID.String(), IPAddress: r.RemoteAddr})
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(created)
+
+		default:
+			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 		}
-
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(list)
 	}
 }
+
+// errIncidentNotFound signals a POST against an incident that isn't this tenant's.
+var errIncidentNotFound = fmt.Errorf("incident not found")

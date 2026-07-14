@@ -865,7 +865,7 @@ func main() {
 
 	// Incident chat & timeline endpoints
 	protectedIncidentChat := middleware.JWTAuth(jwtSecret)(api.HandleIncidentChat(appPool))
-	protectedIncidentComments := middleware.JWTAuth(jwtSecret)(api.HandleGetIncidentComments(appPool))
+	protectedIncidentComments := middleware.JWTAuth(jwtSecret)(api.HandleIncidentComments(appPool))
 	mux.Handle("/api/v1/incidents/chat", protectedIncidentChat)
 	mux.Handle("/api/v1/incidents/comments", protectedIncidentComments)
 
