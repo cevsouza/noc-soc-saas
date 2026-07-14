@@ -16,3 +16,4 @@ export * from './metrics';
 export * from './discovery';
 export * from './asset';
 export * from './usage';
+export * from './plan';

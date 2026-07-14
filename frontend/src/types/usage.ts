@@ -11,6 +11,12 @@ export interface TenantUsage {
   active_users: number;
   active_integrations: number;
   open_incidents: number;
+  // Billing plan + quota limits (B2 fatia 2), embedded per tenant. -1 limits mean unlimited. Absent
+  // on the platform `totals` aggregate.
+  plan_name?: string;
+  max_alerts_per_month?: number;
+  max_integrations?: number;
+  max_users?: number;
 }
 
 export interface PlatformUsage {

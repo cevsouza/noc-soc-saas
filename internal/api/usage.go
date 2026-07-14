@@ -38,6 +38,14 @@ type TenantUsage struct {
 	ActiveUsers        int64     `json:"active_users"`
 	ActiveIntegrations int64     `json:"active_integrations"`
 	OpenIncidents      int64     `json:"open_incidents"`
+
+	// Billing plan + quota limits (B2 fatia 2). Embedded in the usage roll-up so the control-plane
+	// dashboard renders usage-vs-limit in one call. -1 limits mean unlimited; a tenant with no plan
+	// row reports the default ("free"). Omitted on the platform Totals aggregate.
+	PlanName          string `json:"plan_name,omitempty"`
+	MaxAlertsPerMonth int    `json:"max_alerts_per_month,omitempty"`
+	MaxIntegrations   int    `json:"max_integrations,omitempty"`
+	MaxUsers          int    `json:"max_users,omitempty"`
 }
 
 // PlatformUsage is the control-plane roll-up: per-tenant usage plus platform totals.
@@ -79,6 +87,16 @@ func computeTenantUsage(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID) (Ten
 
 	u.AvgEventsPerDay = float64(u.AlertsInWindow) / float64(usageWindowDays)
 	u.EPS = computeEPS(u.AlertsInWindow, float64(usageWindowDays)*86400)
+
+	// Attach the tenant's billing plan + limits so the dashboard shows usage-vs-limit (B2 fatia 2).
+	plan, err := loadTenantPlan(ctx, tx, tenantID)
+	if err != nil {
+		return u, err
+	}
+	u.PlanName = plan.PlanName
+	u.MaxAlertsPerMonth = plan.MaxAlertsPerMonth
+	u.MaxIntegrations = plan.MaxIntegrations
+	u.MaxUsers = plan.MaxUsers
 	return u, nil
 }
 

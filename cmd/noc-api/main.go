@@ -611,6 +611,21 @@ func main() {
 		),
 	))
 
+	// Billing plans (B2 fatia 2): control-plane, platform-admin sets each tenant's plan/quotas. Reads
+	// happen via the usage roll-up above (plan embedded per tenant); this endpoint is the writer.
+	protectedSetPlan := middleware.JWTAuth(jwtSecret)(
+		middleware.RequireGlobalRole(model.RoleAdmin)(
+			api.HandleSetTenantPlan(appPool),
+		),
+	)
+	mux.Handle("/api/v1/admin/plans", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPut {
+			protectedSetPlan.ServeHTTP(w, r)
+			return
+		}
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}))
+
 	// SLA PDF Report Download Endpoint (resolves auth via ?token= — kept unauthenticated at the
 	// route level since browser downloads can't set an Authorization header; security instead
 	// comes from ResolveTenantFromToken now only accepting a signed JWT or a real API key, never
