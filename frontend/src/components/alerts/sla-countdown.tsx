@@ -2,9 +2,11 @@
 
 import { useEffect, useState } from 'react';
 import { Clock } from 'lucide-react';
+import { SLA_TARGET_MINUTES } from '@/lib/alert-priority';
 import type { Alert } from '@/types';
 
-// Lifted as-is from page.tsx:59-117.
+// Lifted from page.tsx:59-117; SLA targets now sourced from the shared alert-priority module so the
+// countdown badge and the console's SLA-based ordering can never drift apart.
 export function SlaCountdown({ alert }: { alert: Alert }) {
   const [timeLeft, setTimeLeft] = useState<string>('');
   const [isOverSla, setIsOverSla] = useState(false);
@@ -18,10 +20,7 @@ export function SlaCountdown({ alert }: { alert: Alert }) {
 
     const calculateTime = () => {
       const created = new Date(alert.created_at).getTime();
-      let limitMs = 480 * 60 * 1000; // default info: 8 hours
-      if (alert.severity === 'fatal') limitMs = 15 * 60 * 1000;
-      else if (alert.severity === 'critical') limitMs = 30 * 60 * 1000;
-      else if (alert.severity === 'warning') limitMs = 120 * 60 * 1000;
+      const limitMs = SLA_TARGET_MINUTES[alert.severity] * 60 * 1000;
 
       const now = new Date().getTime();
       const diff = created + limitMs - now;

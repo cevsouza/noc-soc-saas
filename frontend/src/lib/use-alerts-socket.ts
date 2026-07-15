@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { getWSUrl } from './env';
 import { apiFetchJson } from './api-client';
+import { compareByPriority } from './alert-priority';
 import type { Alert } from '@/types';
 
 export type ConnectionStatus = 'connecting' | 'connected' | 'disconnected';
@@ -85,9 +86,12 @@ export function useAlertsSocket(token: string | null, tenantIds: string[]): UseA
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, tenantIds.join(',')]);
 
-  // Seed the list from the REST backlog (GET /api/v1/alerts) so the cockpit opens already populated
-  // for the selected domain — the WS only streams new events, never a snapshot on connect. Runs per
-  // selected tenant and merges without clobbering fresher live state (existing ids win).
+  // Seed the list from the REST backlog (GET /api/v1/alerts?status=open) so the cockpit opens already
+  // populated with the OPEN working set for the selected domain — the WS only streams new events,
+  // never a snapshot on connect. `status=open` is what guarantees an old-but-still-open alert is
+  // seeded even when it falls outside the recency window (the operational-console principle). Runs
+  // per selected tenant, merges without clobbering fresher live state (existing ids win), and orders
+  // by urgency (severity then SLA burn) so the console leads with what needs action.
   useEffect(() => {
     if (!token || tenantIds.length === 0) return;
     let cancelled = false;
@@ -95,7 +99,7 @@ export function useAlertsSocket(token: string | null, tenantIds: string[]): UseA
       try {
         const perTenant = await Promise.all(
           tenantIds.map((id) =>
-            apiFetchJson<Alert[]>(`/api/v1/alerts?tenant_id=${id}`, { token }).catch(() => [] as Alert[]),
+            apiFetchJson<Alert[]>(`/api/v1/alerts?tenant_id=${id}&status=open`, { token }).catch(() => [] as Alert[]),
           ),
         );
         if (cancelled) return;
@@ -104,7 +108,7 @@ export function useAlertsSocket(token: string | null, tenantIds: string[]): UseA
         setAlerts((prev) => {
           const byId = new Map(prev.map((a) => [a.id, a]));
           for (const a of seed) if (!byId.has(a.id)) byId.set(a.id, a);
-          return Array.from(byId.values()).sort((x, y) => (x.created_at < y.created_at ? 1 : -1));
+          return Array.from(byId.values()).sort(compareByPriority);
         });
       } catch (err) {
         console.error('[use-alerts-socket] backlog seed failed:', err);

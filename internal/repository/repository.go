@@ -26,6 +26,10 @@ type AlertRepository interface {
 	List(ctx context.Context, q db.Queryer, tenantID uuid.UUID, limit, offset int) ([]*model.Alert, error)
 	// ListByDomain is List filtered to alerts whose source is in the given set (NOC vs SOC console).
 	ListByDomain(ctx context.Context, q db.Queryer, tenantID uuid.UUID, sources []string, limit, offset int) ([]*model.Alert, error)
+	// ListOpen returns only unresolved/unsuppressed alerts, ordered by urgency (severity rank then
+	// recency), so the operational console never drops an old-but-still-open alert off the recency
+	// window. A nil/empty sources slice means all domains; a non-empty one scopes to a NOC/SOC domain.
+	ListOpen(ctx context.Context, q db.Queryer, tenantID uuid.UUID, sources []string, limit, offset int) ([]*model.Alert, error)
 	UpdateStatus(ctx context.Context, q db.Queryer, id uuid.UUID, createdAt time.Time, status model.AlertStatus) error
 	Update(ctx context.Context, q db.Queryer, alert *model.Alert) error
 }

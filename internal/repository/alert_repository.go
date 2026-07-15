@@ -191,6 +191,29 @@ func (r *PostgresAlertRepository) ListByDomain(ctx context.Context, q db.Queryer
 	return scanAlertRows(rows)
 }
 
+// openSeverityOrder ranks alerts by urgency for the operational console: highest severity first,
+// then most recent within a severity band. Kept as a shared fragment so List/domain variants of the
+// "open" query order identically.
+const openSeverityOrder = ` ORDER BY (CASE severity WHEN 'fatal' THEN 4 WHEN 'critical' THEN 3 WHEN 'warning' THEN 2 ELSE 1 END) DESC, created_at DESC`
+
+// ListOpen returns unresolved/unsuppressed alerts ordered by urgency. When sources is non-empty it
+// scopes to those NOC/SOC sources (ai_analysis->>'source'); otherwise it spans all domains. The
+// explicit tenant_id filter is defense-in-depth, matching List (RLS-independent isolation).
+func (r *PostgresAlertRepository) ListOpen(ctx context.Context, q db.Queryer, tenantID uuid.UUID, sources []string, limit, offset int) ([]*model.Alert, error) {
+	var rows pgx.Rows
+	var err error
+	if len(sources) > 0 {
+		rows, err = q.Query(ctx, `SELECT `+alertSelectCols+` FROM alerts WHERE tenant_id = $1 AND status NOT IN ('resolved','suppressed') AND ai_analysis->>'source' = ANY($2)`+openSeverityOrder+` LIMIT $3 OFFSET $4`, tenantID, sources, limit, offset)
+	} else {
+		rows, err = q.Query(ctx, `SELECT `+alertSelectCols+` FROM alerts WHERE tenant_id = $1 AND status NOT IN ('resolved','suppressed')`+openSeverityOrder+` LIMIT $2 OFFSET $3`, tenantID, limit, offset)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to query open alerts: %w", err)
+	}
+	defer rows.Close()
+	return scanAlertRows(rows)
+}
+
 func (r *PostgresAlertRepository) UpdateStatus(ctx context.Context, q db.Queryer, id uuid.UUID, createdAt time.Time, status model.AlertStatus) error {
 	tenantID, ok := db.TenantIDFromContext(ctx)
 	if !ok {

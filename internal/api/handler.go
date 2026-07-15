@@ -1514,13 +1514,25 @@ func HandleListAlerts(pgPool *pgxpool.Pool, alertRepo repository.AlertRepository
 		}
 		ctx := db.WithTenantID(r.Context(), tenantID)
 
+		// ?status=open scopes to unresolved/unsuppressed alerts ordered by urgency (severity then
+		// recency) — the operational-console default, so old-but-still-open alerts are never dropped
+		// off the recency-only window. Any other value (or none) keeps the recent-100 feed for the
+		// history/search views.
+		openOnly := r.URL.Query().Get("status") == "open"
+		// Segregated NOC/SOC console: ?domain=noc|soc filters by the alert source's domain.
+		sources, hasDomain := domain.SourcesForDomain(r.URL.Query().Get("domain"))
+
 		var alerts []*model.Alert
 		err = db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
 			var err error
-			// Segregated NOC/SOC console: ?domain=noc|soc filters by the alert source's domain.
-			if sources, ok := domain.SourcesForDomain(r.URL.Query().Get("domain")); ok {
+			switch {
+			case openOnly && hasDomain:
+				alerts, err = alertRepo.ListOpen(ctx, tx, tenantID, sources, 100, 0)
+			case openOnly:
+				alerts, err = alertRepo.ListOpen(ctx, tx, tenantID, nil, 100, 0)
+			case hasDomain:
 				alerts, err = alertRepo.ListByDomain(ctx, tx, tenantID, sources, 100, 0)
-			} else {
+			default:
 				alerts, err = alertRepo.List(ctx, tx, tenantID, 100, 0)
 			}
 			return err

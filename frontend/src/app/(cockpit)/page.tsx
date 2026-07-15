@@ -8,6 +8,7 @@ import { useAlertsSocket } from '@/lib/use-alerts-socket';
 import { usePendingApprovalsCount } from '@/lib/use-pending-approvals-count';
 import { usePendingResponseCount } from '@/lib/use-pending-response-count';
 import { domainForSource, type ConsoleMode } from '@/lib/domain';
+import { compareByPriority, isOpen } from '@/lib/alert-priority';
 import { AppHeader } from '@/components/app-header';
 import { AlertStatCards } from '@/components/alerts/alert-stat-cards';
 import { AlertsSearchBar } from '@/components/alerts/alerts-search-bar';
@@ -61,7 +62,7 @@ export default function CockpitPage() {
   const inConsole = (a: Alert) => consoleMode === 'all' || domainForSource(a.ai_analysis?.source as string | undefined) === consoleMode;
   const consoleDomain = consoleMode === 'all' ? undefined : consoleMode;
 
-  const baseStat = (a: Alert) => selectedTenantIds.includes(a.tenant_id) && inConsole(a) && a.status !== 'resolved' && a.status !== 'suppressed';
+  const baseStat = (a: Alert) => selectedTenantIds.includes(a.tenant_id) && inConsole(a) && isOpen(a);
   const stats = {
     total: alerts.filter(baseStat).length,
     fatal: alerts.filter((a) => baseStat(a) && a.severity === 'fatal').length,
@@ -70,16 +71,20 @@ export default function CockpitPage() {
     info: alerts.filter((a) => baseStat(a) && a.severity === 'info').length,
   };
 
-  const filteredAlerts = alerts.filter((a) => {
-    const matchesSearch =
-      a.summary.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      a.event_type.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      ((a.ai_analysis?.source as string) || '').toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesSeverity = severityFilter === 'all' || a.severity === severityFilter;
-    const matchesTenant = selectedTenantIds.includes(a.tenant_id);
-    const isActive = a.status !== 'resolved' && a.status !== 'suppressed';
-    return matchesSearch && matchesSeverity && matchesTenant && isActive && inConsole(a);
-  });
+  // Operational console: the working set is OPEN alerts only (resolved/suppressed live in the future
+  // History view), ordered by urgency — highest severity first, then closest-to-SLA-breach — so an
+  // old-but-still-open critical never sinks below a fresh info. Recency is only the final tiebreak.
+  const filteredAlerts = alerts
+    .filter((a) => {
+      const matchesSearch =
+        a.summary.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        a.event_type.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        ((a.ai_analysis?.source as string) || '').toLowerCase().includes(searchTerm.toLowerCase());
+      const matchesSeverity = severityFilter === 'all' || a.severity === severityFilter;
+      const matchesTenant = selectedTenantIds.includes(a.tenant_id);
+      return matchesSearch && matchesSeverity && matchesTenant && isOpen(a) && inConsole(a);
+    })
+    .sort(compareByPriority);
 
   useEffect(() => {
     const latest = alerts[0];
