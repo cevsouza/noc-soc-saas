@@ -33,6 +33,7 @@ export function TopologyView({
   const [onlyAlerting, setOnlyAlerting] = useState(false);
   const [hideStale, setHideStale] = useState(false);
   const [originFilter, setOriginFilter] = useState<'all' | 'discovery' | 'telemetry' | 'both' | 'neighbor'>('all');
+  const [colorMode, setColorMode] = useState<'severity' | 'subnet' | 'location'>('severity');
   const [hiddenTiers, setHiddenTiers] = useState<Set<string>>(new Set());
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
@@ -84,6 +85,14 @@ export function TopologyView({
   }, [allNodes, hiddenTiers, onlyAlerting, hideStale, originFilter, search]);
 
   const staleCount = useMemo(() => allNodes.filter((n) => n.stale).length, [allNodes]);
+
+  // Distinct groups present among the visible nodes, for the legend (T-C).
+  const groups = useMemo(() => {
+    if (colorMode === 'severity') return [];
+    const set = new Set<string>();
+    for (const n of nodes) set.add(groupKeyOf(n, colorMode));
+    return Array.from(set).sort();
+  }, [nodes, colorMode]);
 
   const visibleIds = useMemo(() => new Set(nodes.map((n) => n.id)), [nodes]);
   const edges = useMemo(
@@ -259,6 +268,16 @@ export function TopologyView({
             <option value="telemetry">Telemetria (alertas)</option>
             <option value="neighbor">Vizinho</option>
           </select>
+          <select
+            value={colorMode}
+            onChange={(e) => setColorMode(e.target.value as typeof colorMode)}
+            className="px-2 py-1.5 rounded-md bg-black/40 border border-white/10 text-[11px] font-bold text-slate-300"
+            title="Como colorir os nós"
+          >
+            <option value="severity">Cor: severidade</option>
+            <option value="subnet">Cor: sub-rede</option>
+            <option value="location">Cor: localização</option>
+          </select>
           <span className="flex items-center gap-1 text-[10px] text-slate-500 uppercase font-bold ml-1"><Filter className="w-3 h-3" /> Tipos:</span>
           {presentTiers.map((t) => (
             <button
@@ -270,6 +289,19 @@ export function TopologyView({
             >
               {t.label}
             </button>
+          ))}
+        </div>
+      )}
+
+      {/* Grouping legend (T-C): colors by subnet or CMDB location. */}
+      {colorMode !== 'severity' && groups.length > 0 && (
+        <div className="mb-3 flex flex-wrap items-center gap-2 text-[10px]">
+          <span className="text-slate-500 uppercase font-bold">{colorMode === 'subnet' ? 'Sub-redes' : 'Localizações'}:</span>
+          {groups.map((g) => (
+            <span key={g} className="flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-white/[0.03] border border-white/10 text-slate-300">
+              <span className="w-2.5 h-2.5 rounded-full" style={{ background: groupColor(g) }} />
+              {g}
+            </span>
           ))}
         </div>
       )}
@@ -344,6 +376,9 @@ export function TopologyView({
                     const p = layout.pos[node.id];
                     if (!p) return null;
                     const color = nodeColor(node);
+                    // When grouping (T-C), the node border takes the group color while the pulsing ring
+                    // still signals open-alert severity — so you see site/subnet AND danger at once.
+                    const stroke = colorMode === 'severity' ? color.stroke : groupColor(groupKeyOf(node, colorMode));
                     const label = node.label.length > 15 ? node.label.slice(0, 14) + '…' : node.label;
                     const isSel = selectedId === node.id;
                     return (
@@ -361,7 +396,7 @@ export function TopologyView({
                           <circle cx={p.x} cy={p.y} r="26" className="fill-none animate-ping" stroke={color.ring} strokeWidth="1" />
                         )}
                         {isSel && <circle cx={p.x} cy={p.y} r="27" className="fill-none" stroke="#e2e8f0" strokeWidth="1.5" strokeDasharray="2 2" />}
-                        <circle cx={p.x} cy={p.y} r="21" fill={color.fill} stroke={color.stroke} strokeWidth="2" strokeDasharray={node.origin === 'neighbor' ? '3 2' : undefined} />
+                        <circle cx={p.x} cy={p.y} r="21" fill={color.fill} stroke={stroke} strokeWidth="2" strokeDasharray={node.origin === 'neighbor' ? '3 2' : undefined} />
                         <text x={p.x} y={p.y - 1} className="fill-slate-100 font-bold" fontSize="8" textAnchor="middle">{label}</text>
                         <text x={p.x} y={p.y + 9} className="fill-slate-400" fontSize="6.5" textAnchor="middle">
                           {node.unresolved_alerts > 0 ? `${node.unresolved_alerts} aberto(s)` : kindLabel(node.kind)}
@@ -737,6 +772,29 @@ function nodeColor(node: GraphNode): { fill: string; stroke: string; ring: strin
   }
   if (node.origin === 'neighbor') return { fill: '#0b0f19', stroke: '#64748b', ring: '#64748b' };
   return { fill: '#0f172a', stroke: '#10b981', ring: '#10b981' };
+}
+
+// ---- grouping (T-C): color nodes by subnet (from IPv4 id) or CMDB location ----
+
+const GROUP_PALETTE = ['#38bdf8', '#a78bfa', '#34d399', '#fbbf24', '#f472b6', '#22d3ee', '#c084fc', '#4ade80', '#facc15', '#fb7185'];
+
+// subnetOf returns the /24 of an IPv4 node id (device nodes are keyed by IP), or null for hostnames.
+function subnetOf(id: string): string | null {
+  const m = id.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.\d{1,3}$/);
+  return m ? `${m[1]}.${m[2]}.${m[3]}.0/24` : null;
+}
+
+function groupKeyOf(node: GraphNode, mode: 'subnet' | 'location'): string {
+  if (mode === 'subnet') return subnetOf(node.id) ?? 'sem IP';
+  return node.location || 'sem localização';
+}
+
+// groupColor maps a group key to a stable palette color; the "unknown" buckets get a neutral grey.
+function groupColor(key: string): string {
+  if (key === 'sem IP' || key === 'sem localização') return '#64748b';
+  let h = 0;
+  for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) >>> 0;
+  return GROUP_PALETTE[h % GROUP_PALETTE.length];
 }
 
 function originLabel(origin: string): string {

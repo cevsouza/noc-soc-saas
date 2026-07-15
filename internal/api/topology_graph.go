@@ -77,6 +77,9 @@ type GraphNode struct {
 	// (T-B). LastSeen is the last discovery timestamp (nil for telemetry/neighbour nodes).
 	Stale    bool       `json:"stale"`
 	LastSeen *time.Time `json:"last_seen,omitempty"`
+	// Location is the CMDB location of the asset this node maps to, when set (T-C) — lets the UI group
+	// the map by site. Empty when the asset has no location or isn't a managed asset.
+	Location string `json:"location,omitempty"`
 }
 
 // GraphEdge is one physical adjacency between two nodes.
@@ -316,6 +319,7 @@ func HandleGetTopologyGraph(pgPool *pgxpool.Pool) http.HandlerFunc {
 		var links []GraphLinkIn
 		var hosts []GraphHostIn
 		var aliases []AssetAlias
+		locations := map[string]string{} // asset identifier -> CMDB location (T-C)
 
 		err = db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
 			dr, e := tx.Query(ctx, `SELECT ip, sysname, vendor, device_type, last_seen FROM discovered_devices WHERE tenant_id = $1 LIMIT 500`, tenantID)
@@ -346,18 +350,24 @@ func HandleGetTopologyGraph(pgPool *pgxpool.Pool) http.HandlerFunc {
 			}
 			lr.Close()
 
-			// CMDB aliases for manual host↔device mapping (slice T3).
-			aar, e := tx.Query(ctx, `SELECT identifier, aliases FROM assets WHERE tenant_id = $1 AND array_length(aliases, 1) > 0`, tenantID)
+			// CMDB aliases for manual host↔device mapping (slice T3) + locations for grouping (T-C).
+			aar, e := tx.Query(ctx, `SELECT identifier, aliases, COALESCE(location, '') FROM assets WHERE tenant_id = $1`, tenantID)
 			if e != nil {
 				return e
 			}
 			for aar.Next() {
 				var a AssetAlias
-				if e := aar.Scan(&a.Identifier, &a.Aliases); e != nil {
+				var loc string
+				if e := aar.Scan(&a.Identifier, &a.Aliases, &loc); e != nil {
 					aar.Close()
 					return e
 				}
-				aliases = append(aliases, a)
+				if len(a.Aliases) > 0 {
+					aliases = append(aliases, a)
+				}
+				if loc != "" {
+					locations[a.Identifier] = loc
+				}
 			}
 			aar.Close()
 
@@ -400,6 +410,14 @@ func HandleGetTopologyGraph(pgPool *pgxpool.Pool) http.HandlerFunc {
 		}
 
 		graph := buildTopologyGraph(devices, links, hosts, aliases, time.Now().Add(-topologyStaleThreshold))
+		// Attach CMDB location to each node whose id matches a managed asset identifier (T-C).
+		if len(locations) > 0 {
+			for i := range graph.Nodes {
+				if loc, ok := locations[graph.Nodes[i].ID]; ok {
+					graph.Nodes[i].Location = loc
+				}
+			}
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(graph)
 	}

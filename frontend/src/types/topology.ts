@@ -11,6 +11,8 @@ export interface GraphNode {
   // Stale marks a discovered device the agent hasn't re-observed within the freshness window (T-B).
   stale?: boolean;
   last_seen?: string;
+  // CMDB location of the asset this node maps to, when set — used to group the map by site (T-C).
+  location?: string;
 }
 
 export interface GraphEdge {
