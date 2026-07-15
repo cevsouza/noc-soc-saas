@@ -32,9 +32,10 @@ const TAB_BUTTON_CLASS = (active: boolean) =>
 
 const LINK_CHIP = 'px-2.5 py-1 rounded-lg border bg-white/[0.02] border-white/10 text-slate-500 hover:text-slate-300 transition-all';
 
-// The cockpit body, rendered by three routes: `/` (unified, console toggle active), `/noc` and `/soc`
-// (dedicated consoles, B9). When lockedConsole is set the console is fixed to that domain (no toggle),
-// with quick links to switch — so segregated NOC and SOC teams each get their own bookmarkable URL.
+// The cockpit body, rendered by three routes: `/` (unified, all domains — no toggle), `/noc` and `/soc`
+// (dedicated consoles, B9). The domain is a property of the ROUTE, not an in-page control: `/` always
+// shows every domain, and NOC/SOC are reached only via their own bookmarkable URLs, so a segregated
+// team lands already scoped and can't accidentally switch. Each route links across to the others.
 export function CockpitConsole({ lockedConsole }: { lockedConsole?: 'noc' | 'soc' }) {
   const { token, user } = useAuth();
   const { tenants, selectedTenantIds, setSelectedTenantIds } = useTenantSelection();
@@ -44,7 +45,8 @@ export function CockpitConsole({ lockedConsole }: { lockedConsole?: 'noc' | 'soc
   const pendingSettingsCount = pendingApprovals + pendingResponses;
 
   const [cockpitTab, setCockpitTab] = useState<CockpitTab>('alerts');
-  const [consoleMode, setConsoleMode] = useState<ConsoleMode>(lockedConsole ?? 'all');
+  // Domain comes from the route: `/` is always all-domains; `/noc` and `/soc` lock to their domain.
+  const consoleMode: ConsoleMode = lockedConsole ?? 'all';
   const [timeLens, setTimeLens] = useState<TimeLens>('all');
   const [sortKey, setSortKey] = useState<AlertSortKey>('priority');
   const [searchTerm, setSearchTerm] = useState('');
@@ -218,32 +220,14 @@ export function CockpitConsole({ lockedConsole }: { lockedConsole?: 'noc' | 'soc
               </>
             ) : (
               <>
-                {([
-                  { id: 'all', label: 'Unificado' },
-                  { id: 'noc', label: 'NOC' },
-                  { id: 'soc', label: 'SOC' },
-                ] as { id: ConsoleMode; label: string }[]).map((m) => (
-                  <button
-                    key={m.id}
-                    onClick={() => setConsoleMode(m.id)}
-                    className={`px-3 py-1 rounded-lg border transition-all cursor-pointer ${
-                      consoleMode === m.id
-                        ? m.id === 'soc'
-                          ? 'bg-rose-500/20 border-rose-500/50 text-rose-300'
-                          : m.id === 'noc'
-                            ? 'bg-sky-500/20 border-sky-500/50 text-sky-300'
-                            : 'bg-white/10 border-white/20 text-slate-100'
-                        : 'bg-white/[0.02] border-white/10 text-slate-500 hover:text-slate-300'
-                    }`}
-                  >
-                    {m.label}
-                  </button>
-                ))}
-                <Link href="/noc" className={LINK_CHIP} title="Console NOC dedicado">
-                  /noc ↗
+                <span className="px-3 py-1 rounded-lg border bg-white/10 border-white/20 text-slate-100">
+                  Unificado · Todos os domínios
+                </span>
+                <Link href="/noc" className={LINK_CHIP} title="Console NOC dedicado (rede &amp; disponibilidade)">
+                  NOC ↗
                 </Link>
-                <Link href="/soc" className={LINK_CHIP} title="Console SOC dedicado">
-                  /soc ↗
+                <Link href="/soc" className={LINK_CHIP} title="Console SOC dedicado (segurança)">
+                  SOC ↗
                 </Link>
               </>
             )}
