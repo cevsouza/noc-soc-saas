@@ -1,9 +1,14 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { RefreshCw, Radar, ServerCog, Wifi, WifiOff, Settings2, AlertCircle, Search, X, Filter } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { RefreshCw, Radar, ServerCog, Wifi, WifiOff, Settings2, AlertCircle, Search, X, Filter, ZoomIn, ZoomOut, Maximize2 } from 'lucide-react';
 import { apiFetchJson } from '@/lib/api-client';
 import type { TopologyGraph, GraphNode, GraphEdge, TopologyStatus } from '@/types';
+
+// Fixed logical viewport the graph is drawn into; the SVG scales it to the container, and a
+// transform on the inner <g> provides zoom/pan (T-A).
+const VBW = 960;
+const VBH = 480;
 
 // Merged topology graph (discovery slice C; onboarding T1; robust matching T3; scalable view T4).
 // Fetches GET /api/v1/topology/graph and renders it as a HIERARCHICAL layout grouped by device role
@@ -82,13 +87,70 @@ export function TopologyView({
     [allEdges, visibleIds],
   );
 
-  const layout = useMemo(() => computeLayout(nodes), [nodes]);
+  const layout = useMemo(() => computeLayout(nodes, edges), [nodes, edges]);
   const nodesById = useMemo(() => {
     const m: Record<string, GraphNode> = {};
     for (const n of allNodes) m[n.id] = n;
     return m;
   }, [allNodes]);
   const selected = selectedId ? nodesById[selectedId] : null;
+
+  // Zoom & pan (T-A). The graph lives in a fixed VBW×VBH viewport; a transform on the inner <g> scales
+  // and translates it. Fit-to-view whenever the layout changes; wheel zooms toward the cursor; drag pans.
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  const draggingRef = useRef(false);
+  const didDragRef = useRef(false);
+  const [tf, setTf] = useState({ x: 0, y: 0, k: 1 });
+
+  const fitView = useCallback(() => {
+    const k = Math.min(VBW / layout.width, VBH / layout.height, 1.2);
+    setTf({ k, x: (VBW - layout.width * k) / 2, y: (VBH - layout.height * k) / 2 });
+  }, [layout.width, layout.height]);
+
+  useEffect(() => {
+    fitView();
+  }, [fitView]);
+
+  const zoomAround = (factor: number, cx: number, cy: number) => {
+    setTf((t) => {
+      const k = Math.min(4, Math.max(0.2, t.k * factor));
+      const r = k / t.k;
+      return { k, x: cx - (cx - t.x) * r, y: cy - (cy - t.y) * r };
+    });
+  };
+
+  // Wheel zoom needs a non-passive listener to preventDefault (React's onWheel is passive).
+  useEffect(() => {
+    const el = svgRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const rect = el.getBoundingClientRect();
+      if (!rect.width) return;
+      const cx = ((e.clientX - rect.left) * VBW) / rect.width;
+      const cy = ((e.clientY - rect.top) * VBH) / rect.height;
+      zoomAround(e.deltaY < 0 ? 1.12 : 1 / 1.12, cx, cy);
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, [nodes.length]);
+
+  const onPanStart = () => {
+    draggingRef.current = true;
+    didDragRef.current = false;
+  };
+  const onPanMove = (e: React.MouseEvent) => {
+    if (!draggingRef.current || !svgRef.current) return;
+    const rect = svgRef.current.getBoundingClientRect();
+    if (!rect.width) return;
+    didDragRef.current = true;
+    const sx = VBW / rect.width;
+    const sy = VBH / rect.height;
+    setTf((t) => ({ ...t, x: t.x + e.movementX * sx, y: t.y + e.movementY * sy }));
+  };
+  const onPanEnd = () => {
+    draggingRef.current = false;
+  };
 
   const noDiscovery = !!status && status.discovered_devices === 0;
   const nothingAtAll = noDiscovery && allNodes.length === 0;
@@ -198,80 +260,118 @@ export function TopologyView({
       )}
 
       <div className="flex gap-3">
-        <div className="relative flex-1 min-h-[460px] max-h-[520px] bg-black/60 rounded-xl border border-white/5 flex items-center justify-center overflow-auto">
+        <div className="relative flex-1 h-[480px] bg-black/60 rounded-xl border border-white/5 overflow-hidden">
           {isLoading && !data ? (
-            <div className="text-xs text-slate-500">Carregando grafo…</div>
+            <div className="absolute inset-0 flex items-center justify-center text-xs text-slate-500">Carregando grafo…</div>
           ) : nothingAtAll ? (
-            <DiscoveryOnboarding onConfigureDiscovery={onConfigureDiscovery} hasAgent={!!status && status.agent_count > 0} hasTargets={!!status && status.discovery_targets > 0} />
+            <div className="absolute inset-0 flex items-center justify-center">
+              <DiscoveryOnboarding onConfigureDiscovery={onConfigureDiscovery} hasAgent={!!status && status.agent_count > 0} hasTargets={!!status && status.discovery_targets > 0} />
+            </div>
           ) : nodes.length === 0 ? (
-            <div className="flex flex-col items-center gap-2 text-slate-500 px-6 text-center">
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-slate-500 px-6 text-center">
               <ServerCog className="w-8 h-8 text-slate-600" />
               <p className="text-sm font-bold text-slate-400">Nenhum ativo com os filtros atuais</p>
               <p className="text-[11px] max-w-md">Ajuste a busca ou os filtros de tipo/origem acima.</p>
             </div>
           ) : (
-            <svg width={layout.width} height={layout.height} viewBox={`0 0 ${layout.width} ${layout.height}`} className="block">
-              <defs>
-                <pattern id="topo-grid" width="24" height="24" patternUnits="userSpaceOnUse">
-                  <path d="M 24 0 L 0 0 0 24" fill="none" stroke="rgba(255,255,255,0.015)" strokeWidth="1" />
-                </pattern>
-              </defs>
-              <rect width="100%" height="100%" fill="url(#topo-grid)" />
+            <>
+              <svg
+                ref={svgRef}
+                width="100%"
+                height="100%"
+                viewBox={`0 0 ${VBW} ${VBH}`}
+                preserveAspectRatio="xMidYMid meet"
+                onMouseDown={onPanStart}
+                onMouseMove={onPanMove}
+                onMouseUp={onPanEnd}
+                onMouseLeave={onPanEnd}
+                className="block"
+                style={{ cursor: draggingRef.current ? 'grabbing' : 'grab', userSelect: 'none', touchAction: 'none' }}
+              >
+                <defs>
+                  <pattern id="topo-grid" width="24" height="24" patternUnits="userSpaceOnUse">
+                    <path d="M 24 0 L 0 0 0 24" fill="none" stroke="rgba(255,255,255,0.015)" strokeWidth="1" />
+                  </pattern>
+                </defs>
+                <rect x={0} y={0} width={VBW} height={VBH} fill="url(#topo-grid)" />
 
-              {/* Tier band labels */}
-              {layout.tiers.map((t) => (
-                <text key={t.key} x={10} y={t.y - 26} className="fill-slate-600 font-bold uppercase" fontSize="8" letterSpacing="1">
-                  {t.label}
-                </text>
-              ))}
-
-              {/* Physical edges (LLDP/CDP) */}
-              {edges.map((e, i) => {
-                const s = layout.pos[e.source];
-                const t = layout.pos[e.target];
-                if (!s || !t) return null;
-                const active = selectedId === e.source || selectedId === e.target;
-                return (
-                  <g key={`e-${i}`}>
-                    <line
-                      x1={s.x}
-                      y1={s.y}
-                      x2={t.x}
-                      y2={t.y}
-                      stroke={active ? 'rgba(56,189,248,0.8)' : 'rgba(56,189,248,0.28)'}
-                      strokeWidth={active ? 2 : 1.25}
-                    />
-                    <title>{`${nodesById[e.source]?.label} (${e.local_port || '?'}) ↔ ${nodesById[e.target]?.label} (${e.remote_port || '?'}) · ${e.protocol.toUpperCase()}`}</title>
-                  </g>
-                );
-              })}
-
-              {/* Nodes */}
-              {nodes.map((node) => {
-                const p = layout.pos[node.id];
-                if (!p) return null;
-                const color = nodeColor(node);
-                const label = node.label.length > 15 ? node.label.slice(0, 14) + '…' : node.label;
-                const isSel = selectedId === node.id;
-                return (
-                  <g key={node.id} className="cursor-pointer" onClick={() => setSelectedId(isSel ? null : node.id)}>
-                    <title>{`${node.label}\n${originLabel(node.origin)}${node.vendor ? ` · ${node.vendor}` : ''}${node.kind ? ` · ${node.kind}` : ''}`}</title>
-                    {node.unresolved_alerts > 0 && (
-                      <circle cx={p.x} cy={p.y} r="26" className="fill-none animate-ping" stroke={color.ring} strokeWidth="1" />
-                    )}
-                    {isSel && <circle cx={p.x} cy={p.y} r="27" className="fill-none" stroke="#e2e8f0" strokeWidth="1.5" strokeDasharray="2 2" />}
-                    <circle cx={p.x} cy={p.y} r="21" fill={color.fill} stroke={color.stroke} strokeWidth="2" strokeDasharray={node.origin === 'neighbor' ? '3 2' : undefined} />
-                    <text x={p.x} y={p.y - 1} className="fill-slate-100 font-bold" fontSize="8" textAnchor="middle">{label}</text>
-                    <text x={p.x} y={p.y + 9} className="fill-slate-400" fontSize="6.5" textAnchor="middle">
-                      {node.unresolved_alerts > 0 ? `${node.unresolved_alerts} aberto(s)` : kindLabel(node.kind)}
+                <g transform={`translate(${tf.x} ${tf.y}) scale(${tf.k})`}>
+                  {/* Tier band labels */}
+                  {layout.tiers.map((t) => (
+                    <text key={t.key} x={10} y={t.y - 26} className="fill-slate-600 font-bold uppercase" fontSize="8" letterSpacing="1">
+                      {t.label}
                     </text>
-                  </g>
-                );
-              })}
-            </svg>
+                  ))}
+
+                  {/* Physical edges (LLDP/CDP) */}
+                  {edges.map((e, i) => {
+                    const s = layout.pos[e.source];
+                    const t = layout.pos[e.target];
+                    if (!s || !t) return null;
+                    const active = selectedId === e.source || selectedId === e.target;
+                    return (
+                      <g key={`e-${i}`}>
+                        <line
+                          x1={s.x}
+                          y1={s.y}
+                          x2={t.x}
+                          y2={t.y}
+                          stroke={active ? 'rgba(56,189,248,0.8)' : 'rgba(56,189,248,0.28)'}
+                          strokeWidth={active ? 2 : 1.25}
+                        />
+                        <title>{`${nodesById[e.source]?.label} (${e.local_port || '?'}) ↔ ${nodesById[e.target]?.label} (${e.remote_port || '?'}) · ${e.protocol.toUpperCase()}`}</title>
+                      </g>
+                    );
+                  })}
+
+                  {/* Nodes */}
+                  {nodes.map((node) => {
+                    const p = layout.pos[node.id];
+                    if (!p) return null;
+                    const color = nodeColor(node);
+                    const label = node.label.length > 15 ? node.label.slice(0, 14) + '…' : node.label;
+                    const isSel = selectedId === node.id;
+                    return (
+                      <g
+                        key={node.id}
+                        className="cursor-pointer"
+                        onClick={() => {
+                          if (didDragRef.current) return; // suppress selection after a pan drag
+                          setSelectedId(isSel ? null : node.id);
+                        }}
+                      >
+                        <title>{`${node.label}\n${originLabel(node.origin)}${node.vendor ? ` · ${node.vendor}` : ''}${node.kind ? ` · ${node.kind}` : ''}`}</title>
+                        {node.unresolved_alerts > 0 && (
+                          <circle cx={p.x} cy={p.y} r="26" className="fill-none animate-ping" stroke={color.ring} strokeWidth="1" />
+                        )}
+                        {isSel && <circle cx={p.x} cy={p.y} r="27" className="fill-none" stroke="#e2e8f0" strokeWidth="1.5" strokeDasharray="2 2" />}
+                        <circle cx={p.x} cy={p.y} r="21" fill={color.fill} stroke={color.stroke} strokeWidth="2" strokeDasharray={node.origin === 'neighbor' ? '3 2' : undefined} />
+                        <text x={p.x} y={p.y - 1} className="fill-slate-100 font-bold" fontSize="8" textAnchor="middle">{label}</text>
+                        <text x={p.x} y={p.y + 9} className="fill-slate-400" fontSize="6.5" textAnchor="middle">
+                          {node.unresolved_alerts > 0 ? `${node.unresolved_alerts} aberto(s)` : kindLabel(node.kind)}
+                        </text>
+                      </g>
+                    );
+                  })}
+                </g>
+              </svg>
+
+              {/* Zoom controls */}
+              <div className="absolute top-3 right-3 flex flex-col gap-1">
+                <button onClick={() => zoomAround(1.2, VBW / 2, VBH / 2)} title="Aproximar" className="p-1.5 rounded-md bg-black/60 border border-white/10 text-slate-300 hover:bg-white/10 transition-all">
+                  <ZoomIn className="w-3.5 h-3.5" />
+                </button>
+                <button onClick={() => zoomAround(1 / 1.2, VBW / 2, VBH / 2)} title="Afastar" className="p-1.5 rounded-md bg-black/60 border border-white/10 text-slate-300 hover:bg-white/10 transition-all">
+                  <ZoomOut className="w-3.5 h-3.5" />
+                </button>
+                <button onClick={fitView} title="Ajustar à tela" className="p-1.5 rounded-md bg-black/60 border border-white/10 text-slate-300 hover:bg-white/10 transition-all">
+                  <Maximize2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </>
           )}
           <div className="absolute bottom-3 left-4 text-[10px] text-slate-500 bg-black/60 border border-white/5 px-2.5 py-1 rounded-md pointer-events-none">
-            💡 <em>Clique num ativo para ver detalhes. Linhas = enlaces físicos LLDP/CDP.</em>
+            💡 <em>Arraste para mover · role para dar zoom · clique num ativo para detalhes. Linhas = enlaces LLDP/CDP.</em>
           </div>
         </div>
 
@@ -480,14 +580,23 @@ function tierKey(kind: string): string {
 
 type Layout = { pos: Record<string, { x: number; y: number }>; width: number; height: number; tiers: { key: string; label: string; y: number }[] };
 
-// computeLayout places nodes in horizontal bands by tier, wrapping wide tiers into sub-rows. Deterministic
-// (sorted by open-alerts then label) so the picture is stable across refreshes.
-function computeLayout(nodes: GraphNode[]): Layout {
+// computeLayout places nodes in horizontal bands by tier, wrapping wide tiers into sub-rows. Within a
+// tier, nodes are ordered by a barycenter (median) heuristic over the physical edges so connected
+// nodes sit near each other and edge crossings drop — falling back to open-alerts/label for a stable,
+// deterministic picture. Connectivity-aware ordering is T-A.
+function computeLayout(nodes: GraphNode[], edges: GraphEdge[]): Layout {
   const perRow = 8;
   const dx = 108;
   const dyRow = 96;
   const bandGap = 34;
   const topMargin = 48;
+
+  // Adjacency over the visible edges (both directions) for the barycenter passes.
+  const adj: Record<string, string[]> = {};
+  for (const e of edges) {
+    (adj[e.source] ||= []).push(e.target);
+    (adj[e.target] ||= []).push(e.source);
+  }
 
   const byTier = new Map<string, GraphNode[]>();
   for (const n of nodes) {
@@ -495,9 +604,50 @@ function computeLayout(nodes: GraphNode[]): Layout {
     if (!byTier.has(k)) byTier.set(k, []);
     byTier.get(k)!.push(n);
   }
+  // Seed order: most-alerting first, then label (deterministic).
   byTier.forEach((arr) => {
     arr.sort((a, b) => (b.unresolved_alerts - a.unresolved_alerts) || a.label.localeCompare(b.label));
   });
+
+  // Normalized column index (0..1) of each node within its tier — the coordinate the barycenter uses.
+  const colIndex: Record<string, number> = {};
+  const recomputeCol = () => {
+    byTier.forEach((arr) => {
+      arr.forEach((node, i) => {
+        colIndex[node.id] = arr.length <= 1 ? 0.5 : i / (arr.length - 1);
+      });
+    });
+  };
+  recomputeCol();
+
+  // A few barycenter sweeps: reorder each tier by the mean column of its neighbours (in any tier).
+  // Nodes with no edges keep their seed position (barycenter = their own current index).
+  for (let iter = 0; iter < 4; iter++) {
+    byTier.forEach((arr) => {
+      const bary: Record<string, number> = {};
+      for (const node of arr) {
+        const nbrs = adj[node.id];
+        let sum = 0;
+        let cnt = 0;
+        if (nbrs) {
+          for (const m of nbrs) {
+            if (colIndex[m] !== undefined) {
+              sum += colIndex[m];
+              cnt++;
+            }
+          }
+        }
+        bary[node.id] = cnt ? sum / cnt : colIndex[node.id];
+      }
+      arr.sort(
+        (a, b) =>
+          (bary[a.id] - bary[b.id]) ||
+          (b.unresolved_alerts - a.unresolved_alerts) ||
+          a.label.localeCompare(b.label),
+      );
+    });
+    recomputeCol();
+  }
 
   const pos: Record<string, { x: number; y: number }> = {};
   const tierBands: { key: string; label: string; y: number }[] = [];
