@@ -1,0 +1,1 @@
+ALTER TABLE alerts DROP COLUMN IF EXISTS ingested_at;

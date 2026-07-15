@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { Activity, AlertOctagon, Bot, Radio, RefreshCw, ShieldHalf, Layers, RotateCcw, AlertTriangle, Radar, ServerOff, Users, ShieldAlert } from 'lucide-react';
+import { Activity, AlertOctagon, Bot, Radio, RefreshCw, ShieldHalf, Layers, RotateCcw, AlertTriangle, Radar, ServerOff, Users, ShieldAlert, Timer } from 'lucide-react';
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { apiFetchJson } from '@/lib/api-client';
 import type { OperationalStats, CoverageStats, AnalystStats } from '@/types';
@@ -119,6 +119,16 @@ export function OperationalKpisPanel({ tenantId }: { tenantId?: string }) {
                   : 'nenhum incidente classificado'
               }
               accent={stats.disposition.false_positive_rate_pct > 0 ? 'text-rose-400' : undefined}
+            />
+            <KpiCard
+              icon={<Timer className="w-3.5 h-3.5 text-cyan-400" />}
+              label="MTTD (tempo p/ detectar)"
+              value={stats.detection.instrumented > 0 ? formatDuration(stats.detection.avg_mttd_seconds) : '—'}
+              sub={
+                stats.detection.instrumented > 0
+                  ? `${stats.detection.instrumented} de ${stats.detection.total_alerts} instrumentados (${stats.detection.instrumented_pct.toFixed(0)}%)`
+                  : 'sem timestamp de origem no período'
+              }
             />
           </div>
 
@@ -307,4 +317,13 @@ function formatAgo(seconds: number): string {
   if (seconds < 3600) return `há ${Math.floor(seconds / 60)}min`;
   if (seconds < 86400) return `há ${Math.floor(seconds / 3600)}h`;
   return `há ${Math.floor(seconds / 86400)}d`;
+}
+
+// Human-readable duration (no "há" prefix) for the MTTD value.
+function formatDuration(seconds: number): string {
+  const s = Math.round(seconds);
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
+  return `${Math.floor(s / 86400)}d ${Math.floor((s % 86400) / 3600)}h`;
 }

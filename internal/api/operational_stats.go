@@ -53,8 +53,22 @@ type OperationalStats struct {
 	Rework        ReworkStats       `json:"rework"`
 	Escalations   EscalationStats   `json:"escalations"`
 	Disposition   DispositionStats  `json:"disposition"`
+	Detection     DetectionStats    `json:"detection"`
 	ByMitre       []MitreCount      `json:"by_mitre"`
 	SourceHealth  []SourceHeartbeat `json:"source_health"`
+}
+
+// DetectionStats is the MTTD (mean time to detect) breakdown (K4): the delay between an event
+// happening at the source (alerts.created_at = the connector-parsed origin time) and the platform
+// ingesting it (alerts.ingested_at). Only alerts with a usable origin timestamp are counted — a
+// detection delay between 1s and 7d — so alerts whose source carries no origin time (delay ~0) and
+// clock-skew/backfill garbage (delay > 7d) are excluded from the average. InstrumentedPct shows how
+// much of the alert volume actually carries a source timestamp.
+type DetectionStats struct {
+	TotalAlerts     int     `json:"total_alerts"`
+	Instrumented    int     `json:"instrumented"`
+	InstrumentedPct float64 `json:"instrumented_pct"`
+	AvgMTTDSeconds  float64 `json:"avg_mttd_seconds"`
 }
 
 // DispositionStats is the detection-quality breakdown (K5): of the incidents an analyst classified in
@@ -155,6 +169,15 @@ func falsePositiveRatePct(falsePositive, classified int) float64 {
 		return 0
 	}
 	return float64(falsePositive) / float64(classified) * 100
+}
+
+// detectionCoveragePct returns instrumented/total as a percentage (share of alerts carrying a usable
+// source timestamp), guarding division by zero.
+func detectionCoveragePct(instrumented, total int) float64 {
+	if total <= 0 {
+		return 0
+	}
+	return float64(instrumented) / float64(total) * 100
 }
 
 // HandleGetOperationalStats returns the tactical KPI bundle for the caller's tenant. Any
@@ -292,6 +315,21 @@ func HandleGetOperationalStats(pgPool *pgxpool.Pool, redisClient *redis.Client) 
 			}
 			stats.Disposition.Classified = stats.Disposition.TruePositive + stats.Disposition.FalsePositive + stats.Disposition.Benign
 			stats.Disposition.FalsePositiveRatePct = falsePositiveRatePct(stats.Disposition.FalsePositive, stats.Disposition.Classified)
+
+			// 4f. Detection delay / MTTD (K4): avg (ingested_at - created_at) over alerts whose source
+			// carried a usable origin time — a delay in [1s, 7d]. Excludes now≈now (no origin) and
+			// clock-skew/backfill garbage. created_at is the origin time; ingested_at the detection time.
+			if err := tx.QueryRow(ctx, `
+				SELECT
+					COUNT(*),
+					COUNT(*) FILTER (WHERE ingested_at - created_at BETWEEN interval '1 second' AND interval '7 days'),
+					COALESCE(AVG(EXTRACT(EPOCH FROM (ingested_at - created_at))) FILTER (WHERE ingested_at - created_at BETWEEN interval '1 second' AND interval '7 days'), 0)
+				FROM alerts
+				WHERE tenant_id = $1 AND created_at >= NOW() - $2::interval
+			`, tenantID, window).Scan(&stats.Detection.TotalAlerts, &stats.Detection.Instrumented, &stats.Detection.AvgMTTDSeconds); err != nil {
+				return err
+			}
+			stats.Detection.InstrumentedPct = detectionCoveragePct(stats.Detection.Instrumented, stats.Detection.TotalAlerts)
 
 			// 5. MITRE ATT&CK tactic breakdown (windowed).
 			mitreRows, err := tx.Query(ctx, `

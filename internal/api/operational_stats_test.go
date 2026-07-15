@@ -73,3 +73,21 @@ func TestFalsePositiveRatePct(t *testing.T) {
 		}
 	}
 }
+
+func TestDetectionCoveragePct(t *testing.T) {
+	cases := []struct {
+		instrumented, total int
+		want                float64
+	}{
+		{0, 0, 0},      // no alerts
+		{5, 0, 0},      // guard: total 0 must not divide-by-zero
+		{0, 10, 0},     // none instrumented
+		{4, 10, 40.0},  // 4 of 10 carry a source timestamp
+		{10, 10, 100.0}, // all instrumented
+	}
+	for _, c := range cases {
+		if got := detectionCoveragePct(c.instrumented, c.total); got != c.want {
+			t.Errorf("detectionCoveragePct(%d, %d) = %v, want %v", c.instrumented, c.total, got, c.want)
+		}
+	}
+}

@@ -58,6 +58,15 @@ export interface DispositionStats {
   false_positive_rate_pct: number;
 }
 
+// MTTD / time-to-detect (K4): mean delay from event origin to platform ingestion, over alerts whose
+// source carried a usable origin timestamp.
+export interface DetectionStats {
+  total_alerts: number;
+  instrumented: number;
+  instrumented_pct: number;
+  avg_mttd_seconds: number;
+}
+
 // Monitoring coverage (K2): discovered devices vs. those actually monitored. Served by a separate
 // endpoint (/api/v1/reports/coverage), not part of OperationalStats.
 export interface SilentDevice {
@@ -105,6 +114,7 @@ export interface OperationalStats {
   rework: ReworkStats;
   escalations: EscalationStats;
   disposition: DispositionStats;
+  detection: DetectionStats;
   by_mitre: MitreCount[];
   source_health: SourceHeartbeat[];
 }
