@@ -178,6 +178,15 @@ func (wp *WorkerPool) escalateSLABreach(ctx context.Context, tenantID uuid.UUID,
 	summary := fmt.Sprintf("⏱️ SLA %s estourado: incidente '%s' (%s) aberto há %.0fmin, meta %.0fmin",
 		breach.label(), oi.title, oi.severity, ageMinutes, targetMinutes)
 
+	// Route to the person on point: append who is on-call NOW so every channel's page names them.
+	// Best-effort — a lookup failure must not stop the page (falls back to the breach-only summary).
+	onCall, ocErr := wp.currentOnCall(ctx, tenantID)
+	if ocErr != nil {
+		log.Printf("[SLA] Failed to resolve on-call for tenant %s: %v", tenantID, ocErr)
+	}
+	onCallSuffix := formatOnCallSuffix(onCall)
+	summary += onCallSuffix
+
 	// Synthesize an alert-shaped payload so the existing notifier fan-out can page it unchanged.
 	synth := &model.Alert{
 		ID:          oi.id,
@@ -200,7 +209,7 @@ func (wp *WorkerPool) escalateSLABreach(ctx context.Context, tenantID uuid.UUID,
 		_, e := tx.Exec(tenantCtx, `
 			INSERT INTO incident_comments (incident_id, tenant_id, author, comment)
 			VALUES ($1, $2, 'Sistema', $3)
-		`, oi.id, tenantID, fmt.Sprintf("%s por estouro de %s: aberto há %.0fmin (meta %.0fmin).", api.SLAEscalatedCommentPrefix, breach.label(), ageMinutes, targetMinutes))
+		`, oi.id, tenantID, fmt.Sprintf("%s por estouro de %s: aberto há %.0fmin (meta %.0fmin).%s", api.SLAEscalatedCommentPrefix, breach.label(), ageMinutes, targetMinutes, onCallSuffix))
 		return e
 	}); cerr != nil {
 		log.Printf("[SLA] Failed to log escalation comment for incident %s: %v", oi.id, cerr)
