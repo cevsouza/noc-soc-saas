@@ -42,6 +42,40 @@ export function compareByPriority(a: Alert, b: Alert): number {
   return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
 }
 
+// Sort options exposed to the operator for the alerts list. 'priority' (default) preserves the
+// operational-console ordering; the others let the operator re-sort for a specific triage need.
+export type AlertSortKey = 'priority' | 'recent' | 'oldest' | 'sla';
+
+function byRecent(a: Alert, b: Alert): number {
+  return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+}
+
+function byOldest(a: Alert, b: Alert): number {
+  return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+}
+
+// Pure SLA urgency: soonest/most-overdue deadline first regardless of severity, severity as tiebreak.
+function bySla(a: Alert, b: Alert): number {
+  const deadline = slaDeadlineMs(a) - slaDeadlineMs(b);
+  if (deadline !== 0) return deadline;
+  return SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity];
+}
+
+// Resolves a sort key to its comparator. Falls back to priority for any unknown key.
+export function alertComparator(key: AlertSortKey): (a: Alert, b: Alert) => number {
+  switch (key) {
+    case 'recent':
+      return byRecent;
+    case 'oldest':
+      return byOldest;
+    case 'sla':
+      return bySla;
+    case 'priority':
+    default:
+      return compareByPriority;
+  }
+}
+
 // Time lens: a convenience narrowing of the open working set by alert age. 'all' is the safe default
 // (never hides an open alert); narrower windows are opt-in and the console surfaces a count of what
 // they hide so danger is never silently dropped.

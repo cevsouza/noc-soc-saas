@@ -8,7 +8,7 @@ import { useAlertsSocket } from '@/lib/use-alerts-socket';
 import { usePendingApprovalsCount } from '@/lib/use-pending-approvals-count';
 import { usePendingResponseCount } from '@/lib/use-pending-response-count';
 import { domainForSource, type ConsoleMode } from '@/lib/domain';
-import { compareByPriority, isOpen, withinLens, type TimeLens } from '@/lib/alert-priority';
+import { alertComparator, isOpen, withinLens, type TimeLens, type AlertSortKey } from '@/lib/alert-priority';
 import { AppHeader } from '@/components/app-header';
 import { AlertStatCards } from '@/components/alerts/alert-stat-cards';
 import { AlertsSearchBar } from '@/components/alerts/alerts-search-bar';
@@ -42,6 +42,7 @@ export default function CockpitPage() {
   const [cockpitTab, setCockpitTab] = useState<CockpitTab>('alerts');
   const [consoleMode, setConsoleMode] = useState<ConsoleMode>('all');
   const [timeLens, setTimeLens] = useState<TimeLens>('all');
+  const [sortKey, setSortKey] = useState<AlertSortKey>('priority');
   const [searchTerm, setSearchTerm] = useState('');
   const [severityFilter, setSeverityFilter] = useState<SeverityFilterValue>('all');
   const [selectedAlert, setSelectedAlert] = useState<Alert | null>(null);
@@ -85,10 +86,10 @@ export default function CockpitPage() {
     return matchesSearch && matchesSeverity && matchesTenant && isOpen(a) && inConsole(a);
   });
 
-  // The time lens is a convenience narrowing by age; 'all' (default) never hides an open alert.
-  // Ordered by urgency — highest severity first, then closest-to-SLA-breach — so an old-but-still-open
-  // critical never sinks below a fresh info. Recency is only the final tiebreak.
-  const filteredAlerts = consoleWorkingSet.filter((a) => withinLens(a, timeLens)).sort(compareByPriority);
+  // The time lens is a convenience narrowing by age; 'all' (default) never hides an open alert. The
+  // sort key defaults to 'priority' (severity → SLA burn → recency) but the operator can re-sort by
+  // recency/age/pure-SLA for a specific triage need.
+  const filteredAlerts = consoleWorkingSet.filter((a) => withinLens(a, timeLens)).sort(alertComparator(sortKey));
   // How many open alerts the active lens is hiding — surfaced so danger is never silently dropped.
   const hiddenByLens = consoleWorkingSet.length - filteredAlerts.length;
 
@@ -193,7 +194,7 @@ export default function CockpitPage() {
           </div>
 
           {/* Segregated console selector: NOC (rede/disponibilidade) vs SOC (segurança) */}
-          <div className="flex items-center gap-2 text-[10px] uppercase font-bold tracking-wider">
+          <div className="flex flex-wrap items-center gap-2 gap-y-2 text-[10px] uppercase font-bold tracking-wider">
             <span className="text-slate-500">Console</span>
             {([
               { id: 'all', label: 'Unificado' },
@@ -235,6 +236,27 @@ export default function CockpitPage() {
                 }`}
               >
                 {w.label}
+              </button>
+            ))}
+
+            {/* Sort selector: how the alerts list is ordered. 'Prioridade' is the default. */}
+            <span className="text-slate-500 ml-4">Ordenar</span>
+            {([
+              { id: 'priority', label: 'Prioridade' },
+              { id: 'sla', label: 'SLA' },
+              { id: 'recent', label: 'Recentes' },
+              { id: 'oldest', label: 'Antigos' },
+            ] as { id: AlertSortKey; label: string }[]).map((s) => (
+              <button
+                key={s.id}
+                onClick={() => setSortKey(s.id)}
+                className={`px-3 py-1 rounded-lg border transition-all cursor-pointer ${
+                  sortKey === s.id
+                    ? 'bg-white/10 border-white/20 text-slate-100'
+                    : 'bg-white/[0.02] border-white/10 text-slate-500 hover:text-slate-300'
+                }`}
+              >
+                {s.label}
               </button>
             ))}
           </div>
