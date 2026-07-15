@@ -49,6 +49,15 @@ export interface EscalationStats {
   sla_breaches: number;
 }
 
+// Detection quality (K5): disposition breakdown of classified incidents + false-positive rate.
+export interface DispositionStats {
+  true_positive: number;
+  false_positive: number;
+  benign: number;
+  classified: number;
+  false_positive_rate_pct: number;
+}
+
 // Monitoring coverage (K2): discovered devices vs. those actually monitored. Served by a separate
 // endpoint (/api/v1/reports/coverage), not part of OperationalStats.
 export interface SilentDevice {
@@ -95,6 +104,7 @@ export interface OperationalStats {
   automation: AutomationStats;
   rework: ReworkStats;
   escalations: EscalationStats;
+  disposition: DispositionStats;
   by_mitre: MitreCount[];
   source_health: SourceHeartbeat[];
 }

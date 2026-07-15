@@ -11,7 +11,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { apiFetch, apiFetchJson } from '@/lib/api-client';
-import type { Incident, IncidentAlert, IncidentComment } from '@/types';
+import type { Incident, IncidentAlert, IncidentComment, IncidentDisposition } from '@/types';
 
 type Filter = 'open' | 'acknowledged' | 'resolved' | 'all';
 type Intent = 'acknowledge' | 'resolve';
@@ -45,6 +45,13 @@ function critClass(c: string): string {
   return 'bg-purple-500/15 text-purple-300 border-purple-500/30';
 }
 
+// Analyst disposition (K5): the verdict badge + the three classify options.
+const DISPOSITIONS: { id: IncidentDisposition; label: string; cls: string }[] = [
+  { id: 'true_positive', label: 'Verdadeiro-Positivo', cls: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30' },
+  { id: 'false_positive', label: 'Falso-Positivo', cls: 'bg-rose-500/15 text-rose-300 border-rose-500/30' },
+  { id: 'benign', label: 'Benigno', cls: 'bg-slate-500/15 text-slate-300 border-slate-500/30' },
+];
+
 // Incidents view (Fase 3/3b-cont): the grouped-investigation surface. Each row is an incident —
 // the recurring alerts of one problem collapsed together — with acknowledge/resolve actions and an
 // expandable list of the alerts it groups. Resolving closes the incident (a new occurrence opens a
@@ -62,6 +69,7 @@ export function IncidentsView({ tenantId, domain }: { tenantId?: string; domain?
   const [confirmIntent, setConfirmIntent] = useState<Intent | null>(null);
   const [confirmError, setConfirmError] = useState<string | null>(null);
   const [actioningId, setActioningId] = useState<string | null>(null);
+  const [classifyingId, setClassifyingId] = useState<string | null>(null);
 
   const qtenant = tenantId ? `&tenant_id=${tenantId}` : '';
   const qdomain = domain ? `&domain=${domain}` : '';
@@ -138,6 +146,27 @@ export function IncidentsView({ tenantId, domain }: { tenantId?: string; domain?
     setConfirmTarget(null);
     setConfirmIntent(null);
     setConfirmError(null);
+  };
+
+  // Classify an incident's disposition (K5): TP / FP / benign. Reflects locally on success.
+  const classifyIncident = async (inc: Incident, disposition: IncidentDisposition) => {
+    setClassifyingId(inc.id);
+    try {
+      const res = await apiFetch(`/api/v1/incidents/group/disposition${tenantId ? `?tenant_id=${tenantId}` : ''}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ incident_id: inc.id, disposition }),
+      });
+      if (!res.ok) {
+        console.error('Failed to classify incident:', await res.text());
+        return;
+      }
+      setIncidents((prev) => prev.map((i) => (i.id === inc.id ? { ...i, disposition } : i)));
+    } catch (err) {
+      console.error('Network error classifying incident:', err);
+    } finally {
+      setClassifyingId(null);
+    }
   };
 
   const handleConfirm = async () => {
@@ -231,6 +260,11 @@ export function IncidentsView({ tenantId, domain }: { tenantId?: string; domain?
                       )}
                       <span className={`px-2 py-0.5 rounded text-[9px] font-extrabold uppercase tracking-wider border ${SEVERITY_CLASS[inc.severity] || 'bg-slate-500/10 text-slate-400 border-slate-500/25'}`}>{inc.severity}</span>
                       <span className={`px-2 py-0.5 rounded text-[9px] font-extrabold uppercase tracking-wider border ${STATUS_CLASS[inc.status] || 'bg-slate-500/10 text-slate-400 border-slate-500/25'}`}>{inc.status}</span>
+                      {inc.disposition && (
+                        <span className={`px-2 py-0.5 rounded text-[9px] font-extrabold uppercase tracking-wider border ${DISPOSITIONS.find((d) => d.id === inc.disposition)?.cls || 'bg-slate-500/10 text-slate-400 border-slate-500/25'}`} title="Classificação do analista (K5)">
+                          {DISPOSITIONS.find((d) => d.id === inc.disposition)?.label || inc.disposition}
+                        </span>
+                      )}
                       <span className="text-sm font-bold text-slate-200 truncate">{inc.title}</span>
                     </div>
                     <span className="text-[10px] text-slate-500">
@@ -262,6 +296,22 @@ export function IncidentsView({ tenantId, domain }: { tenantId?: string; domain?
 
               {expandedId === inc.id && (
                 <div className="border-t border-white/5 bg-black/30 px-4 py-3">
+                  {/* Disposition classification (K5): the analyst's verdict, feeds the FP-rate KPI. */}
+                  <div className="flex items-center gap-2 flex-wrap mb-3 pb-3 border-b border-white/5">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Classificação</span>
+                    {DISPOSITIONS.map((d) => (
+                      <button
+                        key={d.id}
+                        disabled={classifyingId === inc.id}
+                        onClick={() => classifyIncident(inc, d.id)}
+                        className={`px-2.5 py-1 rounded text-[10px] font-bold uppercase tracking-wider border transition-all cursor-pointer disabled:opacity-50 ${
+                          inc.disposition === d.id ? d.cls : 'bg-white/[0.02] border-white/10 text-slate-500 hover:text-slate-300'
+                        }`}
+                      >
+                        {d.label}
+                      </button>
+                    ))}
+                  </div>
                   {!alerts[inc.id] ? (
                     <div className="text-[11px] text-slate-500">Carregando alertas…</div>
                   ) : alerts[inc.id].length === 0 ? (

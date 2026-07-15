@@ -54,3 +54,22 @@ func TestReopenRatePct(t *testing.T) {
 		}
 	}
 }
+
+func TestFalsePositiveRatePct(t *testing.T) {
+	cases := []struct {
+		fp, classified int
+		want           float64
+	}{
+		{0, 0, 0},      // nothing classified
+		{3, 0, 0},      // guard: classified 0 must not divide-by-zero
+		{0, 10, 0},     // no false positives
+		{2, 10, 20.0},  // 2 of 10 were false alarms
+		{5, 20, 25.0},
+		{10, 10, 100.0}, // all false positives
+	}
+	for _, c := range cases {
+		if got := falsePositiveRatePct(c.fp, c.classified); got != c.want {
+			t.Errorf("falsePositiveRatePct(%d, %d) = %v, want %v", c.fp, c.classified, got, c.want)
+		}
+	}
+}

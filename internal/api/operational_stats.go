@@ -52,8 +52,20 @@ type OperationalStats struct {
 	Automation    AutomationStats   `json:"automation"`
 	Rework        ReworkStats       `json:"rework"`
 	Escalations   EscalationStats   `json:"escalations"`
+	Disposition   DispositionStats  `json:"disposition"`
 	ByMitre       []MitreCount      `json:"by_mitre"`
 	SourceHealth  []SourceHeartbeat `json:"source_health"`
+}
+
+// DispositionStats is the detection-quality breakdown (K5): of the incidents an analyst classified in
+// the window, how many were real (true positive), false alarms (false positive), or expected/benign,
+// and the resulting false-positive rate. A high FP rate means detection rules need tuning.
+type DispositionStats struct {
+	TruePositive         int     `json:"true_positive"`
+	FalsePositive        int     `json:"false_positive"`
+	Benign               int     `json:"benign"`
+	Classified           int     `json:"classified"`
+	FalsePositiveRatePct float64 `json:"false_positive_rate_pct"`
 }
 
 // ReworkStats measures closure quality (K1): how often a resolved/suppressed alert had to be reopened
@@ -134,6 +146,15 @@ func reopenRatePct(reopened, closed int) float64 {
 		return 0
 	}
 	return float64(reopened) / float64(closed) * 100
+}
+
+// falsePositiveRatePct returns falsePositive/classified as a percentage, guarding division by zero
+// (0 classified → 0%). Denominator is all classified incidents (TP + FP + benign).
+func falsePositiveRatePct(falsePositive, classified int) float64 {
+	if classified <= 0 {
+		return 0
+	}
+	return float64(falsePositive) / float64(classified) * 100
 }
 
 // HandleGetOperationalStats returns the tactical KPI bundle for the caller's tenant. Any
@@ -256,6 +277,21 @@ func HandleGetOperationalStats(pgPool *pgxpool.Pool, redisClient *redis.Client) 
 			`, tenantID, window, SLAEscalatedCommentPrefix+"%").Scan(&stats.Escalations.SLABreaches); err != nil {
 				return err
 			}
+
+			// 4e. Detection quality (K5): disposition breakdown of incidents the analyst classified in
+			// the window. FP rate = false_positive / total classified.
+			if err := tx.QueryRow(ctx, `
+				SELECT
+					COUNT(*) FILTER (WHERE disposition = 'true_positive'),
+					COUNT(*) FILTER (WHERE disposition = 'false_positive'),
+					COUNT(*) FILTER (WHERE disposition = 'benign')
+				FROM incidents
+				WHERE tenant_id = $1 AND created_at >= NOW() - $2::interval AND disposition IS NOT NULL
+			`, tenantID, window).Scan(&stats.Disposition.TruePositive, &stats.Disposition.FalsePositive, &stats.Disposition.Benign); err != nil {
+				return err
+			}
+			stats.Disposition.Classified = stats.Disposition.TruePositive + stats.Disposition.FalsePositive + stats.Disposition.Benign
+			stats.Disposition.FalsePositiveRatePct = falsePositiveRatePct(stats.Disposition.FalsePositive, stats.Disposition.Classified)
 
 			// 5. MITRE ATT&CK tactic breakdown (windowed).
 			mitreRows, err := tx.Query(ctx, `

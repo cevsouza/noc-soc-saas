@@ -23,7 +23,11 @@ export interface Incident {
   last_seen: string;
   created_at: string;
   resolved_at?: string;
+  // Analyst verdict (K5): "true_positive" | "false_positive" | "benign". Empty until classified.
+  disposition?: string;
 }
+
+export type IncidentDisposition = 'true_positive' | 'false_positive' | 'benign';
 
 // Matches internal/api/incidents.go's IncidentAlert (slim alert view within an incident).
 export interface IncidentAlert {

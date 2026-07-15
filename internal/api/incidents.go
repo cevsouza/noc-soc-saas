@@ -35,7 +35,13 @@ type Incident struct {
 	LastSeen         time.Time  `json:"last_seen"`
 	CreatedAt        time.Time  `json:"created_at"`
 	ResolvedAt       *time.Time `json:"resolved_at,omitempty"`
+	// Disposition is the analyst's verdict (K5): "true_positive", "false_positive", or "benign".
+	// Empty when not yet classified. Feeds the false-positive-rate KPI.
+	Disposition string `json:"disposition,omitempty"`
 }
+
+// validDispositions is the closed set of analyst verdicts a K5 classification may take.
+var validDispositions = map[string]bool{"true_positive": true, "false_positive": true, "benign": true}
 
 // HandleGetIncidents lists the tenant's incidents (grouped alerts). Defaults to the most recently
 // active first; pass ?status=open|acknowledged|resolved to filter, or ?status=all for everything.
@@ -65,7 +71,7 @@ func HandleGetIncidents(pgPool *pgxpool.Pool) http.HandlerFunc {
 		list := make([]Incident, 0)
 		err = db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
 			rows, err := tx.Query(ctx, `
-				SELECT id, fingerprint, title, severity, status, risk_score, COALESCE(asset_criticality, ''), alert_count, first_seen, last_seen, created_at, resolved_at
+				SELECT id, fingerprint, title, severity, status, risk_score, COALESCE(asset_criticality, ''), alert_count, first_seen, last_seen, created_at, resolved_at, COALESCE(disposition, '')
 				FROM incidents
 				WHERE tenant_id = $1 AND ($2 = 'all' OR status = $2)`+domainClause+`
 				ORDER BY risk_score DESC, last_seen DESC
@@ -78,7 +84,7 @@ func HandleGetIncidents(pgPool *pgxpool.Pool) http.HandlerFunc {
 			for rows.Next() {
 				var inc Incident
 				if err := rows.Scan(&inc.ID, &inc.Fingerprint, &inc.Title, &inc.Severity, &inc.Status, &inc.RiskScore, &inc.AssetCriticality,
-					&inc.AlertCount, &inc.FirstSeen, &inc.LastSeen, &inc.CreatedAt, &inc.ResolvedAt); err != nil {
+					&inc.AlertCount, &inc.FirstSeen, &inc.LastSeen, &inc.CreatedAt, &inc.ResolvedAt, &inc.Disposition); err != nil {
 					return err
 				}
 				list = append(list, inc)
@@ -180,6 +186,75 @@ func HandleAcknowledgeIncidentGroup(pgPool *pgxpool.Pool) http.HandlerFunc {
 // HandleResolveIncidentGroup resolves (closes) an incident and its alerts.
 func HandleResolveIncidentGroup(pgPool *pgxpool.Pool) http.HandlerFunc {
 	return updateIncidentStatus(pgPool, "resolve", "resolved")
+}
+
+// IncidentDispositionRequest is the body of the classify endpoint.
+type IncidentDispositionRequest struct {
+	IncidentID  uuid.UUID `json:"incident_id"`
+	Disposition string    `json:"disposition"`
+}
+
+// HandleSetIncidentDisposition records the analyst's verdict (K5) on an incident — true_positive,
+// false_positive, or benign — used by the false-positive-rate KPI. Works on an incident in any state
+// (classify at resolution time or later, and reclassify if needed). Audited; posts a timeline note.
+func HandleSetIncidentDisposition(pgPool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tenantID, err := middleware.ResolveTenantScope(r.Context(), r, pgPool)
+		if err != nil {
+			middleware.WriteScopeError(w, err)
+			return
+		}
+		claims, _ := middleware.ClaimsFromContext(r.Context())
+		ctx := db.WithTenantID(r.Context(), tenantID)
+
+		var req IncidentDispositionRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.IncidentID == uuid.Nil || !validDispositions[req.Disposition] {
+			http.Error(w, "Invalid payload: incident_id and a valid disposition (true_positive|false_positive|benign) are required", http.StatusBadRequest)
+			return
+		}
+
+		var affected int64
+		err = db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
+			res, e := tx.Exec(ctx, `
+				UPDATE incidents SET disposition = $1, updated_at = NOW()
+				WHERE id = $2 AND tenant_id = $3
+			`, req.Disposition, req.IncidentID, tenantID)
+			if e != nil {
+				return e
+			}
+			affected = res.RowsAffected()
+			if affected > 0 {
+				_, e = tx.Exec(ctx, `
+					INSERT INTO incident_comments (incident_id, tenant_id, author, comment)
+					VALUES ($1, $2, 'Sistema', $3)
+				`, req.IncidentID, tenantID, "Incidente classificado como: "+req.Disposition)
+			}
+			return e
+		})
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Failed to classify incident: %v", err), http.StatusInternalServerError)
+			return
+		}
+		if affected == 0 {
+			http.Error(w, "Incident not found or not yours", http.StatusNotFound)
+			return
+		}
+
+		var actorID uuid.UUID
+		if claims != nil {
+			actorID = claims.UserID
+		}
+		audit.Record(ctx, pgPool, audit.Entry{
+			TenantID: tenantID, UserID: actorID,
+			Action:    "incident.classify",
+			Resource:  req.IncidentID.String(),
+			Details:   map[string]interface{}{"disposition": req.Disposition},
+			IPAddress: r.RemoteAddr,
+		})
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "success", "disposition": req.Disposition})
+	}
 }
 
 // IncidentAlert is a slim view of one alert grouped under an incident.

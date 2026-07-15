@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { Activity, AlertOctagon, Bot, Radio, RefreshCw, ShieldHalf, Layers, RotateCcw, AlertTriangle, Radar, ServerOff, Users } from 'lucide-react';
+import { Activity, AlertOctagon, Bot, Radio, RefreshCw, ShieldHalf, Layers, RotateCcw, AlertTriangle, Radar, ServerOff, Users, ShieldAlert } from 'lucide-react';
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { apiFetchJson } from '@/lib/api-client';
 import type { OperationalStats, CoverageStats, AnalystStats } from '@/types';
@@ -108,6 +108,17 @@ export function OperationalKpisPanel({ tenantId }: { tenantId?: string }) {
               value={`${stats.escalations.sla_breaches}`}
               sub="estouros de SLA paginados"
               accent={stats.escalations.sla_breaches > 0 ? 'text-amber-400' : undefined}
+            />
+            <KpiCard
+              icon={<ShieldAlert className="w-3.5 h-3.5 text-rose-400" />}
+              label="Taxa de Falso-Positivo"
+              value={stats.disposition.classified > 0 ? `${stats.disposition.false_positive_rate_pct.toFixed(0)}%` : '—'}
+              sub={
+                stats.disposition.classified > 0
+                  ? `${stats.disposition.false_positive} FP de ${stats.disposition.classified} classificados`
+                  : 'nenhum incidente classificado'
+              }
+              accent={stats.disposition.false_positive_rate_pct > 0 ? 'text-rose-400' : undefined}
             />
           </div>
 

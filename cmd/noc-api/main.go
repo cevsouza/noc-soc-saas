@@ -829,6 +829,9 @@ func main() {
 	mux.Handle("/api/v1/incidents/group/acknowledge", protectedAckIncidentGroup)
 	protectedResolveIncidentGroup := middleware.JWTAuth(jwtSecret)(middleware.RequireRole(model.RoleAnalystL1)(api.HandleResolveIncidentGroup(appPool)))
 	mux.Handle("/api/v1/incidents/group/resolve", protectedResolveIncidentGroup)
+	// Incident disposition (K5): analyst classifies TP/FP/benign — feeds the false-positive-rate KPI.
+	protectedDispositionIncident := middleware.JWTAuth(jwtSecret)(middleware.RequireRole(model.RoleAnalystL1)(api.HandleSetIncidentDisposition(appPool)))
+	mux.Handle("/api/v1/incidents/group/disposition", protectedDispositionIncident)
 
 	// Temporal suppression rules (Fase 3/3d): one route, method-dispatched — GET lists (any
 	// authenticated user), POST/DELETE mutate (tenant admins). Single registration avoids a
