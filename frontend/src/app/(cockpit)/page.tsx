@@ -8,7 +8,7 @@ import { useAlertsSocket } from '@/lib/use-alerts-socket';
 import { usePendingApprovalsCount } from '@/lib/use-pending-approvals-count';
 import { usePendingResponseCount } from '@/lib/use-pending-response-count';
 import { domainForSource, type ConsoleMode } from '@/lib/domain';
-import { compareByPriority, isOpen } from '@/lib/alert-priority';
+import { compareByPriority, isOpen, withinLens, type TimeLens } from '@/lib/alert-priority';
 import { AppHeader } from '@/components/app-header';
 import { AlertStatCards } from '@/components/alerts/alert-stat-cards';
 import { AlertsSearchBar } from '@/components/alerts/alerts-search-bar';
@@ -41,6 +41,7 @@ export default function CockpitPage() {
 
   const [cockpitTab, setCockpitTab] = useState<CockpitTab>('alerts');
   const [consoleMode, setConsoleMode] = useState<ConsoleMode>('all');
+  const [timeLens, setTimeLens] = useState<TimeLens>('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [severityFilter, setSeverityFilter] = useState<SeverityFilterValue>('all');
   const [selectedAlert, setSelectedAlert] = useState<Alert | null>(null);
@@ -72,19 +73,24 @@ export default function CockpitPage() {
   };
 
   // Operational console: the working set is OPEN alerts only (resolved/suppressed live in the future
-  // History view), ordered by urgency — highest severity first, then closest-to-SLA-breach — so an
-  // old-but-still-open critical never sinks below a fresh info. Recency is only the final tiebreak.
-  const filteredAlerts = alerts
-    .filter((a) => {
-      const matchesSearch =
-        a.summary.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        a.event_type.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        ((a.ai_analysis?.source as string) || '').toLowerCase().includes(searchTerm.toLowerCase());
-      const matchesSeverity = severityFilter === 'all' || a.severity === severityFilter;
-      const matchesTenant = selectedTenantIds.includes(a.tenant_id);
-      return matchesSearch && matchesSeverity && matchesTenant && isOpen(a) && inConsole(a);
-    })
-    .sort(compareByPriority);
+  // History view), matching the search/severity/tenant/console filters. Computed WITHOUT the time
+  // lens so we can both narrow it and report how many open alerts the lens hides.
+  const consoleWorkingSet = alerts.filter((a) => {
+    const matchesSearch =
+      a.summary.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      a.event_type.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      ((a.ai_analysis?.source as string) || '').toLowerCase().includes(searchTerm.toLowerCase());
+    const matchesSeverity = severityFilter === 'all' || a.severity === severityFilter;
+    const matchesTenant = selectedTenantIds.includes(a.tenant_id);
+    return matchesSearch && matchesSeverity && matchesTenant && isOpen(a) && inConsole(a);
+  });
+
+  // The time lens is a convenience narrowing by age; 'all' (default) never hides an open alert.
+  // Ordered by urgency — highest severity first, then closest-to-SLA-breach — so an old-but-still-open
+  // critical never sinks below a fresh info. Recency is only the final tiebreak.
+  const filteredAlerts = consoleWorkingSet.filter((a) => withinLens(a, timeLens)).sort(compareByPriority);
+  // How many open alerts the active lens is hiding — surfaced so danger is never silently dropped.
+  const hiddenByLens = consoleWorkingSet.length - filteredAlerts.length;
 
   useEffect(() => {
     const latest = alerts[0];
@@ -210,6 +216,27 @@ export default function CockpitPage() {
                 {m.label}
               </button>
             ))}
+
+            {/* Time lens: convenience narrowing of the open set by age. 'Tudo' is the safe default. */}
+            <span className="text-slate-500 ml-4">Janela</span>
+            {([
+              { id: 'all', label: 'Tudo' },
+              { id: '1h', label: '1h' },
+              { id: '24h', label: '24h' },
+              { id: '7d', label: '7d' },
+            ] as { id: TimeLens; label: string }[]).map((w) => (
+              <button
+                key={w.id}
+                onClick={() => setTimeLens(w.id)}
+                className={`px-3 py-1 rounded-lg border transition-all cursor-pointer ${
+                  timeLens === w.id
+                    ? 'bg-white/10 border-white/20 text-slate-100'
+                    : 'bg-white/[0.02] border-white/10 text-slate-500 hover:text-slate-300'
+                }`}
+              >
+                {w.label}
+              </button>
+            ))}
           </div>
 
           {selectedTenantIds.length === 1 && (
@@ -234,6 +261,18 @@ export default function CockpitPage() {
             <>
               <AlertStatCards stats={stats} severityFilter={severityFilter} onSelectFilter={setSeverityFilter} />
               <AlertsSearchBar value={searchTerm} onChange={setSearchTerm} />
+              {hiddenByLens > 0 && (
+                <button
+                  onClick={() => setTimeLens('all')}
+                  className="flex items-center justify-between gap-2 px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs hover:bg-amber-500/20 transition-all cursor-pointer text-left"
+                >
+                  <span>
+                    <strong>{hiddenByLens}</strong> alerta{hiddenByLens > 1 ? 's' : ''} aberto{hiddenByLens > 1 ? 's' : ''} mais
+                    antigo{hiddenByLens > 1 ? 's' : ''} oculto{hiddenByLens > 1 ? 's' : ''} pela janela de tempo.
+                  </span>
+                  <span className="font-bold uppercase tracking-wider whitespace-nowrap">Ver todos →</span>
+                </button>
+              )}
               <AlertsTable
                 alerts={filteredAlerts}
                 tenants={tenants}

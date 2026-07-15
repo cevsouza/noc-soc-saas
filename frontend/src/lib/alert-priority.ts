@@ -41,3 +41,21 @@ export function compareByPriority(a: Alert, b: Alert): number {
   if (deadline !== 0) return deadline;
   return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
 }
+
+// Time lens: a convenience narrowing of the open working set by alert age. 'all' is the safe default
+// (never hides an open alert); narrower windows are opt-in and the console surfaces a count of what
+// they hide so danger is never silently dropped.
+export type TimeLens = 'all' | '1h' | '24h' | '7d';
+
+export const TIME_LENS_MINUTES: Record<Exclude<TimeLens, 'all'>, number> = {
+  '1h': 60,
+  '24h': 1440,
+  '7d': 10080,
+};
+
+// True when the alert falls inside the lens window (or the lens is 'all'). `now` is injectable for
+// deterministic testing.
+export function withinLens(alert: Pick<Alert, 'created_at'>, lens: TimeLens, now: number = Date.now()): boolean {
+  if (lens === 'all') return true;
+  return new Date(alert.created_at).getTime() >= now - TIME_LENS_MINUTES[lens] * 60 * 1000;
+}
