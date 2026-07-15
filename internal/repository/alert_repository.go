@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"noc-api/internal/db"
@@ -209,6 +211,50 @@ func (r *PostgresAlertRepository) ListOpen(ctx context.Context, q db.Queryer, te
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to query open alerts: %w", err)
+	}
+	defer rows.Close()
+	return scanAlertRows(rows)
+}
+
+// ListHistory returns alerts of any status matching the optional filters, newest first, paginated.
+// The WHERE clause is built dynamically but every value is bound as a parameter ($N) — never
+// interpolated — so it is injection-safe. The explicit tenant_id filter is defense-in-depth.
+func (r *PostgresAlertRepository) ListHistory(ctx context.Context, q db.Queryer, tenantID uuid.UUID, f AlertHistoryFilter, limit, offset int) ([]*model.Alert, error) {
+	conds := []string{"tenant_id = $1"}
+	args := []interface{}{tenantID}
+	add := func(cond string, val interface{}) {
+		args = append(args, val)
+		conds = append(conds, fmt.Sprintf(cond, len(args)))
+	}
+	if f.Severity != "" {
+		add("severity = $%d", f.Severity)
+	}
+	if f.Status != "" {
+		add("status = $%d", f.Status)
+	}
+	if f.Search != "" {
+		// One arg referenced twice (summary + event_type). Append first, then build with its position.
+		args = append(args, f.Search)
+		p := len(args)
+		conds = append(conds, fmt.Sprintf("(summary ILIKE '%%'||$%d||'%%' OR event_type ILIKE '%%'||$%d||'%%')", p, p))
+	}
+	if len(f.Sources) > 0 {
+		add("ai_analysis->>'source' = ANY($%d)", f.Sources)
+	}
+	if f.SinceHours > 0 {
+		add("created_at >= NOW() - make_interval(hours => $%d)", f.SinceHours)
+	}
+	args = append(args, limit)
+	limitPos := len(args)
+	args = append(args, offset)
+	offsetPos := len(args)
+
+	query := `SELECT ` + alertSelectCols + ` FROM alerts WHERE ` + strings.Join(conds, " AND ") +
+		` ORDER BY created_at DESC LIMIT $` + strconv.Itoa(limitPos) + ` OFFSET $` + strconv.Itoa(offsetPos)
+
+	rows, err := q.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query alert history: %w", err)
 	}
 	defer rows.Close()
 	return scanAlertRows(rows)

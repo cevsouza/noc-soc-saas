@@ -10,6 +10,17 @@ import (
 	"github.com/google/uuid"
 )
 
+// AlertHistoryFilter carries the optional filters for the History/search view. A zero value means
+// "no filter" for each field: empty strings and a nil Sources match everything; SinceHours <= 0
+// applies no lower time bound.
+type AlertHistoryFilter struct {
+	Severity   string   // exact severity match (info|warning|critical|fatal)
+	Status     string   // exact status match (triggered|acknowledged|resolved|suppressed)
+	Search     string   // ILIKE substring over summary and event_type
+	Sources    []string // NOC/SOC domain sources; nil = all domains
+	SinceHours int      // only alerts created within the last N hours; <= 0 = no bound
+}
+
 // DeviceRepository defines the data access contract for network devices.
 type DeviceRepository interface {
 	Create(ctx context.Context, q db.Queryer, device *model.Device) error
@@ -30,6 +41,10 @@ type AlertRepository interface {
 	// recency), so the operational console never drops an old-but-still-open alert off the recency
 	// window. A nil/empty sources slice means all domains; a non-empty one scopes to a NOC/SOC domain.
 	ListOpen(ctx context.Context, q db.Queryer, tenantID uuid.UUID, sources []string, limit, offset int) ([]*model.Alert, error)
+	// ListHistory returns alerts of ANY status matching the given filters (all empty = everything),
+	// newest first, paginated — powering the History/search view where resolved alerts can be found
+	// and reopened. All filters are optional; the tenant_id filter is always applied.
+	ListHistory(ctx context.Context, q db.Queryer, tenantID uuid.UUID, f AlertHistoryFilter, limit, offset int) ([]*model.Alert, error)
 	UpdateStatus(ctx context.Context, q db.Queryer, id uuid.UUID, createdAt time.Time, status model.AlertStatus) error
 	Update(ctx context.Context, q db.Queryer, alert *model.Alert) error
 }

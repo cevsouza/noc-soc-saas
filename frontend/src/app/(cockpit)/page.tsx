@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Activity, LineChart, Network, Settings, Siren, Target } from 'lucide-react';
+import { Activity, Archive, LineChart, Network, Settings, Siren, Target } from 'lucide-react';
 import { useAuth } from '@/lib/auth-context';
 import { useTenantSelection } from '@/lib/tenant-context';
 import { useAlertsSocket } from '@/lib/use-alerts-socket';
@@ -16,11 +16,12 @@ import { AlertsTable } from '@/components/alerts/alerts-table';
 import { AlertDetailSheet } from '@/components/alerts/alert-detail-sheet';
 import { LegacyCockpitPanels } from '@/components/legacy-cockpit-panels';
 import { IncidentsView } from '@/components/incidents/incidents-view';
+import { HistoryView } from '@/components/history/history-view';
 import { MetricsView } from '@/components/metrics/metrics-view';
 import { GlobalSearchPalette } from '@/components/global-search-palette';
 import type { Alert, AlertSeverity, AlertStatus, SearchAlertResult, SearchTenantResult } from '@/types';
 
-type CockpitTab = 'alerts' | 'incidents' | 'metrics' | 'topology' | 'settings';
+type CockpitTab = 'alerts' | 'incidents' | 'history' | 'metrics' | 'topology' | 'settings';
 type SeverityFilterValue = 'all' | 'fatal' | 'critical' | 'warning' | 'info';
 
 const TAB_BUTTON_CLASS = (active: boolean) =>
@@ -172,6 +173,10 @@ export default function CockpitPage() {
               <Siren className="w-3.5 h-3.5" />
               Incidentes
             </button>
+            <button onClick={() => setCockpitTab('history')} className={TAB_BUTTON_CLASS(cockpitTab === 'history')}>
+              <Archive className="w-3.5 h-3.5" />
+              Histórico
+            </button>
             <button onClick={() => setCockpitTab('metrics')} className={TAB_BUTTON_CLASS(cockpitTab === 'metrics')}>
               <LineChart className="w-3.5 h-3.5" />
               Métricas SNMP
@@ -307,6 +312,10 @@ export default function CockpitPage() {
 
           {cockpitTab === 'incidents' && (
             <IncidentsView tenantId={selectedTenantIds.length === 1 ? selectedTenantIds[0] : undefined} domain={consoleDomain} />
+          )}
+
+          {cockpitTab === 'history' && (
+            <HistoryView tenantId={selectedTenantIds.length === 1 ? selectedTenantIds[0] : undefined} domain={consoleDomain} />
           )}
 
           {cockpitTab === 'metrics' && (

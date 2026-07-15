@@ -743,6 +743,16 @@ func main() {
 	protectedListAlerts := middleware.JWTAuth(jwtSecret)(api.HandleListAlerts(appPool, alertRepo))
 	mux.Handle("/api/v1/alerts", protectedListAlerts)
 
+	// History/search view: alerts of any status (resolved included), paginated & filterable. Distinct
+	// exact path from /api/v1/alerts, so no ServeMux collision. Read-only for any authenticated user.
+	protectedAlertHistory := middleware.JWTAuth(jwtSecret)(api.HandleAlertHistory(appPool, alertRepo))
+	mux.Handle("/api/v1/alerts/history", protectedAlertHistory)
+
+	// Reopen a prematurely-closed alert (History "Reabrir"). New path — no collision with the legacy
+	// /api/v1/incidents/{acknowledge,resolve}. Changes state, so gated to at least analyst_l1.
+	protectedReopenAlert := middleware.JWTAuth(jwtSecret)(middleware.RequireRole(model.RoleAnalystL1)(api.HandleReopenAlert(appPool)))
+	mux.Handle("/api/v1/incidents/reopen", protectedReopenAlert)
+
 	// OCSF (Open Cybersecurity Schema Framework) export of the tenant's alerts as Detection Findings.
 	protectedAlertsOCSF := middleware.JWTAuth(jwtSecret)(api.HandleGetAlertsOCSF(appPool, alertRepo))
 	mux.Handle("/api/v1/alerts/ocsf", protectedAlertsOCSF)

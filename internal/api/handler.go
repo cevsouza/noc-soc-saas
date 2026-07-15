@@ -12,6 +12,7 @@ import (
 	"log"
 	"net/http"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1549,6 +1550,120 @@ func HandleListAlerts(pgPool *pgxpool.Pool, alertRepo repository.AlertRepository
 
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(alerts)
+	}
+}
+
+var validSeverities = map[string]bool{"info": true, "warning": true, "critical": true, "fatal": true}
+var validStatuses = map[string]bool{"triggered": true, "acknowledged": true, "resolved": true, "suppressed": true}
+
+// HandleAlertHistory powers the History/search view: alerts of ANY status (resolved included),
+// newest first, with optional filters. Unlike the operational feed (?status=open) this is the
+// archive an operator searches to find a past alert and, if it was closed prematurely, reopen it.
+func HandleAlertHistory(pgPool *pgxpool.Pool, alertRepo repository.AlertRepository) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tenantID, err := middleware.ResolveTenantScope(r.Context(), r, pgPool)
+		if err != nil {
+			middleware.WriteScopeError(w, err)
+			return
+		}
+		ctx := db.WithTenantID(r.Context(), tenantID)
+
+		q := r.URL.Query()
+		f := repository.AlertHistoryFilter{Search: strings.TrimSpace(q.Get("q"))}
+		// Unknown severity/status values are ignored (treated as "no filter") rather than returning an
+		// empty set, so a typo in the query string degrades gracefully.
+		if s := q.Get("severity"); validSeverities[s] {
+			f.Severity = s
+		}
+		if s := q.Get("status"); validStatuses[s] {
+			f.Status = s
+		}
+		if sources, ok := domain.SourcesForDomain(q.Get("domain")); ok {
+			f.Sources = sources
+		}
+		if h, e := strconv.Atoi(q.Get("hours")); e == nil && h > 0 {
+			f.SinceHours = h
+		}
+		limit := 50
+		if l, e := strconv.Atoi(q.Get("limit")); e == nil && l > 0 {
+			if l > 200 {
+				l = 200
+			}
+			limit = l
+		}
+		offset := 0
+		if o, e := strconv.Atoi(q.Get("offset")); e == nil && o > 0 {
+			offset = o
+		}
+
+		var alerts []*model.Alert
+		err = db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
+			var e error
+			alerts, e = alertRepo.ListHistory(ctx, tx, tenantID, f, limit, offset)
+			return e
+		})
+		if err != nil {
+			log.Printf("[API Error] Failed to list alert history: %v", err)
+			http.Error(w, "Internal Server Error: failed to load history", http.StatusInternalServerError)
+			return
+		}
+		if alerts == nil {
+			alerts = []*model.Alert{}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(alerts)
+	}
+}
+
+// HandleReopenAlert puts a resolved/suppressed alert back into the working queue (status=triggered,
+// resolved_at cleared) — the History view's "Reabrir" action for something closed prematurely. It
+// only affects a currently closed alert (rowsAffected==0 → 404), and reopens the ALERT only: the
+// grouped incident is left as-is, since a genuine recurrence opens a fresh incident on its own.
+func HandleReopenAlert(pgPool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tenantID, err := middleware.ResolveTenantScope(r.Context(), r, pgPool)
+		if err != nil {
+			middleware.WriteScopeError(w, err)
+			return
+		}
+		ctx := db.WithTenantID(r.Context(), tenantID)
+
+		var req IncidentResolveRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid payload", http.StatusBadRequest)
+			return
+		}
+
+		var rowsAffected int64
+		err = db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
+			res, err := tx.Exec(ctx, `
+				UPDATE alerts
+				SET status = 'triggered', resolved_at = NULL, updated_at = NOW()
+				WHERE id = $1 AND created_at = $2 AND tenant_id = $3 AND status IN ('resolved', 'suppressed')
+			`, req.ID, req.CreatedAt, tenantID)
+			if err != nil {
+				return err
+			}
+			rowsAffected = res.RowsAffected()
+			if rowsAffected > 0 {
+				_, err = tx.Exec(ctx, `
+					INSERT INTO incident_comments (incident_id, tenant_id, author, comment)
+					VALUES ($1, $2, 'Sistema', 'Alerta REABERTO pelo operador no Cockpit (Histórico).')
+				`, req.ID, tenantID)
+				return err
+			}
+			return nil
+		})
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Failed to reopen alert: %v", err), http.StatusInternalServerError)
+			return
+		}
+		if rowsAffected == 0 {
+			http.Error(w, "Alert not found, not owned by tenant, or not in a reopenable state", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "success", "message": "Alerta reaberto com sucesso"})
 	}
 }
 
