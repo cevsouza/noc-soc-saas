@@ -811,6 +811,11 @@ func main() {
 	protectedCoverageStats := middleware.JWTAuth(jwtSecret)(api.HandleGetCoverageStats(appPool))
 	mux.Handle("/api/v1/reports/coverage", protectedCoverageStats)
 
+	// Analyst-productivity KPI (K3): attributable action volume per analyst from the audit log.
+	// Distinct path, read-only, same access level as the other KPI endpoints.
+	protectedAnalystStats := middleware.JWTAuth(jwtSecret)(api.HandleGetAnalystStats(appPool))
+	mux.Handle("/api/v1/reports/analysts", protectedAnalystStats)
+
 	// Incidents (Fase 3/3b): the grouped-investigation view — recurring alerts of the same problem
 	// collapsed into one incident. List is read-only for any authenticated user; acknowledging or
 	// resolving an incident requires at least analyst_l1 (excludes read_only).

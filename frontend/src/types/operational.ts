@@ -66,6 +66,27 @@ export interface CoverageStats {
   silent_devices: SilentDevice[];
 }
 
+// Analyst productivity (K3): attributable action volume per analyst from the audit log. Served by a
+// separate endpoint (/api/v1/reports/analysts).
+export interface ActionCount {
+  action: string;
+  count: number;
+}
+
+export interface AnalystProductivity {
+  user_id: string;
+  name: string;
+  email: string;
+  total_actions: number;
+  by_action: ActionCount[];
+}
+
+export interface AnalystStats {
+  window_days: number;
+  total_actions: number;
+  analysts: AnalystProductivity[];
+}
+
 export interface OperationalStats {
   window_days: number;
   triage_backlog: TriageBacklog;
