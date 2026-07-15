@@ -36,6 +36,7 @@ import { RunbookApprovalsPanel } from '@/components/settings/runbook-approvals-p
 import { ResponseActionsPanel } from '@/components/settings/response-actions-panel';
 import { AccessControlPanel } from '@/components/settings/access-control-panel';
 import { OperationalKpisPanel } from '@/components/settings/operational-kpis-panel';
+import { CompliancePanel } from '@/components/settings/compliance-panel';
 import { ControlPlanePanel } from '@/components/settings/control-plane-panel';
 import { ThreatIntelPanel } from '@/components/settings/threat-intel-panel';
 import { ConnectionGuidePanel } from '@/components/settings/connection-guide-panel';
@@ -578,6 +579,18 @@ export function LegacyCockpitPanels({ cockpitTab, onSearchTermChange, onNavigate
                 >
                   <Activity className="w-3.5 h-3.5 text-cyan-400" />
                   <span>KPIs Operacionais</span>
+                </button>
+                <button
+                  onClick={() => {
+                    setSelectedIntegrationTool('compliance');
+                    setValidationResult(null);
+                  }}
+                  className={`w-full px-3 py-2 rounded-lg text-left text-xs font-bold transition-all flex items-center gap-2 ${
+                    selectedIntegrationTool === 'compliance' ? 'bg-white/5 text-white border-l-2 border-cyan-400' : 'text-slate-400 hover:bg-white/[0.02] hover:text-slate-200'
+                  }`}
+                >
+                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Compliance</span>
                 </button>
                 {user?.global_role === 'admin' && (
                   <button
@@ -1600,6 +1613,8 @@ export function LegacyCockpitPanels({ cockpitTab, onSearchTermChange, onNavigate
                   </div>
                 ) : selectedIntegrationTool === 'operational_kpis' ? (
                   <OperationalKpisPanel tenantId={selectedTenant?.id} />
+                ) : selectedIntegrationTool === 'compliance' ? (
+                  <CompliancePanel tenantId={selectedTenant?.id} />
                 ) : selectedIntegrationTool === 'control_plane' ? (
                   <ControlPlanePanel />
                 ) : selectedIntegrationTool === 'connection_guide' ? (

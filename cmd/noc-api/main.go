@@ -803,6 +803,10 @@ func main() {
 	})))
 	mux.Handle("/api/v1/retention/enforce", middleware.JWTAuth(jwtSecret)(middleware.RequireRole(model.RoleTenantAdmin)(api.HandleEnforceRetention(appPool))))
 
+	// Compliance & governance report (B4): read-only posture summary (retention, audit integrity,
+	// isolation, encryption) for the tenant. Same access level as the other reports.
+	mux.Handle("/api/v1/reports/compliance", middleware.JWTAuth(jwtSecret)(api.HandleGetComplianceReport(appPool)))
+
 	// Operational KPI bundle (Fase 6 fatia 1): tactical NOC/SOC metrics (triage backlog, alert
 	// noise ratio, top offenders, automation ROI, MITRE breakdown, silent telemetry sources) that
 	// complement the SLA executive report. Same authenticated-user access level as SLA stats.

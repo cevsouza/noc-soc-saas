@@ -8,6 +8,7 @@ export * from './incident';
 export * from './active-user';
 export * from './sla';
 export * from './operational';
+export * from './compliance';
 export * from './response';
 export * from './search';
 export * from './topology';

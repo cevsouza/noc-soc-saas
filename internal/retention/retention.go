@@ -51,3 +51,15 @@ func EnforceForTenant(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID, retent
 	}
 	return tag.RowsAffected(), nil
 }
+
+// EnforceIncidentsForTenant deletes the tenant's RESOLVED incidents older than the retention window
+// (B4). Only resolved incidents are pruned — an open investigation is never deleted regardless of
+// age. Audit logs are deliberately NOT pruned (append-only compliance record; kept indefinitely).
+func EnforceIncidentsForTenant(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID, retentionDays int) (int64, error) {
+	cutoff := Cutoff(time.Now(), retentionDays)
+	tag, err := tx.Exec(ctx, `DELETE FROM incidents WHERE tenant_id = $1 AND status = 'resolved' AND created_at < $2`, tenantID, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}

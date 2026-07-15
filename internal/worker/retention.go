@@ -78,6 +78,11 @@ func (wp *WorkerPool) enforceRetention(ctx context.Context) {
 			}
 			enabled = true
 			deleted, e = retention.EnforceForTenant(tctx, tx, tid, days)
+			if e != nil {
+				return e
+			}
+			// Also prune resolved incidents older than the same window (B4). Audit logs are kept.
+			_, e = retention.EnforceIncidentsForTenant(tctx, tx, tid, days)
 			return e
 		})
 		if err != nil {
