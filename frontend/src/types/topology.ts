@@ -8,6 +8,9 @@ export interface GraphNode {
   origin: 'discovery' | 'telemetry' | 'both' | 'neighbor';
   worst_severity: string;
   unresolved_alerts: number;
+  // Stale marks a discovered device the agent hasn't re-observed within the freshness window (T-B).
+  stale?: boolean;
+  last_seen?: string;
 }
 
 export interface GraphEdge {

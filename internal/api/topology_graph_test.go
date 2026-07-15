@@ -1,6 +1,9 @@
 package api
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func findNode(g TopologyGraph, id string) *GraphNode {
 	for i := range g.Nodes {
@@ -29,7 +32,7 @@ func TestBuildTopologyGraph(t *testing.T) {
 		{Host: "app-prod-01", UnresolvedAlerts: 1, WorstSeverity: "warning"},
 	}
 
-	g := buildTopologyGraph(devices, links, hosts, nil)
+	g := buildTopologyGraph(devices, links, hosts, nil, time.Time{})
 
 	// Nodes: 2 devices + 1 telemetry host + 1 neighbour = 4.
 	if len(g.Nodes) != 4 {
@@ -78,7 +81,7 @@ func TestBuildTopologyGraphDedupEdges(t *testing.T) {
 		{LocalIP: "10.0.0.1", RemoteSysName: "b", RemoteChassisID: "x", Protocol: "lldp"},
 		{LocalIP: "10.0.0.1", RemoteSysName: "b", RemoteChassisID: "x", Protocol: "lldp"},
 	}
-	g := buildTopologyGraph(devices, links, nil, nil)
+	g := buildTopologyGraph(devices, links, nil, nil, time.Time{})
 	if len(g.Edges) != 1 {
 		t.Errorf("got %d edges, want 1 (deduped)", len(g.Edges))
 	}
@@ -99,7 +102,7 @@ func TestBuildTopologyGraphRobustMatching(t *testing.T) {
 		{Identifier: "192.168.1.2", Aliases: []string{"switch01.mon", "sw-core"}},
 	}
 
-	g := buildTopologyGraph(devices, nil, hosts, aliases)
+	g := buildTopologyGraph(devices, nil, hosts, aliases, time.Time{})
 
 	// Both hosts collapse onto their devices → only 2 nodes, no telemetry duplicates.
 	if len(g.Nodes) != 2 {
@@ -125,13 +128,35 @@ func TestBuildTopologyGraphAggregatesHosts(t *testing.T) {
 	}
 	aliases := []AssetAlias{{Identifier: "192.168.70.2", Aliases: []string{"switch01.mon"}}}
 
-	g := buildTopologyGraph(devices, nil, hosts, aliases)
+	g := buildTopologyGraph(devices, nil, hosts, aliases, time.Time{})
 	if len(g.Nodes) != 1 {
 		t.Fatalf("got %d nodes, want 1 (both hosts folded): %+v", len(g.Nodes), g.Nodes)
 	}
 	n := g.Nodes[0]
 	if n.Origin != "both" || n.UnresolvedAlerts != 2 || n.WorstSeverity != "critical" {
 		t.Errorf("aggregation wrong: origin=%s unresolved=%d worst=%s", n.Origin, n.UnresolvedAlerts, n.WorstSeverity)
+	}
+}
+
+func TestBuildTopologyGraphStale(t *testing.T) {
+	now := time.Now()
+	staleBefore := now.Add(-24 * time.Hour)
+	devices := []GraphNodeIn{
+		{IP: "10.0.0.1", SysName: "fresh-sw", LastSeen: now.Add(-10 * time.Minute)}, // recent
+		{IP: "10.0.0.2", SysName: "old-sw", LastSeen: now.Add(-72 * time.Hour)},     // stale
+	}
+	g := buildTopologyGraph(devices, nil, nil, nil, staleBefore)
+
+	fresh := findNode(g, "10.0.0.1")
+	if fresh == nil || fresh.Stale {
+		t.Errorf("recent device must not be stale: %+v", fresh)
+	}
+	old := findNode(g, "10.0.0.2")
+	if old == nil || !old.Stale {
+		t.Errorf("device unseen for 72h must be stale: %+v", old)
+	}
+	if old.LastSeen == nil {
+		t.Errorf("stale device should carry last_seen")
 	}
 }
 
@@ -144,7 +169,7 @@ func TestBuildTopologyGraphAmbiguousShortName(t *testing.T) {
 	}
 	hosts := []GraphHostIn{{Host: "fw", UnresolvedAlerts: 1, WorstSeverity: "warning"}}
 
-	g := buildTopologyGraph(devices, nil, hosts, nil)
+	g := buildTopologyGraph(devices, nil, hosts, nil, time.Time{})
 	if len(g.Nodes) != 3 {
 		t.Fatalf("got %d nodes, want 3 (ambiguous short-name not guessed): %+v", len(g.Nodes), g.Nodes)
 	}

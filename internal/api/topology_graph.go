@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"time"
 
 	"noc-api/internal/db"
 	"noc-api/internal/middleware"
@@ -14,6 +15,12 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// topologyStaleThreshold: a discovered device the agent hasn't re-observed within this window is
+// "stale" (likely decommissioned, or the agent stopped scanning it) — flagged so a dead box doesn't
+// masquerade as an operational node. The discovery sweep runs ~15min, so 24h tolerates transient
+// agent hiccups without false positives.
+const topologyStaleThreshold = 24 * time.Hour
 
 // Topology graph (discovery slice C; robust matching in slice T3). Merges the three real sources into
 // one node/edge graph:
@@ -30,6 +37,7 @@ type GraphNodeIn struct {
 	SysName    string
 	Vendor     string
 	DeviceType string
+	LastSeen   time.Time
 }
 
 // GraphLinkIn is a physical edge fed to the pure builder.
@@ -58,13 +66,17 @@ type AssetAlias struct {
 
 // GraphNode is one asset in the merged topology graph.
 type GraphNode struct {
-	ID               string `json:"id"`
-	Label            string `json:"label"`
-	Kind             string `json:"kind"`   // device_type, or "host" / "neighbor"
-	Vendor           string `json:"vendor,omitempty"`
-	Origin           string `json:"origin"` // "discovery" | "telemetry" | "both" | "neighbor"
-	WorstSeverity    string `json:"worst_severity"`
-	UnresolvedAlerts int    `json:"unresolved_alerts"`
+	ID               string     `json:"id"`
+	Label            string     `json:"label"`
+	Kind             string     `json:"kind"`   // device_type, or "host" / "neighbor"
+	Vendor           string     `json:"vendor,omitempty"`
+	Origin           string     `json:"origin"` // "discovery" | "telemetry" | "both" | "neighbor"
+	WorstSeverity    string     `json:"worst_severity"`
+	UnresolvedAlerts int        `json:"unresolved_alerts"`
+	// Stale marks a discovered device the agent hasn't re-observed within topologyStaleThreshold
+	// (T-B). LastSeen is the last discovery timestamp (nil for telemetry/neighbour nodes).
+	Stale    bool       `json:"stale"`
+	LastSeen *time.Time `json:"last_seen,omitempty"`
 }
 
 // GraphEdge is one physical adjacency between two nodes.
@@ -150,9 +162,10 @@ func (hr hostResolver) resolve(name string) (string, bool) {
 	return "", false
 }
 
-// buildTopologyGraph merges devices, physical links, alert hosts, and CMDB aliases into one graph. Pure
-// and unit-tested (no DB).
-func buildTopologyGraph(devices []GraphNodeIn, links []GraphLinkIn, hosts []GraphHostIn, aliases []AssetAlias) TopologyGraph {
+// buildTopologyGraph merges devices, physical links, alert hosts, and CMDB aliases into one graph. A
+// discovered device whose LastSeen is before staleBefore is flagged Stale (T-B). Pure and unit-tested
+// (no DB) — the caller passes staleBefore = now - threshold so time is injectable.
+func buildTopologyGraph(devices []GraphNodeIn, links []GraphLinkIn, hosts []GraphHostIn, aliases []AssetAlias, staleBefore time.Time) TopologyGraph {
 	nodes := map[string]*GraphNode{}
 	hr := hostResolver{
 		ipToID:    map[string]string{},
@@ -168,6 +181,11 @@ func buildTopologyGraph(devices []GraphNodeIn, links []GraphLinkIn, hosts []Grap
 			label = d.IP
 		}
 		n := &GraphNode{ID: d.IP, Label: label, Kind: d.DeviceType, Vendor: d.Vendor, Origin: "discovery"}
+		if !d.LastSeen.IsZero() {
+			ls := d.LastSeen
+			n.LastSeen = &ls
+			n.Stale = !staleBefore.IsZero() && d.LastSeen.Before(staleBefore)
+		}
 		nodes[d.IP] = n
 		hr.ipToID[d.IP] = d.IP
 		if d.SysName != "" {
@@ -300,13 +318,13 @@ func HandleGetTopologyGraph(pgPool *pgxpool.Pool) http.HandlerFunc {
 		var aliases []AssetAlias
 
 		err = db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
-			dr, e := tx.Query(ctx, `SELECT ip, sysname, vendor, device_type FROM discovered_devices WHERE tenant_id = $1 LIMIT 500`, tenantID)
+			dr, e := tx.Query(ctx, `SELECT ip, sysname, vendor, device_type, last_seen FROM discovered_devices WHERE tenant_id = $1 LIMIT 500`, tenantID)
 			if e != nil {
 				return e
 			}
 			for dr.Next() {
 				var d GraphNodeIn
-				if e := dr.Scan(&d.IP, &d.SysName, &d.Vendor, &d.DeviceType); e != nil {
+				if e := dr.Scan(&d.IP, &d.SysName, &d.Vendor, &d.DeviceType, &d.LastSeen); e != nil {
 					dr.Close()
 					return e
 				}
@@ -381,7 +399,7 @@ func HandleGetTopologyGraph(pgPool *pgxpool.Pool) http.HandlerFunc {
 			return
 		}
 
-		graph := buildTopologyGraph(devices, links, hosts, aliases)
+		graph := buildTopologyGraph(devices, links, hosts, aliases, time.Now().Add(-topologyStaleThreshold))
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(graph)
 	}

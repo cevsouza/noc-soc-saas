@@ -31,6 +31,7 @@ export function TopologyView({
 
   const [search, setSearch] = useState('');
   const [onlyAlerting, setOnlyAlerting] = useState(false);
+  const [hideStale, setHideStale] = useState(false);
   const [originFilter, setOriginFilter] = useState<'all' | 'discovery' | 'telemetry' | 'both' | 'neighbor'>('all');
   const [hiddenTiers, setHiddenTiers] = useState<Set<string>>(new Set());
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -75,11 +76,14 @@ export function TopologyView({
     return allNodes.filter((n) => {
       if (hiddenTiers.has(tierKey(n.kind))) return false;
       if (onlyAlerting && n.unresolved_alerts === 0) return false;
+      if (hideStale && n.stale) return false;
       if (originFilter !== 'all' && n.origin !== originFilter) return false;
       if (q && !n.label.toLowerCase().includes(q) && !n.id.toLowerCase().includes(q)) return false;
       return true;
     });
-  }, [allNodes, hiddenTiers, onlyAlerting, originFilter, search]);
+  }, [allNodes, hiddenTiers, onlyAlerting, hideStale, originFilter, search]);
+
+  const staleCount = useMemo(() => allNodes.filter((n) => n.stale).length, [allNodes]);
 
   const visibleIds = useMemo(() => new Set(nodes.map((n) => n.id)), [nodes]);
   const edges = useMemo(
@@ -233,6 +237,17 @@ export function TopologyView({
           >
             <AlertCircle className="w-3.5 h-3.5" /> Só com alerta
           </button>
+          {staleCount > 0 && (
+            <button
+              onClick={() => setHideStale((v) => !v)}
+              title="Dispositivos que o agente não vê há mais de 24h (possivelmente desativados)"
+              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-[11px] font-bold transition-all border ${
+                hideStale ? 'bg-amber-500/15 text-amber-200 border-amber-500/30' : 'bg-white/5 text-slate-400 border-white/10 hover:bg-white/10'
+              }`}
+            >
+              <WifiOff className="w-3.5 h-3.5" /> Ocultar obsoletos ({staleCount})
+            </button>
+          )}
           <select
             value={originFilter}
             onChange={(e) => setOriginFilter(e.target.value as typeof originFilter)}
@@ -335,12 +350,13 @@ export function TopologyView({
                       <g
                         key={node.id}
                         className="cursor-pointer"
+                        opacity={node.stale ? 0.4 : 1}
                         onClick={() => {
                           if (didDragRef.current) return; // suppress selection after a pan drag
                           setSelectedId(isSel ? null : node.id);
                         }}
                       >
-                        <title>{`${node.label}\n${originLabel(node.origin)}${node.vendor ? ` · ${node.vendor}` : ''}${node.kind ? ` · ${node.kind}` : ''}`}</title>
+                        <title>{`${node.label}\n${originLabel(node.origin)}${node.vendor ? ` · ${node.vendor}` : ''}${node.kind ? ` · ${node.kind}` : ''}${node.stale ? ' · OBSOLETO (sem contato recente)' : ''}`}</title>
                         {node.unresolved_alerts > 0 && (
                           <circle cx={p.x} cy={p.y} r="26" className="fill-none animate-ping" stroke={color.ring} strokeWidth="1" />
                         )}
@@ -431,6 +447,15 @@ function NodeDetailPanel({
         <Chip>{kindLabel(node.kind)}</Chip>
         {node.vendor && <Chip>{node.vendor}</Chip>}
       </div>
+
+      {node.stale && (
+        <div className="p-2.5 rounded-lg bg-amber-950/20 border border-amber-500/25 flex items-start gap-2">
+          <WifiOff className="w-3.5 h-3.5 mt-0.5 shrink-0 text-amber-400" />
+          <p className="text-[11px] text-amber-200/90">
+            <strong>Obsoleto</strong> — o agente não vê este dispositivo {node.last_seen ? relativeTime(node.last_seen) : 'há um tempo'}. Pode ter sido desativado.
+          </p>
+        </div>
+      )}
 
       {node.unresolved_alerts > 0 ? (
         <div className="p-2.5 rounded-lg bg-rose-950/20 border border-rose-500/25">
