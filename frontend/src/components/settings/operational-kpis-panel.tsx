@@ -1,10 +1,10 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { Activity, AlertOctagon, Bot, Radio, RefreshCw, ShieldHalf, Layers, RotateCcw, AlertTriangle } from 'lucide-react';
+import { Activity, AlertOctagon, Bot, Radio, RefreshCw, ShieldHalf, Layers, RotateCcw, AlertTriangle, Radar, ServerOff } from 'lucide-react';
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { apiFetchJson } from '@/lib/api-client';
-import type { OperationalStats } from '@/types';
+import type { OperationalStats, CoverageStats } from '@/types';
 
 // Tactical NOC/SOC KPI panel (Fase 6 fatia 1 backend → this fatia 2 UI). Complements the SLA
 // executive report with alert-fatigue, top-offender, automation-ROI, MITRE and silent-source
@@ -13,6 +13,7 @@ import type { OperationalStats } from '@/types';
 // like the SLA panel does.
 export function OperationalKpisPanel({ tenantId }: { tenantId?: string }) {
   const [stats, setStats] = useState<OperationalStats | null>(null);
+  const [coverage, setCoverage] = useState<CoverageStats | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -21,8 +22,12 @@ export function OperationalKpisPanel({ tenantId }: { tenantId?: string }) {
     setError(null);
     try {
       const qs = tenantId ? `?tenant_id=${tenantId}` : '';
-      const data = await apiFetchJson<OperationalStats>(`/api/v1/reports/operational/stats${qs}`);
+      const [data, cov] = await Promise.all([
+        apiFetchJson<OperationalStats>(`/api/v1/reports/operational/stats${qs}`),
+        apiFetchJson<CoverageStats>(`/api/v1/reports/coverage${qs}`).catch(() => null),
+      ]);
       setStats(data);
+      setCoverage(cov);
     } catch (err) {
       console.error('Failed to fetch operational stats:', err);
       setError('Não foi possível carregar os KPIs operacionais.');
@@ -173,6 +178,52 @@ export function OperationalKpisPanel({ tenantId }: { tenantId?: string }) {
               </div>
             ) : (
               <EmptyRow text="Nenhuma integração ativa para monitorar." />
+            )}
+          </div>
+
+          {/* Monitoring coverage (K2): discovered devices vs. those actually monitored. */}
+          <div className="p-4 rounded-xl bg-white/[0.02] border border-white/5">
+            <div className="flex items-center gap-1.5 text-[10px] font-bold uppercase text-slate-400 mb-3">
+              <Radar className="w-3.5 h-3.5 text-cyan-400" /> Cobertura de Monitoramento
+            </div>
+            {!coverage || coverage.total_discovered === 0 ? (
+              <EmptyRow text="Nenhum dispositivo descoberto ainda (configure a Descoberta de Rede)." />
+            ) : (
+              <div className="flex flex-col gap-3">
+                <div className="flex items-center gap-4">
+                  <span
+                    className={`text-3xl font-bold ${
+                      coverage.coverage_pct >= 80 ? 'text-emerald-400' : coverage.coverage_pct >= 50 ? 'text-amber-400' : 'text-rose-400'
+                    }`}
+                  >
+                    {coverage.coverage_pct.toFixed(0)}%
+                  </span>
+                  <span className="text-xs text-slate-400">
+                    <strong className="text-slate-200">{coverage.covered}</strong> de{' '}
+                    <strong className="text-slate-200">{coverage.total_discovered}</strong> ativos descobertos estão sob monitoramento
+                  </span>
+                </div>
+                {coverage.silent_devices.length > 0 && (
+                  <div>
+                    <div className="flex items-center gap-1.5 text-[10px] font-bold uppercase text-rose-400 mb-2">
+                      <ServerOff className="w-3 h-3" /> Descobertos sem monitoramento ({coverage.silent_devices.length})
+                    </div>
+                    <div className="flex flex-col gap-1.5 max-h-56 overflow-y-auto">
+                      {coverage.silent_devices.map((d) => (
+                        <div key={d.ip} className="flex items-center justify-between gap-3 px-3 py-1.5 rounded-lg bg-rose-950/10 border border-rose-500/15 text-[11px]">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className="font-mono text-slate-200">{d.ip}</span>
+                            {d.sysname && <span className="text-slate-400 truncate">{d.sysname}</span>}
+                          </div>
+                          <span className="text-slate-500 shrink-0 capitalize">
+                            {[d.vendor, d.device_type].filter(Boolean).join(' · ') || 'desconhecido'}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
             )}
           </div>
         </>

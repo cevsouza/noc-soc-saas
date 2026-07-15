@@ -49,6 +49,23 @@ export interface EscalationStats {
   sla_breaches: number;
 }
 
+// Monitoring coverage (K2): discovered devices vs. those actually monitored. Served by a separate
+// endpoint (/api/v1/reports/coverage), not part of OperationalStats.
+export interface SilentDevice {
+  ip: string;
+  sysname: string;
+  vendor: string;
+  device_type: string;
+  last_seen: string;
+}
+
+export interface CoverageStats {
+  total_discovered: number;
+  covered: number;
+  coverage_pct: number;
+  silent_devices: SilentDevice[];
+}
+
 export interface OperationalStats {
   window_days: number;
   triage_backlog: TriageBacklog;

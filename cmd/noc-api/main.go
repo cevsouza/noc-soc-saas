@@ -806,6 +806,11 @@ func main() {
 	protectedGetOperationalStats := middleware.JWTAuth(jwtSecret)(api.HandleGetOperationalStats(appPool, redisClient))
 	mux.Handle("/api/v1/reports/operational/stats", protectedGetOperationalStats)
 
+	// Monitoring-coverage KPI (K2): discovered devices vs. those actually monitored, plus the list of
+	// "dark" devices. Distinct path, read-only, same access level as the other KPI endpoints.
+	protectedCoverageStats := middleware.JWTAuth(jwtSecret)(api.HandleGetCoverageStats(appPool))
+	mux.Handle("/api/v1/reports/coverage", protectedCoverageStats)
+
 	// Incidents (Fase 3/3b): the grouped-investigation view — recurring alerts of the same problem
 	// collapsed into one incident. List is read-only for any authenticated user; acknowledging or
 	// resolving an incident requires at least analyst_l1 (excludes read_only).
