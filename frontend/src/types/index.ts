@@ -13,6 +13,7 @@ export * from './response';
 export * from './search';
 export * from './topology';
 export * from './suppression';
+export * from './oncall';
 export * from './metrics';
 export * from './discovery';
 export * from './asset';

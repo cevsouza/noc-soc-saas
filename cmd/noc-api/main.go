@@ -853,6 +853,29 @@ func main() {
 		suppMutate.ServeHTTP(w, r)
 	})))
 
+	// On-call scheduling (B5 slice 1). Two method-dispatched routes (single registration each avoids a
+	// ServeMux "multiple registrations" collision): GET lists (any authenticated user), POST/DELETE
+	// mutate (tenant admins). Schedules carry their current on-call assignee; shifts assign users to
+	// time windows.
+	schedGet := api.HandleGetOncallSchedules(appPool)
+	schedMutate := middleware.RequireRole(model.RoleTenantAdmin)(api.HandleMutateOncallSchedules(appPool))
+	mux.Handle("/api/v1/oncall/schedules", middleware.JWTAuth(jwtSecret)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			schedGet.ServeHTTP(w, r)
+			return
+		}
+		schedMutate.ServeHTTP(w, r)
+	})))
+	shiftGet := api.HandleGetOncallShifts(appPool)
+	shiftMutate := middleware.RequireRole(model.RoleTenantAdmin)(api.HandleMutateOncallShifts(appPool))
+	mux.Handle("/api/v1/oncall/shifts", middleware.JWTAuth(jwtSecret)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			shiftGet.ServeHTTP(w, r)
+			return
+		}
+		shiftMutate.ServeHTTP(w, r)
+	})))
+
 	// Merged topology graph (discovery slice C): discovered devices + alert hosts + physical LLDP/CDP edges.
 	mux.Handle("/api/v1/topology/graph", middleware.JWTAuth(jwtSecret)(api.HandleGetTopologyGraph(appPool)))
 	// Discovery wiring status (agent connected? last check-in? how much found?) — drives the topology
