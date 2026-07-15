@@ -89,6 +89,36 @@ type GraphEdge struct {
 	Protocol   string `json:"protocol"`
 	LocalPort  string `json:"local_port,omitempty"`
 	RemotePort string `json:"remote_port,omitempty"`
+	// Link utilization overlay (T-D), attached when the local device's interface (device_ip=source,
+	// ifindex=local_port) has stats. UtilPct is max(in,out)/speed*100; -1 when no interface data.
+	IfName     string  `json:"ifname,omitempty"`
+	OperStatus string  `json:"oper_status,omitempty"`
+	InBps      int64   `json:"in_bps,omitempty"`
+	OutBps     int64   `json:"out_bps,omitempty"`
+	SpeedBps   int64   `json:"speed_bps,omitempty"`
+	UtilPct    float64 `json:"util_pct"`
+}
+
+// ifaceStat is a device interface's utilization used to enrich edges (T-D).
+type ifaceStat struct {
+	ifname     string
+	operStatus string
+	inBps      int64
+	outBps     int64
+	speedBps   int64
+}
+
+// linkUtilPct returns the busier direction's utilization as a percentage of link speed, or -1 when
+// speed is unknown (so the UI can distinguish "0% used" from "no data"). Pure.
+func linkUtilPct(inBps, outBps, speedBps int64) float64 {
+	if speedBps <= 0 {
+		return -1
+	}
+	busier := inBps
+	if outBps > busier {
+		busier = outBps
+	}
+	return float64(busier) / float64(speedBps) * 100
 }
 
 // TopologyGraph is the merged node/edge graph for a tenant.
@@ -281,7 +311,7 @@ func buildTopologyGraph(devices []GraphNodeIn, links []GraphLinkIn, hosts []Grap
 			continue
 		}
 		edgeSeen[key] = true
-		edges = append(edges, GraphEdge{Source: src, Target: tgt, Protocol: l.Protocol, LocalPort: l.LocalPort, RemotePort: l.RemotePortID})
+		edges = append(edges, GraphEdge{Source: src, Target: tgt, Protocol: l.Protocol, LocalPort: l.LocalPort, RemotePort: l.RemotePortID, UtilPct: -1})
 	}
 
 	out := TopologyGraph{Nodes: make([]GraphNode, 0, len(nodes)), Edges: edges}
@@ -319,7 +349,8 @@ func HandleGetTopologyGraph(pgPool *pgxpool.Pool) http.HandlerFunc {
 		var links []GraphLinkIn
 		var hosts []GraphHostIn
 		var aliases []AssetAlias
-		locations := map[string]string{} // asset identifier -> CMDB location (T-C)
+		locations := map[string]string{}      // asset identifier -> CMDB location (T-C)
+		ifaces := map[string]ifaceStat{}      // "device_ip|ifindex" -> interface utilization (T-D)
 
 		err = db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
 			dr, e := tx.Query(ctx, `SELECT ip, sysname, vendor, device_type, last_seen FROM discovered_devices WHERE tenant_id = $1 LIMIT 500`, tenantID)
@@ -402,6 +433,22 @@ func HandleGetTopologyGraph(pgPool *pgxpool.Pool) http.HandlerFunc {
 				hosts = append(hosts, h)
 			}
 			hr.Close()
+
+			// Interface utilization for the link overlay (T-D), keyed by device_ip|ifindex.
+			ir, e := tx.Query(ctx, `SELECT device_ip, ifindex, ifname, oper_status, in_bps, out_bps, speed_bps FROM agent_interfaces WHERE tenant_id = $1`, tenantID)
+			if e != nil {
+				return e
+			}
+			for ir.Next() {
+				var devIP, ifidx string
+				var st ifaceStat
+				if e := ir.Scan(&devIP, &ifidx, &st.ifname, &st.operStatus, &st.inBps, &st.outBps, &st.speedBps); e != nil {
+					ir.Close()
+					return e
+				}
+				ifaces[devIP+"|"+ifidx] = st
+			}
+			ir.Close()
 			return nil
 		})
 		if err != nil {
@@ -415,6 +462,20 @@ func HandleGetTopologyGraph(pgPool *pgxpool.Pool) http.HandlerFunc {
 			for i := range graph.Nodes {
 				if loc, ok := locations[graph.Nodes[i].ID]; ok {
 					graph.Nodes[i].Location = loc
+				}
+			}
+		}
+		// Attach interface utilization to each edge whose local endpoint (source device + local_port =
+		// ifindex) has interface stats (T-D).
+		if len(ifaces) > 0 {
+			for i := range graph.Edges {
+				if st, ok := ifaces[graph.Edges[i].Source+"|"+graph.Edges[i].LocalPort]; ok {
+					graph.Edges[i].IfName = st.ifname
+					graph.Edges[i].OperStatus = st.operStatus
+					graph.Edges[i].InBps = st.inBps
+					graph.Edges[i].OutBps = st.outBps
+					graph.Edges[i].SpeedBps = st.speedBps
+					graph.Edges[i].UtilPct = linkUtilPct(st.inBps, st.outBps, st.speedBps)
 				}
 			}
 		}

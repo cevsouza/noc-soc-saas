@@ -404,6 +404,7 @@ export function TopologyView({
                     const t = layout.pos[e.target];
                     if (!s || !t) return null;
                     const active = selectedId === e.source || selectedId === e.target;
+                    const es = edgeStyle(e);
                     return (
                       <g key={`e-${i}`}>
                         <line
@@ -411,10 +412,12 @@ export function TopologyView({
                           y1={s.y}
                           x2={t.x}
                           y2={t.y}
-                          stroke={active ? 'rgba(56,189,248,0.8)' : 'rgba(56,189,248,0.28)'}
-                          strokeWidth={active ? 2 : 1.25}
+                          stroke={es.stroke}
+                          strokeWidth={active ? es.width + 1 : es.width}
+                          strokeOpacity={active ? 0.95 : es.hasData ? 0.8 : 0.3}
+                          strokeDasharray={es.dash}
                         />
-                        <title>{`${nodesById[e.source]?.label} (${e.local_port || '?'}) ↔ ${nodesById[e.target]?.label} (${e.remote_port || '?'}) · ${e.protocol.toUpperCase()}`}</title>
+                        <title>{edgeTooltip(e, nodesById[e.source]?.label ?? e.source, nodesById[e.target]?.label ?? e.target)}</title>
                       </g>
                     );
                   })}
@@ -470,7 +473,7 @@ export function TopologyView({
             </>
           )}
           <div className="absolute bottom-3 left-4 text-[10px] text-slate-500 bg-black/60 border border-white/5 px-2.5 py-1 rounded-md pointer-events-none">
-            💡 <em>Arraste para mover · role para dar zoom · clique num ativo para detalhes. Linhas = enlaces LLDP/CDP.</em>
+            💡 <em>Arraste para mover · role para dar zoom · clique num ativo para detalhes. Linhas = enlaces LLDP/CDP; cor/espessura = utilização (SNMP).</em>
           </div>
         </div>
 
@@ -843,6 +846,38 @@ function groupColor(key: string): string {
   let h = 0;
   for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) >>> 0;
   return GROUP_PALETTE[h % GROUP_PALETTE.length];
+}
+
+// ---- link utilization overlay (T-D) ----
+
+// formatBps renders a bit-rate human-readably.
+function formatBps(bps: number): string {
+  if (bps >= 1e9) return `${(bps / 1e9).toFixed(1)} Gbps`;
+  if (bps >= 1e6) return `${(bps / 1e6).toFixed(1)} Mbps`;
+  if (bps >= 1e3) return `${(bps / 1e3).toFixed(0)} kbps`;
+  return `${bps} bps`;
+}
+
+// edgeStyle colors/thickens a link by utilization: green→amber→orange→red, thicker with load. A down
+// interface is a thin red dashed line; a link with no interface data stays neutral cyan.
+function edgeStyle(e: GraphEdge): { stroke: string; width: number; dash?: string; hasData: boolean } {
+  if (e.oper_status === 'down') return { stroke: '#f43f5e', width: 1.25, dash: '4 3', hasData: true };
+  if (typeof e.util_pct === 'number' && e.util_pct >= 0) {
+    const u = e.util_pct;
+    const stroke = u >= 90 ? '#f43f5e' : u >= 70 ? '#fb923c' : u >= 40 ? '#fbbf24' : '#34d399';
+    return { stroke, width: 1.25 + (Math.min(u, 100) / 100) * 3.5, hasData: true };
+  }
+  return { stroke: '#38bdf8', width: 1.25, hasData: false };
+}
+
+function edgeTooltip(e: GraphEdge, srcLabel: string, tgtLabel: string): string {
+  let s = `${srcLabel} (${e.local_port || '?'}) ↔ ${tgtLabel} (${e.remote_port || '?'}) · ${e.protocol.toUpperCase()}`;
+  if (e.oper_status && e.oper_status !== 'up' && e.oper_status !== '') s += ` · ${e.oper_status.toUpperCase()}`;
+  if (typeof e.util_pct === 'number' && e.util_pct >= 0) {
+    s += `\n↓ ${formatBps(e.in_bps || 0)} · ↑ ${formatBps(e.out_bps || 0)}`;
+    if (e.speed_bps) s += ` de ${formatBps(e.speed_bps)} (${e.util_pct.toFixed(0)}%)`;
+  }
+  return s;
 }
 
 function originLabel(origin: string): string {

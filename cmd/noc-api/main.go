@@ -489,6 +489,9 @@ func main() {
 	// Raw SNMP metric samples (slice 3): agent pushes (API key + ingest guard); console reads the
 	// catalog + series (JWT, tenant-scoped) to graph them.
 	mux.Handle("/api/v1/agent/metrics", ingestGuard(api.HandleAgentMetrics(appPool)))
+	// Per-interface utilization ingest (topology slice T-D): the agent pushes ifTable throughput so the
+	// topology graph can color the physical links by real load.
+	mux.Handle("/api/v1/agent/interfaces", ingestGuard(api.HandleAgentInterfaces(appPool)))
 	mux.Handle("/api/v1/agent/metrics/catalog", middleware.JWTAuth(jwtSecret)(api.HandleGetMetricsCatalog(appPool)))
 	mux.Handle("/api/v1/agent/metrics/series", middleware.JWTAuth(jwtSecret)(api.HandleGetMetricsSeries(appPool)))
 

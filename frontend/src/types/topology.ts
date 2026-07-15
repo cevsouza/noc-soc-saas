@@ -21,6 +21,13 @@ export interface GraphEdge {
   protocol: string;
   local_port?: string;
   remote_port?: string;
+  // Link utilization overlay (T-D), present when the local device's interface has SNMP stats.
+  ifname?: string;
+  oper_status?: string;
+  in_bps?: number;
+  out_bps?: number;
+  speed_bps?: number;
+  util_pct: number; // busier direction % of speed; -1 = no interface data
 }
 
 export interface TopologyGraph {

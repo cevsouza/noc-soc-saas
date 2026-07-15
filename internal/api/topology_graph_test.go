@@ -138,6 +138,24 @@ func TestBuildTopologyGraphAggregatesHosts(t *testing.T) {
 	}
 }
 
+func TestLinkUtilPct(t *testing.T) {
+	cases := []struct {
+		in, out, speed int64
+		want           float64
+	}{
+		{0, 0, 0, -1},              // no speed → "no data"
+		{0, 0, 1_000_000_000, 0},   // idle link
+		{500_000_000, 0, 1_000_000_000, 50},   // 50% inbound
+		{0, 250_000_000, 1_000_000_000, 25},   // 25% outbound
+		{100_000_000, 900_000_000, 1_000_000_000, 90}, // busier direction (out) dominates
+	}
+	for _, c := range cases {
+		if got := linkUtilPct(c.in, c.out, c.speed); got != c.want {
+			t.Errorf("linkUtilPct(%d,%d,%d) = %v, want %v", c.in, c.out, c.speed, got, c.want)
+		}
+	}
+}
+
 func TestBuildTopologyGraphStale(t *testing.T) {
 	now := time.Now()
 	staleBefore := now.Add(-24 * time.Hour)

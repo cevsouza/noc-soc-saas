@@ -150,6 +150,27 @@ func (c *Client) SendMetrics(agentID string, samples []Sample) (int, error) {
 	return out.Accepted, nil
 }
 
+// SendInterfaces pushes per-interface utilization snapshots (topology slice T-D). Returns the number
+// the SaaS upserted.
+func (c *Client) SendInterfaces(agentID string, ifaces []InterfaceStat) (int, error) {
+	resp, err := c.postJSON("/api/v1/agent/interfaces?agent_id="+agentID, map[string]interface{}{
+		"agent_id": agentID, "interfaces": ifaces,
+	}, true)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusAccepted {
+		return 0, fmt.Errorf("interfaces failed: status %d: %s", resp.StatusCode, string(body))
+	}
+	var out struct {
+		Accepted int `json:"accepted"`
+	}
+	_ = json.Unmarshal(body, &out)
+	return out.Accepted, nil
+}
+
 // SendDiscovery pushes the batch of discovered devices, their physical neighbour links, and the
 // non-SNMP hosts learned from ARP caches (topology slice T5) from a network sweep. Returns the number
 // of devices the SaaS upserted into the tenant inventory.

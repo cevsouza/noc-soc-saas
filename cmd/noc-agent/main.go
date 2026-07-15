@@ -94,6 +94,8 @@ func main() {
 	var lastDiscovery time.Time
 	poller := agent.NewPoller()
 	scanner := agent.NewScanner()
+	ifWalker := agent.NewInterfaceWalker()
+	ifCollector := agent.NewInterfaceCollector()
 	log.Printf("[agent] noc-agent %s started; polling %s every %s (outbound 443 only)", agentVersion, saasURL, pollInterval)
 
 	runCycle := func() {
@@ -125,6 +127,19 @@ func main() {
 			}
 		}
 		log.Printf("[agent] cycle ok (snmp_targets=%d, events=%d accepted=%d, metrics=%d accepted=%d, next in %s)", len(cfg.SNMPTargets), len(events), accepted, len(samples), metricsAccepted, pollInterval)
+
+		// Per-interface utilization (topology slice T-D): walk each SNMP target's ifTable and push the
+		// computed in/out bps so the topology graph can color the physical links by real load.
+		if len(cfg.SNMPTargets) > 0 {
+			ifaces := ifCollector.Collect(ifWalker, cfg.SNMPTargets, time.Now())
+			if len(ifaces) > 0 {
+				if n, ierr := client.SendInterfaces(st.AgentID, ifaces); ierr != nil {
+					log.Printf("[agent] interfaces push failed: %v", ierr)
+				} else {
+					log.Printf("[agent] interfaces ok (collected=%d, upserted=%d)", len(ifaces), n)
+				}
+			}
+		}
 
 		// Active discovery: sweep configured CIDRs when the slower cadence is due. Each responder is
 		// also walked for LLDP/CDP neighbours (physical edges) and its ARP cache (non-SNMP hosts).
