@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { RefreshCw, Radar, ServerCog, Wifi, WifiOff, Settings2, AlertCircle, Search, X, Filter, ZoomIn, ZoomOut, Maximize2 } from 'lucide-react';
+import { RefreshCw, Radar, ServerCog, Wifi, WifiOff, Settings2, AlertCircle, Search, X, Filter, ZoomIn, ZoomOut, Maximize2, Repeat, Tv } from 'lucide-react';
 import { apiFetchJson } from '@/lib/api-client';
 import type { TopologyGraph, GraphNode, GraphEdge, TopologyStatus } from '@/types';
 
@@ -36,30 +36,60 @@ export function TopologyView({
   const [colorMode, setColorMode] = useState<'severity' | 'subnet' | 'location'>('severity');
   const [hiddenTiers, setHiddenTiers] = useState<Set<string>>(new Set());
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [autoRefresh, setAutoRefresh] = useState(false);
+  const [isFull, setIsFull] = useState(false);
+  const containerRef = useRef<HTMLDivElement | null>(null);
 
-  const fetchGraph = useCallback(async () => {
-    setIsLoading(true);
-    setError(null);
-    try {
-      const qs = tenantId ? `?tenant_id=${tenantId}` : '';
-      const [g, s] = await Promise.all([
-        apiFetchJson<TopologyGraph>(`/api/v1/topology/graph${qs}`),
-        apiFetchJson<TopologyStatus>(`/api/v1/topology/status${qs}`),
-      ]);
-      setData(g);
-      setStatus(s);
-      setSelectedId(null);
-    } catch (err) {
-      console.error('Failed to fetch topology graph:', err);
-      setError('Não foi possível carregar o grafo de topologia.');
-    } finally {
-      setIsLoading(false);
-    }
-  }, [tenantId]);
+  // silent=true (auto-refresh) skips the spinner and keeps the current selection/zoom, so a wallboard
+  // doesn't flicker or lose the operator's view each cycle.
+  const fetchGraph = useCallback(
+    async (silent = false) => {
+      if (!silent) setIsLoading(true);
+      setError(null);
+      try {
+        const qs = tenantId ? `?tenant_id=${tenantId}` : '';
+        const [g, s] = await Promise.all([
+          apiFetchJson<TopologyGraph>(`/api/v1/topology/graph${qs}`),
+          apiFetchJson<TopologyStatus>(`/api/v1/topology/status${qs}`),
+        ]);
+        setData(g);
+        setStatus(s);
+        if (!silent) setSelectedId(null);
+      } catch (err) {
+        console.error('Failed to fetch topology graph:', err);
+        setError('Não foi possível carregar o grafo de topologia.');
+      } finally {
+        if (!silent) setIsLoading(false);
+      }
+    },
+    [tenantId],
+  );
 
   useEffect(() => {
     fetchGraph();
   }, [fetchGraph]);
+
+  // Auto-refresh (T-E): poll every 30s while enabled, silently (no view reset).
+  useEffect(() => {
+    if (!autoRefresh) return;
+    const id = setInterval(() => fetchGraph(true), 30000);
+    return () => clearInterval(id);
+  }, [autoRefresh, fetchGraph]);
+
+  // Wallboard/fullscreen (T-E): mirror the browser fullscreen state so the toggle icon stays honest.
+  useEffect(() => {
+    const onFs = () => setIsFull(!!document.fullscreenElement);
+    document.addEventListener('fullscreenchange', onFs);
+    return () => document.removeEventListener('fullscreenchange', onFs);
+  }, []);
+
+  const toggleFullscreen = () => {
+    if (document.fullscreenElement) {
+      document.exitFullscreen().catch(() => {});
+    } else {
+      containerRef.current?.requestFullscreen().catch(() => {});
+    }
+  };
 
   const allNodes = useMemo(() => data?.nodes ?? [], [data]);
   const allEdges = useMemo(() => data?.edges ?? [], [data]);
@@ -178,7 +208,7 @@ export function TopologyView({
   };
 
   return (
-    <div className="glass-card rounded-xl overflow-hidden flex flex-col border border-white/5 p-6 bg-[#040812]">
+    <div ref={containerRef} className="glass-card rounded-xl overflow-hidden flex flex-col border border-white/5 p-6 bg-[#040812]">
       <div className="flex justify-between items-start mb-4 gap-4 flex-wrap">
         <div className="flex flex-col gap-0.5">
           <h4 className="text-sm font-extrabold text-slate-200 uppercase tracking-wider flex items-center gap-2">
@@ -196,7 +226,25 @@ export function TopologyView({
             <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-slate-500"></span> Vizinho</span>
           </div>
           <button
-            onClick={fetchGraph}
+            onClick={() => setAutoRefresh((v) => !v)}
+            title="Atualizar o grafo automaticamente a cada 30s (sem perder o zoom/seleção)"
+            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-bold transition-all border ${
+              autoRefresh ? 'bg-emerald-500/15 text-emerald-200 border-emerald-500/30' : 'bg-white/5 text-slate-300 border-white/10 hover:bg-white/10'
+            }`}
+          >
+            <Repeat className={`w-3 h-3 ${autoRefresh ? 'animate-spin' : ''}`} style={autoRefresh ? { animationDuration: '3s' } : undefined} /> Auto {autoRefresh ? '(30s)' : ''}
+          </button>
+          <button
+            onClick={toggleFullscreen}
+            title="Modo wallboard (tela cheia)"
+            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-bold transition-all border ${
+              isFull ? 'bg-cyan-500/15 text-cyan-200 border-cyan-500/30' : 'bg-white/5 text-slate-300 border-white/10 hover:bg-white/10'
+            }`}
+          >
+            <Tv className="w-3 h-3" /> Wallboard
+          </button>
+          <button
+            onClick={() => fetchGraph()}
             disabled={isLoading}
             className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-bold text-slate-300 bg-white/5 hover:bg-white/10 transition-all disabled:opacity-50"
           >
@@ -307,7 +355,7 @@ export function TopologyView({
       )}
 
       <div className="flex gap-3">
-        <div className="relative flex-1 h-[480px] bg-black/60 rounded-xl border border-white/5 overflow-hidden">
+        <div className={`relative flex-1 ${isFull ? 'h-[calc(100vh-13rem)]' : 'h-[480px]'} bg-black/60 rounded-xl border border-white/5 overflow-hidden`}>
           {isLoading && !data ? (
             <div className="absolute inset-0 flex items-center justify-center text-xs text-slate-500">Carregando grafo…</div>
           ) : nothingAtAll ? (
