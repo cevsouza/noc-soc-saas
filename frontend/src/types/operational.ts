@@ -37,12 +37,26 @@ export interface SourceHeartbeat {
   silent: boolean;
 }
 
+// Closure quality (K1): how often a resolved alert had to be reopened within the window.
+export interface ReworkStats {
+  reopened: number;
+  closed: number;
+  reopen_rate_pct: number;
+}
+
+// SLA-breach escalations paged in the window.
+export interface EscalationStats {
+  sla_breaches: number;
+}
+
 export interface OperationalStats {
   window_days: number;
   triage_backlog: TriageBacklog;
   noise_ratio: NoiseRatio;
   top_offenders: OffenderCount[];
   automation: AutomationStats;
+  rework: ReworkStats;
+  escalations: EscalationStats;
   by_mitre: MitreCount[];
   source_health: SourceHeartbeat[];
 }

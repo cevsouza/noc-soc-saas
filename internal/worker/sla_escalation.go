@@ -192,5 +192,19 @@ func (wp *WorkerPool) escalateSLABreach(ctx context.Context, tenantID uuid.UUID,
 	wp.triggerEscalations(ctx, synth)
 	log.Printf("[SLA] %s breach escalated: incident %s tenant %s (age=%.0fm target=%.0fm)", breach.label(), oi.id, tenantID, ageMinutes, targetMinutes)
 
+	// Stamp the escalation on the incident timeline. This is also the persistent signal the operational
+	// escalation KPI counts (Redis flags expire hourly, so they can't be counted over the 30d window).
+	// Best-effort: a failure here must not stop the page that already went out.
+	tenantCtx := db.WithTenantID(ctx, tenantID)
+	if cerr := db.ExecuteInTenantTx(tenantCtx, wp.pgPool, func(tx pgx.Tx) error {
+		_, e := tx.Exec(tenantCtx, `
+			INSERT INTO incident_comments (incident_id, tenant_id, author, comment)
+			VALUES ($1, $2, 'Sistema', $3)
+		`, oi.id, tenantID, fmt.Sprintf("%s por estouro de %s: aberto há %.0fmin (meta %.0fmin).", api.SLAEscalatedCommentPrefix, breach.label(), ageMinutes, targetMinutes))
+		return e
+	}); cerr != nil {
+		log.Printf("[SLA] Failed to log escalation comment for incident %s: %v", oi.id, cerr)
+	}
+
 	_ = wp.redisClient.Set(ctx, flagKey, time.Now().Unix(), time.Duration(renotifySecs)*time.Second).Err()
 }

@@ -1648,8 +1648,8 @@ func HandleReopenAlert(pgPool *pgxpool.Pool) http.HandlerFunc {
 			if rowsAffected > 0 {
 				_, err = tx.Exec(ctx, `
 					INSERT INTO incident_comments (incident_id, tenant_id, author, comment)
-					VALUES ($1, $2, 'Sistema', 'Alerta REABERTO pelo operador no Cockpit (Histórico).')
-				`, req.ID, tenantID)
+					VALUES ($1, $2, 'Sistema', $3)
+				`, req.ID, tenantID, AlertReopenedCommentPrefix+" pelo operador no Cockpit (Histórico).")
 				return err
 			}
 			return nil

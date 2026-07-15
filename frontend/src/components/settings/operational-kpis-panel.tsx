@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { Activity, AlertOctagon, Bot, Radio, RefreshCw, ShieldHalf, Layers } from 'lucide-react';
+import { Activity, AlertOctagon, Bot, Radio, RefreshCw, ShieldHalf, Layers, RotateCcw, AlertTriangle } from 'lucide-react';
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { apiFetchJson } from '@/lib/api-client';
 import type { OperationalStats } from '@/types';
@@ -61,7 +61,7 @@ export function OperationalKpisPanel({ tenantId }: { tenantId?: string }) {
       {stats && (
         <>
           {/* Top KPI cards */}
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
             <KpiCard
               icon={<Layers className="w-3.5 h-3.5 text-cyan-400" />}
               label="Fila de Triagem"
@@ -86,6 +86,20 @@ export function OperationalKpisPanel({ tenantId }: { tenantId?: string }) {
               label="Contenções"
               value={`${stats.automation.response_executed}`}
               sub={`${stats.automation.response_failed} falharam`}
+            />
+            <KpiCard
+              icon={<RotateCcw className="w-3.5 h-3.5 text-rose-400" />}
+              label="Taxa de Reabertura"
+              value={`${stats.rework.reopen_rate_pct.toFixed(0)}%`}
+              sub={`${stats.rework.reopened} reabertos de ${stats.rework.closed} fechados`}
+              accent={stats.rework.reopen_rate_pct > 0 ? 'text-rose-400' : undefined}
+            />
+            <KpiCard
+              icon={<AlertTriangle className="w-3.5 h-3.5 text-amber-400" />}
+              label="Escalonamentos SLA"
+              value={`${stats.escalations.sla_breaches}`}
+              sub="estouros de SLA paginados"
+              accent={stats.escalations.sla_breaches > 0 ? 'text-amber-400' : undefined}
             />
           </div>
 

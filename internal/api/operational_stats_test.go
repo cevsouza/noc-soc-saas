@@ -35,3 +35,22 @@ func TestEstimateHoursSaved(t *testing.T) {
 		t.Errorf("estimateHoursSaved(8,4) = %v, want 3.0", got)
 	}
 }
+
+func TestReopenRatePct(t *testing.T) {
+	cases := []struct {
+		reopened, closed int
+		want             float64
+	}{
+		{0, 0, 0},     // no data
+		{3, 0, 0},     // guard: closed 0 must not divide-by-zero
+		{0, 10, 0},    // nothing bounced back
+		{1, 10, 10.0}, // 1 of 10 reopened
+		{5, 20, 25.0},
+		{10, 10, 100.0}, // everything bounced back
+	}
+	for _, c := range cases {
+		if got := reopenRatePct(c.reopened, c.closed); got != c.want {
+			t.Errorf("reopenRatePct(%d, %d) = %v, want %v", c.reopened, c.closed, got, c.want)
+		}
+	}
+}

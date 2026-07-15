@@ -30,6 +30,17 @@ const (
 	estimatedMinutesSavedPerAutomation = 15.0
 )
 
+// Marker prefixes for the incident_comments this package's KPIs count. Defined here (the api package)
+// as the single source of truth: the reopen handler (same package) and the SLA-escalation worker
+// (which imports api) build their comments with these prefixes, and the operational stats query
+// counts comments matching them. Keep the written text starting with the prefix if it ever changes.
+const (
+	// AlertReopenedCommentPrefix marks the comment written when a closed alert is reopened.
+	AlertReopenedCommentPrefix = "Alerta REABERTO"
+	// SLAEscalatedCommentPrefix marks the comment the SLA-escalation worker writes on a breach page.
+	SLAEscalatedCommentPrefix = "[SLA] Incidente escalado"
+)
+
 // OperationalStats is the daily/weekly tactical KPI bundle that complements the SLA executive
 // report — the metrics a NOC/SOC watches to spot alert fatigue, offending assets, automation
 // ROI, MITRE coverage, and silent telemetry sources.
@@ -39,8 +50,25 @@ type OperationalStats struct {
 	NoiseRatio    NoiseRatio        `json:"noise_ratio"`
 	TopOffenders  []OffenderCount   `json:"top_offenders"`
 	Automation    AutomationStats   `json:"automation"`
+	Rework        ReworkStats       `json:"rework"`
+	Escalations   EscalationStats   `json:"escalations"`
 	ByMitre       []MitreCount      `json:"by_mitre"`
 	SourceHealth  []SourceHeartbeat `json:"source_health"`
+}
+
+// ReworkStats measures closure quality (K1): how often a resolved/suppressed alert had to be reopened
+// (bounced back into the working queue) within the window. A high reopen rate signals alerts being
+// closed prematurely. Closed = resolved-in-window + reopened (everything that got closed).
+type ReworkStats struct {
+	Reopened      int     `json:"reopened"`
+	Closed        int     `json:"closed"`
+	ReopenRatePct float64 `json:"reopen_rate_pct"`
+}
+
+// EscalationStats counts SLA-breach escalations paged in the window — incidents that blew past their
+// MTTA/MTTR target and paged a human (each page is stamped on the incident timeline by the worker).
+type EscalationStats struct {
+	SLABreaches int `json:"sla_breaches"`
 }
 
 // TriageBacklog is the current (not windowed) count of unresolved alerts awaiting attention.
@@ -98,6 +126,14 @@ func computeNoiseRatio(total, distinct int) float64 {
 // heuristic and returns the total in hours.
 func estimateHoursSaved(soarExecuted, responseExecuted int) float64 {
 	return float64(soarExecuted+responseExecuted) * estimatedMinutesSavedPerAutomation / 60.0
+}
+
+// reopenRatePct returns reopened/closed as a percentage, guarding division by zero (0 closed → 0%).
+func reopenRatePct(reopened, closed int) float64 {
+	if closed <= 0 {
+		return 0
+	}
+	return float64(reopened) / float64(closed) * 100
 }
 
 // HandleGetOperationalStats returns the tactical KPI bundle for the caller's tenant. Any
@@ -193,6 +229,33 @@ func HandleGetOperationalStats(pgPool *pgxpool.Pool, redisClient *redis.Client) 
 				return err
 			}
 			stats.Automation.EstimatedHoursSaved = estimateHoursSaved(stats.Automation.SoarExecuted, stats.Automation.ResponseExecuted)
+
+			// 4c. Rework/reopen rate (K1): reopened alerts (reopen-comment marker) over total closures
+			// in the window. Closures = alerts resolved in the window + the reopens (which were also
+			// closed at some point), so the rate reads "of everything closed, what fraction bounced back".
+			var resolvedInWindow int
+			if err := tx.QueryRow(ctx, `
+				SELECT COUNT(*) FROM incident_comments
+				WHERE tenant_id = $1 AND created_at >= NOW() - $2::interval AND comment LIKE $3
+			`, tenantID, window, AlertReopenedCommentPrefix+"%").Scan(&stats.Rework.Reopened); err != nil {
+				return err
+			}
+			if err := tx.QueryRow(ctx, `
+				SELECT COUNT(*) FROM alerts
+				WHERE tenant_id = $1 AND resolved_at >= NOW() - $2::interval
+			`, tenantID, window).Scan(&resolvedInWindow); err != nil {
+				return err
+			}
+			stats.Rework.Closed = resolvedInWindow + stats.Rework.Reopened
+			stats.Rework.ReopenRatePct = reopenRatePct(stats.Rework.Reopened, stats.Rework.Closed)
+
+			// 4d. SLA-breach escalations paged in the window (escalation-comment marker).
+			if err := tx.QueryRow(ctx, `
+				SELECT COUNT(*) FROM incident_comments
+				WHERE tenant_id = $1 AND created_at >= NOW() - $2::interval AND comment LIKE $3
+			`, tenantID, window, SLAEscalatedCommentPrefix+"%").Scan(&stats.Escalations.SLABreaches); err != nil {
+				return err
+			}
 
 			// 5. MITRE ATT&CK tactic breakdown (windowed).
 			mitreRows, err := tx.Query(ctx, `
