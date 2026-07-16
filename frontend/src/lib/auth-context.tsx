@@ -7,6 +7,8 @@ import type { SessionUser, Tenant } from '@/types';
 interface LoginResult {
   ok: boolean;
   message?: string;
+  /** The user's landing-console preference (B9), so the caller can redirect to /noc or /soc. */
+  defaultConsole?: 'all' | 'noc' | 'soc';
 }
 
 interface RegisterResult {
@@ -23,6 +25,7 @@ interface AuthContextValue {
   isLoading: boolean;
   login: (email: string, password: string) => Promise<LoginResult>;
   register: (email: string, password: string, name: string) => Promise<RegisterResult>;
+  setDefaultConsole: (console: 'all' | 'noc' | 'soc') => Promise<void>;
   logout: () => void;
 }
 
@@ -84,11 +87,31 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setToken(data.token);
       setUser(data.user);
       setTenant(data.tenant);
-      return { ok: true };
+      return { ok: true, defaultConsole: data.user?.default_console ?? 'all' };
     } catch {
       return { ok: false, message: 'Falha ao se conectar com o servidor.' };
     }
   }, []);
+
+  // Persist the user's landing-console preference (B9) and update the in-memory/localStorage session.
+  const setDefaultConsole = useCallback(async (console: 'all' | 'noc' | 'soc') => {
+    if (!token) return;
+    try {
+      await fetch(`${API_BASE_URL}/api/v1/users/me/console`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ console }),
+      });
+    } catch {
+      // Best-effort; the optimistic local update below still reflects the choice for this session.
+    }
+    setUser((prev) => {
+      if (!prev) return prev;
+      const next = { ...prev, default_console: console };
+      window.localStorage.setItem('noc_user', JSON.stringify(next));
+      return next;
+    });
+  }, [token]);
 
   const register = useCallback(async (email: string, password: string, name: string): Promise<RegisterResult> => {
     try {
@@ -117,7 +140,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ token, user, tenant, isLoading, login, register, logout }}>
+    <AuthContext.Provider value={{ token, user, tenant, isLoading, login, register, setDefaultConsole, logout }}>
       {children}
     </AuthContext.Provider>
   );

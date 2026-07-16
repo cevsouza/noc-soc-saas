@@ -54,7 +54,9 @@ export default function LoginPage() {
       const result = await login(email, password);
       if (result.ok) {
         setAuthStatus({ status: 'success' });
-        router.push('/');
+        // Land on the user's preferred console (B9): /noc or /soc, else the unified cockpit.
+        const dest = result.defaultConsole === 'noc' ? '/noc' : result.defaultConsole === 'soc' ? '/soc' : '/';
+        router.push(dest);
       } else {
         setAuthStatus({ status: 'error', message: result.message });
       }

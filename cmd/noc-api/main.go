@@ -539,6 +539,8 @@ func main() {
 	mux.Handle("/api/v1/auth/verify", api.HandleVerify(appPool))
 	mux.Handle("/api/v1/auth/login", api.HandleLogin(appPool, jwtSecret))
 	mux.Handle("/api/v1/public/tenants", api.HandleGetPublicTenants(appPool))
+	// Per-user landing-console preference (B9): any authenticated user sets their own all/noc/soc.
+	mux.Handle("/api/v1/users/me/console", middleware.JWTAuth(jwtSecret)(api.HandleSetConsolePreference(appPool)))
 	mux.Handle("/api/v1/tenants/update_style", middleware.JWTAuth(jwtSecret)(
 		middleware.RequireRole(model.RoleAdmin)(
 			api.HandleUpdateTenantStyle(appPool),

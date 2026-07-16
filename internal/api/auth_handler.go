@@ -76,6 +76,9 @@ type UserDTO struct {
 	// GlobalRole is the platform-wide (MSSP) role, distinct from the tenant-scoped Role. The frontend
 	// uses it to gate control-plane surfaces (e.g. the MSSP usage dashboard) to platform admins.
 	GlobalRole model.UserRole `json:"global_role"`
+	// DefaultConsole is the user's landing console preference (B9): 'all' (unified /), 'noc' (/noc),
+	// or 'soc' (/soc). Convenience only — not an access restriction.
+	DefaultConsole string `json:"default_console"`
 }
 
 type TenantDTO struct {
@@ -273,13 +276,14 @@ func HandleLogin(pgPool *pgxpool.Pool, jwtSecret []byte) http.HandlerFunc {
 		var pwdHash string
 		var isVerified bool
 		var globalRole string
+		var defaultConsole string
 
 		queryUser := `
-			SELECT id, name, password_hash, is_verified, global_role
+			SELECT id, name, password_hash, is_verified, global_role, COALESCE(default_console, 'all')
 			FROM users
 			WHERE email = $1
 		`
-		err := pgPool.QueryRow(ctx, queryUser, req.Email).Scan(&userID, &name, &pwdHash, &isVerified, &globalRole)
+		err := pgPool.QueryRow(ctx, queryUser, req.Email).Scan(&userID, &name, &pwdHash, &isVerified, &globalRole, &defaultConsole)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				http.Error(w, "Unauthorized: Credenciais inválidas", http.StatusUnauthorized)
@@ -362,11 +366,12 @@ func HandleLogin(pgPool *pgxpool.Pool, jwtSecret []byte) http.HandlerFunc {
 		resp := AuthResponse{
 			Token: token,
 			User: UserDTO{
-				ID:         userID,
-				Email:      req.Email,
-				Name:       name,
-				Role:       model.UserRole(tenantRoleStr),
-				GlobalRole: model.UserRole(globalRole),
+				ID:             userID,
+				Email:          req.Email,
+				Name:           name,
+				Role:           model.UserRole(tenantRoleStr),
+				GlobalRole:     model.UserRole(globalRole),
+				DefaultConsole: defaultConsole,
 			},
 			Tenant: TenantDTO{
 				ID:   tenantID,

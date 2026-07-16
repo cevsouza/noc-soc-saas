@@ -11,6 +11,9 @@ export interface SessionUser {
   // used to gate control-plane surfaces (the MSSP usage dashboard) to platform admins. Optional so
   // sessions persisted before this field existed still typecheck (they re-login to populate it).
   global_role?: UserRole;
+  // Landing-console preference (B9): where the user arrives after login. Convenience only, not an
+  // access restriction. Optional for backward-compatible persisted sessions.
+  default_console?: 'all' | 'noc' | 'soc';
 }
 
 // Matches internal/api/auth_handler.go's UserListResponse (GET /api/v1/admin/users) — a

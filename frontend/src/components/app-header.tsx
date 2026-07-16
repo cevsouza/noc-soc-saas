@@ -13,7 +13,7 @@ const DEFAULT_LOGO =
 
 export function AppHeader({ connStatus }: { connStatus: ConnectionStatus }) {
   const router = useRouter();
-  const { user, logout } = useAuth();
+  const { user, logout, setDefaultConsole } = useAuth();
   const { tenants, selectedTenantIds } = useTenantSelection();
 
   const isAdmin = user?.role === 'admin';
@@ -45,6 +45,20 @@ export function AppHeader({ connStatus }: { connStatus: ConnectionStatus }) {
 
       <div className="flex items-center gap-4">
         <TenantSelector isAdmin={isAdmin} singleTenantName={singleTenant?.name} />
+
+        {/* Landing-console preference (B9): where the user arrives after login. */}
+        <label className="flex items-center gap-1.5 text-[9px] uppercase tracking-wider text-slate-500 font-bold" title="Console onde você cai ao entrar">
+          Console
+          <select
+            value={user?.default_console ?? 'all'}
+            onChange={(e) => setDefaultConsole(e.target.value as 'all' | 'noc' | 'soc')}
+            className="bg-white/5 border border-white/10 rounded-lg px-2 py-1 text-[10px] text-slate-200 focus:outline-none focus:border-cyan-500/50 cursor-pointer"
+          >
+            <option value="all">Unificado</option>
+            <option value="noc">NOC</option>
+            <option value="soc">SOC</option>
+          </select>
+        </label>
 
         <ThemeToggle />
 
