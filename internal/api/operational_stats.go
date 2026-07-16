@@ -47,6 +47,7 @@ const (
 type OperationalStats struct {
 	WindowDays    int               `json:"window_days"`
 	TriageBacklog TriageBacklog     `json:"triage_backlog"`
+	BacklogAging  BacklogAging      `json:"backlog_aging"`
 	NoiseRatio    NoiseRatio        `json:"noise_ratio"`
 	TopOffenders  []OffenderCount   `json:"top_offenders"`
 	Automation    AutomationStats   `json:"automation"`
@@ -56,6 +57,38 @@ type OperationalStats struct {
 	Detection     DetectionStats    `json:"detection"`
 	ByMitre       []MitreCount      `json:"by_mitre"`
 	SourceHealth  []SourceHeartbeat `json:"source_health"`
+}
+
+// BacklogAging is the exposure/aging view of the OPEN incident backlog (B8): how long the currently
+// unresolved incidents have been open, bucketed by age (from first_seen). Unlike the MTTA/MTTR
+// averages — which only summarize CLOSED work and hide stuck items — this surfaces incidents that
+// have been sitting open for a long time (the >24h bucket = stale, risky exposure). Not windowed: an
+// incident open for 40 days is exactly what this must flag. NOTE: this is exposure/age, not true
+// security "dwell time" (undetected-compromise window), which needs an external onset signal the
+// platform does not collect — documented as a data gap.
+type BacklogAging struct {
+	OpenTotal       int     `json:"open_total"`
+	Under1h         int     `json:"under_1h"`
+	H1to6           int     `json:"h1_6"`
+	H6to24          int     `json:"h6_24"`
+	Over24h         int     `json:"over_24h"`
+	OldestOpenHours float64 `json:"oldest_open_hours"`
+	AvgOpenHours    float64 `json:"avg_open_hours"`
+}
+
+// agingBucket classifies an open incident's age-in-hours into the same four buckets the SQL FILTERs
+// use. Pure and unit-tested; it documents the thresholds in one place.
+func agingBucket(hoursOpen float64) string {
+	switch {
+	case hoursOpen < 1:
+		return "under_1h"
+	case hoursOpen < 6:
+		return "1_6h"
+	case hoursOpen < 24:
+		return "6_24h"
+	default:
+		return "over_24h"
+	}
 }
 
 // DetectionStats is the MTTD (mean time to detect) breakdown (K4): the delay between an event
@@ -211,6 +244,28 @@ func HandleGetOperationalStats(pgPool *pgxpool.Pool, redisClient *redis.Client) 
 					COUNT(*) FILTER (WHERE status = 'acknowledged')
 				FROM alerts WHERE tenant_id = $1
 			`, tenantID).Scan(&stats.TriageBacklog.Triggered, &stats.TriageBacklog.Acknowledged); err != nil {
+				return err
+			}
+
+			// 1b. Backlog aging (B8): how long the OPEN incidents have been open (from first_seen),
+			// bucketed. Not windowed — a long-open incident is exactly what this surfaces. Thresholds
+			// mirror agingBucket().
+			if err := tx.QueryRow(ctx, `
+				SELECT
+					COUNT(*),
+					COUNT(*) FILTER (WHERE NOW() - first_seen <  interval '1 hour'),
+					COUNT(*) FILTER (WHERE NOW() - first_seen >= interval '1 hour'  AND NOW() - first_seen < interval '6 hours'),
+					COUNT(*) FILTER (WHERE NOW() - first_seen >= interval '6 hours' AND NOW() - first_seen < interval '24 hours'),
+					COUNT(*) FILTER (WHERE NOW() - first_seen >= interval '24 hours'),
+					COALESCE(EXTRACT(EPOCH FROM MAX(NOW() - first_seen)) / 3600.0, 0),
+					COALESCE(EXTRACT(EPOCH FROM AVG(NOW() - first_seen)) / 3600.0, 0)
+				FROM incidents
+				WHERE tenant_id = $1 AND status <> 'resolved'
+			`, tenantID).Scan(
+				&stats.BacklogAging.OpenTotal, &stats.BacklogAging.Under1h, &stats.BacklogAging.H1to6,
+				&stats.BacklogAging.H6to24, &stats.BacklogAging.Over24h,
+				&stats.BacklogAging.OldestOpenHours, &stats.BacklogAging.AvgOpenHours,
+			); err != nil {
 				return err
 			}
 

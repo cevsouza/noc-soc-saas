@@ -153,6 +153,28 @@ export function OperationalKpisPanel({ tenantId }: { tenantId?: string }) {
             )}
           </div>
 
+          {/* Backlog aging / exposure (B8): how long the OPEN incidents have been sitting. */}
+          <div className="p-4 rounded-xl bg-white/[0.02] border border-white/5">
+            <div className="flex items-center justify-between mb-3">
+              <div className="text-[10px] font-bold uppercase text-slate-400">Envelhecimento do Backlog (incidentes abertos)</div>
+              {stats.backlog_aging.open_total > 0 && (
+                <div className="text-[10px] text-slate-500">
+                  mais antigo <strong className="text-slate-300">{formatAge(stats.backlog_aging.oldest_open_hours)}</strong> · média <strong className="text-slate-300">{formatAge(stats.backlog_aging.avg_open_hours)}</strong>
+                </div>
+              )}
+            </div>
+            {stats.backlog_aging.open_total > 0 ? (
+              <div className="grid grid-cols-4 gap-2">
+                <AgeTile label="< 1h" value={stats.backlog_aging.under_1h} tone="text-emerald-400" />
+                <AgeTile label="1–6h" value={stats.backlog_aging.h1_6} tone="text-sky-400" />
+                <AgeTile label="6–24h" value={stats.backlog_aging.h6_24} tone="text-amber-400" />
+                <AgeTile label="> 24h" value={stats.backlog_aging.over_24h} tone={stats.backlog_aging.over_24h > 0 ? 'text-rose-400' : 'text-slate-400'} />
+              </div>
+            ) : (
+              <EmptyRow text="Nenhum incidente aberto — backlog zerado." />
+            )}
+          </div>
+
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
             {/* Automation breakdown */}
             <div className="p-4 rounded-xl bg-white/[0.02] border border-white/5">
@@ -310,6 +332,25 @@ function StatRow({ label, value, good }: { label: string; value: number; good?: 
 
 function EmptyRow({ text }: { text: string }) {
   return <div className="text-xs text-slate-500 py-4 text-center">{text}</div>;
+}
+
+// One age bucket tile for the backlog-aging section (B8).
+function AgeTile({ label, value, tone }: { label: string; value: number; tone: string }) {
+  return (
+    <div className="p-3 rounded-lg bg-black/30 border border-white/5 flex flex-col items-center gap-0.5">
+      <span className={`text-xl font-extrabold ${tone}`}>{value}</span>
+      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">{label}</span>
+    </div>
+  );
+}
+
+// Compact age formatter (hours → "42min" / "3.5h" / "2d 4h") for backlog exposure.
+function formatAge(hours: number): string {
+  if (hours < 1) return `${Math.round(hours * 60)}min`;
+  if (hours < 24) return `${hours.toFixed(1)}h`;
+  const d = Math.floor(hours / 24);
+  const h = Math.round(hours % 24);
+  return `${d}d ${h}h`;
 }
 
 function formatAgo(seconds: number): string {

@@ -105,9 +105,23 @@ export interface AnalystStats {
   analysts: AnalystProductivity[];
 }
 
+// Backlog aging / exposure (B8): how long the OPEN incidents have been open, bucketed by age.
+// Surfaces stuck/stale incidents the MTTA/MTTR averages hide (over_24h = risky exposure). This is
+// exposure/age, not true security "dwell time" (undetected-compromise window), which is data-blocked.
+export interface BacklogAging {
+  open_total: number;
+  under_1h: number;
+  h1_6: number;
+  h6_24: number;
+  over_24h: number;
+  oldest_open_hours: number;
+  avg_open_hours: number;
+}
+
 export interface OperationalStats {
   window_days: number;
   triage_backlog: TriageBacklog;
+  backlog_aging: BacklogAging;
   noise_ratio: NoiseRatio;
   top_offenders: OffenderCount[];
   automation: AutomationStats;

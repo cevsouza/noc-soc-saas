@@ -91,3 +91,24 @@ func TestDetectionCoveragePct(t *testing.T) {
 		}
 	}
 }
+
+func TestAgingBucket(t *testing.T) {
+	cases := []struct {
+		hours float64
+		want  string
+	}{
+		{0, "under_1h"},
+		{0.9, "under_1h"},
+		{1, "1_6h"},
+		{5.9, "1_6h"},
+		{6, "6_24h"},
+		{23.9, "6_24h"},
+		{24, "over_24h"},
+		{100, "over_24h"},
+	}
+	for _, c := range cases {
+		if got := agingBucket(c.hours); got != c.want {
+			t.Errorf("agingBucket(%.1f) = %q, want %q", c.hours, got, c.want)
+		}
+	}
+}
