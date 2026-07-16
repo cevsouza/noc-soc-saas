@@ -968,6 +968,28 @@ func main() {
 	mux.Handle("/api/v1/response/approve", protectedApproveResponse)
 	mux.Handle("/api/v1/response/reject", protectedRejectResponse)
 
+	// Multi-step SOAR playbook engine (Backlog B7). A playbook chains abstract steps (notify /
+	// comment / response_action); running one auto-executes the side-effect-light steps and PAUSES
+	// at each containment step for the same operator/admin approval gate as single-action response.
+	// Definitions CRUD is method-dispatched on one path (tenant_admin gate enforced inside the
+	// handler for POST/DELETE); run/approve/reject require operator+.
+	protectedPlaybooks := middleware.JWTAuth(jwtSecret)(api.HandlePlaybooks(appPool))
+	protectedRunPlaybook := middleware.JWTAuth(jwtSecret)(
+		middleware.RequireRole(model.RoleAdmin, model.RoleOperator)(api.HandleRunPlaybook(appPool)),
+	)
+	protectedPlaybookRuns := middleware.JWTAuth(jwtSecret)(api.HandleGetPlaybookRuns(appPool))
+	protectedApprovePlaybook := middleware.JWTAuth(jwtSecret)(
+		middleware.RequireRole(model.RoleAdmin, model.RoleOperator)(api.HandleApprovePlaybookRun(appPool)),
+	)
+	protectedRejectPlaybook := middleware.JWTAuth(jwtSecret)(
+		middleware.RequireRole(model.RoleAdmin, model.RoleOperator)(api.HandleRejectPlaybookRun(appPool)),
+	)
+	mux.Handle("/api/v1/playbooks", protectedPlaybooks)
+	mux.Handle("/api/v1/playbooks/run", protectedRunPlaybook)
+	mux.Handle("/api/v1/playbooks/runs", protectedPlaybookRuns)
+	mux.Handle("/api/v1/playbooks/runs/approve", protectedApprovePlaybook)
+	mux.Handle("/api/v1/playbooks/runs/reject", protectedRejectPlaybook)
+
 	// Incident chat & timeline endpoints
 	protectedIncidentChat := middleware.JWTAuth(jwtSecret)(api.HandleIncidentChat(appPool))
 	protectedIncidentComments := middleware.JWTAuth(jwtSecret)(api.HandleIncidentComments(appPool))

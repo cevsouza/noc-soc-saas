@@ -13,7 +13,6 @@ import (
 	"noc-api/internal/middleware"
 	"noc-api/internal/repository"
 	"noc-api/internal/responder"
-	"noc-api/internal/security"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -260,40 +259,10 @@ func HandleApproveResponseAction(pgPool *pgxpool.Pool) http.HandlerFunc {
 				return fmt.Errorf("response action is no longer pending (status: %s)", status)
 			}
 
-			resp, ok := responder.Get(integrationType)
-			if !ok {
-				finalStatus = "failed"
-				output = fmt.Sprintf("no responder registered for integration %q", integrationType)
-			} else {
-				// Resolve the tenant's credentials for this vendor from the vault (best-effort per
-				// key; the responder validates which are required and reports a clear error if one
-				// it needs is absent).
-				masterKey, kerr := security.GetMasterKey()
-				if kerr != nil {
-					return fmt.Errorf("failed to retrieve encryption key: %w", kerr)
-				}
-				creds := make(map[string]string)
-				for _, key := range responseVaultKeys[integrationType] {
-					sec, gerr := vaultRepo.GetSecretByKey(ctx, tx, key)
-					if gerr != nil {
-						continue
-					}
-					decrypted, derr := security.DecryptForTenant(sec.EncryptedValue, sec.Nonce, masterKey, tenantID)
-					if derr == nil {
-						creds[key] = string(decrypted)
-					}
-				}
-
-				log.Printf("[Response Action] Executing %s/%s on target %s (tenant %s)", integrationType, actionType, target, tenantID)
-				out, xerr := resp.Execute(ctx, creds, responder.Action{Type: responder.ActionType(actionType), Target: target})
-				if xerr != nil {
-					finalStatus = "failed"
-					output = fmt.Sprintf("Execution error: %v", xerr)
-				} else {
-					finalStatus = "approved"
-					output = out
-				}
-			}
+			// Resolve credentials + run the vendor call via the shared executor (also used by the
+			// playbook engine). A vendor/infra failure is recorded as status='failed', not an HTTP error.
+			log.Printf("[Response Action] Executing %s/%s on target %s (tenant %s)", integrationType, actionType, target, tenantID)
+			finalStatus, output = executeResponderAction(ctx, tx, vaultRepo, tenantID, integrationType, actionType, target)
 
 			if _, err := tx.Exec(ctx, `
 				UPDATE response_action_requests
