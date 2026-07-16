@@ -41,10 +41,24 @@ import (
 
 const (
 	watchdogScanInterval        = 60 * time.Second
-	defaultSilenceThresholdSecs = 600  // 10 min without any telemetry → considered silent
-	defaultGraceSecs            = 900  // 15 min after activation before a never-connected source alarms
-	defaultRenotifySecs         = 3600 // don't re-alarm the same persistent outage more than hourly
+	defaultSilenceThresholdSecs = 600     // 10 min without any telemetry → considered silent
+	defaultGraceSecs            = 900     // 15 min after activation before a never-connected source alarms
+	defaultRenotifySecs         = 3600    // real outage: don't re-alarm the same persistent one more than hourly
+	defaultNeverConnRenotifySec = 604800  // never-connected: warn at most weekly (onboarding issue, not an outage)
 )
+
+// watchdogAlarmParams returns the alert severity and the alarm-suppression TTL for a source based on
+// whether it has ever connected. A source that WAS connected and went silent is a real outage — it
+// pages at CRITICAL and re-pages every renotify window. A source that was activated but NEVER sent a
+// single heartbeat is an onboarding/configuration problem, not a production outage: it alarms at
+// WARNING and is suppressed for a much longer window, so a permanently-unconfigured integration warns
+// once instead of paging critical every hour forever (the noise the operator was seeing). Pure.
+func watchdogAlarmParams(hasHeartbeat bool, silentRenotify, neverConnRenotify int64) (model.AlertSeverity, int64) {
+	if hasHeartbeat {
+		return model.SeverityCritical, silentRenotify
+	}
+	return model.SeverityWarning, neverConnRenotify
+}
 
 // watchdogMonitoredTypes is the set of inbound telemetry integration types the watchdog treats as
 // "should be reporting". Mirrors the inbound connectors in internal/connector plus the poll
@@ -101,7 +115,8 @@ func (wp *WorkerPool) StartWatchdog(ctx context.Context) {
 	silenceThreshold := envInt64("WATCHDOG_SILENCE_SECONDS", defaultSilenceThresholdSecs)
 	graceSecs := envInt64("WATCHDOG_GRACE_SECONDS", defaultGraceSecs)
 	renotifySecs := envInt64("WATCHDOG_RENOTIFY_SECONDS", defaultRenotifySecs)
-	log.Printf("[Watchdog] Connection watchdog started (silence=%ds grace=%ds renotify=%ds)", silenceThreshold, graceSecs, renotifySecs)
+	neverConnRenotify := envInt64("WATCHDOG_NEVER_CONNECTED_RENOTIFY_SECONDS", defaultNeverConnRenotifySec)
+	log.Printf("[Watchdog] Connection watchdog started (silence=%ds grace=%ds renotify=%ds never_connected_renotify=%ds)", silenceThreshold, graceSecs, renotifySecs, neverConnRenotify)
 
 	ticker := time.NewTicker(watchdogScanInterval)
 	go func() {
@@ -114,7 +129,7 @@ func (wp *WorkerPool) StartWatchdog(ctx context.Context) {
 				ticker.Stop()
 				return
 			case <-ticker.C:
-				wp.scanConnections(ctx, silenceThreshold, graceSecs, renotifySecs)
+				wp.scanConnections(ctx, silenceThreshold, graceSecs, renotifySecs, neverConnRenotify)
 			}
 		}
 	}()
@@ -124,7 +139,7 @@ func (wp *WorkerPool) StartWatchdog(ctx context.Context) {
 // and evaluates each source's heartbeat freshness. The tenants table is not RLS-forced (it is the
 // tenant registry itself), so it can be read directly; per-tenant integration reads run inside the
 // tenant's RLS context.
-func (wp *WorkerPool) scanConnections(ctx context.Context, silenceThreshold, graceSecs, renotifySecs int64) {
+func (wp *WorkerPool) scanConnections(ctx context.Context, silenceThreshold, graceSecs, renotifySecs, neverConnRenotify int64) {
 	tenantIDs, err := wp.activeTenantIDs(ctx)
 	if err != nil {
 		log.Printf("[Watchdog] Failed to list active tenants: %v", err)
@@ -138,7 +153,7 @@ func (wp *WorkerPool) scanConnections(ctx context.Context, silenceThreshold, gra
 			continue
 		}
 		for _, s := range sources {
-			wp.evaluateAndAct(ctx, tenantID, s.itype, s.createdAt.Unix(), now, silenceThreshold, graceSecs, renotifySecs)
+			wp.evaluateAndAct(ctx, tenantID, s.itype, s.createdAt.Unix(), now, silenceThreshold, graceSecs, renotifySecs, neverConnRenotify)
 		}
 	}
 }
@@ -191,7 +206,7 @@ func (wp *WorkerPool) activeInboundIntegrations(ctx context.Context, tenantID uu
 }
 
 // evaluateAndAct reads the heartbeat + alarmed state for one source and acts on the decision.
-func (wp *WorkerPool) evaluateAndAct(ctx context.Context, tenantID uuid.UUID, itype string, createdAt, now, silenceThreshold, graceSecs, renotifySecs int64) {
+func (wp *WorkerPool) evaluateAndAct(ctx context.Context, tenantID uuid.UUID, itype string, createdAt, now, silenceThreshold, graceSecs, renotifySecs, neverConnRenotify int64) {
 	heartbeatKey := cache.TenantKey(tenantID, "heartbeat", itype)
 	alarmKey := cache.TenantKey(tenantID, "watchdog", "alarmed", itype)
 
@@ -213,9 +228,11 @@ func (wp *WorkerPool) evaluateAndAct(ctx context.Context, tenantID uuid.UUID, it
 
 	switch evaluateSource(now, lastSeen, hasHeartbeat, createdAt, alarmed, silenceThreshold, graceSecs) {
 	case decisionAlarm:
-		wp.raiseTelemetryLossAlarm(ctx, tenantID, itype, hasHeartbeat, now-lastSeen)
-		// Suppress re-alarming this same outage until the re-notify window elapses.
-		_ = wp.redisClient.Set(ctx, alarmKey, now, time.Duration(renotifySecs)*time.Second).Err()
+		severity, suppressTTL := watchdogAlarmParams(hasHeartbeat, renotifySecs, neverConnRenotify)
+		wp.raiseTelemetryLossAlarm(ctx, tenantID, itype, severity, hasHeartbeat, now-lastSeen)
+		// Suppress re-alarming until the re-notify window elapses. A real outage re-pages hourly; a
+		// never-connected integration warns at most weekly, so an unconfigured source doesn't spam.
+		_ = wp.redisClient.Set(ctx, alarmKey, now, time.Duration(suppressTTL)*time.Second).Err()
 	case decisionRecover:
 		_ = wp.redisClient.Del(ctx, alarmKey).Err()
 		log.Printf("[Watchdog] Recovery: connector %s for tenant %s is reporting again", itype, tenantID)
@@ -227,7 +244,7 @@ func (wp *WorkerPool) evaluateAndAct(ctx context.Context, tenantID uuid.UUID, it
 // raiseTelemetryLossAlarm injects a synthetic system alert that flows through the normal pipeline
 // (dedupe → persist → WebSocket → escalations). Because Source=system, createNewAlert pages the
 // configured channels but deliberately skips SOAR remediation.
-func (wp *WorkerPool) raiseTelemetryLossAlarm(ctx context.Context, tenantID uuid.UUID, itype string, hasHeartbeat bool, silentFor int64) {
+func (wp *WorkerPool) raiseTelemetryLossAlarm(ctx context.Context, tenantID uuid.UUID, itype string, severity model.AlertSeverity, hasHeartbeat bool, silentFor int64) {
 	var summary string
 	if hasHeartbeat {
 		summary = fmt.Sprintf("Perda de telemetria: o conector '%s' parou de enviar dados há %dm (possível desconexão)", itype, silentFor/60)
@@ -240,7 +257,7 @@ func (wp *WorkerPool) raiseTelemetryLossAlarm(ctx context.Context, tenantID uuid
 		TenantID:   tenantID,
 		Source:     model.SourceSystem,
 		EventType:  "telemetry_loss_" + itype,
-		Severity:   model.SeverityCritical,
+		Severity:   severity,
 		Title:      summary,
 		Timestamp:  time.Now(),
 		Host:       "connection-watchdog",

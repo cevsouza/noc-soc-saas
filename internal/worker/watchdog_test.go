@@ -1,6 +1,26 @@
 package worker
 
-import "testing"
+import (
+	"testing"
+
+	"noc-api/internal/model"
+)
+
+// watchdogAlarmParams: a source that has connected before pages CRITICAL with the short (hourly)
+// renotify; one that never connected warns WARNING with the long (weekly) renotify so it doesn't spam.
+func TestWatchdogAlarmParams(t *testing.T) {
+	const silent, never = int64(3600), int64(604800)
+
+	sev, ttl := watchdogAlarmParams(true, silent, never)
+	if sev != model.SeverityCritical || ttl != silent {
+		t.Errorf("connected-then-silent = %q/%d, want critical/%d", sev, ttl, silent)
+	}
+
+	sev, ttl = watchdogAlarmParams(false, silent, never)
+	if sev != model.SeverityWarning || ttl != never {
+		t.Errorf("never-connected = %q/%d, want warning/%d", sev, ttl, never)
+	}
+}
 
 // Pure-logic coverage of the watchdog decision core — no Redis/Postgres. Thresholds mirror the
 // defaults: silence=600s, grace=900s.
