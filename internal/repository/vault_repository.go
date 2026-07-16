@@ -57,8 +57,12 @@ func (r *PostgresVaultRepository) GetSecretByKey(ctx context.Context, q db.Query
 		return nil, fmt.Errorf("tenant_id not found in context")
 	}
 
+	// COALESCE the description: HandleSaveSecret (and the cockpit UI that calls it) never sets a
+	// description, so the column is NULL for API-created secrets. Scanning NULL into the non-nullable
+	// model.VaultSecret.Description string fails ("cannot scan NULL into *string") — which broke any
+	// path that creates then reads a secret (surfaced by B3's OCSF streaming). '' is the safe default.
 	query := `
-		SELECT id, tenant_id, secret_key, encrypted_value, nonce, description, created_at, updated_at
+		SELECT id, tenant_id, secret_key, encrypted_value, nonce, COALESCE(description, ''), created_at, updated_at
 		FROM tenant_vault
 		WHERE secret_key = $1
 	`

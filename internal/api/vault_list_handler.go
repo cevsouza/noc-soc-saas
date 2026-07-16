@@ -34,10 +34,12 @@ func HandleGetVaultSecrets(pgPool *pgxpool.Pool) http.HandlerFunc {
 		list := make([]VaultSecretMetadata, 0)
 
 		err = db.ExecuteInTenantTx(ctx, pgPool, func(tx pgx.Tx) error {
+			// COALESCE description: API-created secrets have a NULL description (HandleSaveSecret
+			// never sets one), which would fail the scan into a non-nullable string.
 			query := `
-				SELECT id, secret_key, description, created_at, updated_at 
-				FROM tenant_vault 
-				WHERE tenant_id = $1 
+				SELECT id, secret_key, COALESCE(description, ''), created_at, updated_at
+				FROM tenant_vault
+				WHERE tenant_id = $1
 				ORDER BY secret_key
 			`
 			rows, err := tx.Query(ctx, query, tenantID)
