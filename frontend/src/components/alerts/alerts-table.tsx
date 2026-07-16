@@ -89,7 +89,10 @@ export function AlertsTable({ alerts, tenants, selectedAlertId, onSelectAlert, o
                 </TableCell>
                 <TableCell className="text-center">
                   <div className="flex flex-col items-center gap-1">
-                    <span className="text-xs text-slate-400 font-mono">{new Date(alert.created_at).toLocaleTimeString()}</span>
+                    <span className="text-xs text-slate-400 font-mono">
+                      {new Date(alert.created_at).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })}{' '}
+                      {new Date(alert.created_at).toLocaleTimeString('pt-BR')}
+                    </span>
                     <SlaCountdown alert={alert} />
                   </div>
                 </TableCell>

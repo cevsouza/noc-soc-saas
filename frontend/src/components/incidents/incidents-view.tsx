@@ -325,7 +325,7 @@ export function IncidentsView({ tenantId, domain }: { tenantId?: string; domain?
                             <span className="text-slate-300 truncate">{a.summary}</span>
                             <code className="text-slate-500">{a.event_type}</code>
                           </div>
-                          <span className="text-slate-500 shrink-0">{a.status} · {new Date(a.created_at).toLocaleTimeString()}</span>
+                          <span className="text-slate-500 shrink-0">{a.status} · {new Date(a.created_at).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })} {new Date(a.created_at).toLocaleTimeString('pt-BR')}</span>
                         </div>
                       ))}
                     </div>
