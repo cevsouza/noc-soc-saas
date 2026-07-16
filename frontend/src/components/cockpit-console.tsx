@@ -8,6 +8,7 @@ import { useTenantSelection } from '@/lib/tenant-context';
 import { useAlertsSocket } from '@/lib/use-alerts-socket';
 import { usePendingApprovalsCount } from '@/lib/use-pending-approvals-count';
 import { usePendingResponseCount } from '@/lib/use-pending-response-count';
+import { usePendingPlaybookCount } from '@/lib/use-pending-playbook-count';
 import { domainForSource, type ConsoleMode } from '@/lib/domain';
 import { alertComparator, isOpen, withinLens, type TimeLens, type AlertSortKey } from '@/lib/alert-priority';
 import { AppHeader } from '@/components/app-header';
@@ -42,7 +43,8 @@ export function CockpitConsole({ lockedConsole }: { lockedConsole?: 'noc' | 'soc
   const { alerts, setAlerts, connStatus } = useAlertsSocket(token, selectedTenantIds);
   const { count: pendingApprovals, refetch: refetchApprovals } = usePendingApprovalsCount(token);
   const { count: pendingResponses } = usePendingResponseCount(token);
-  const pendingSettingsCount = pendingApprovals + pendingResponses;
+  const { count: pendingPlaybooks } = usePendingPlaybookCount(token);
+  const pendingSettingsCount = pendingApprovals + pendingResponses + pendingPlaybooks;
 
   const [cockpitTab, setCockpitTab] = useState<CockpitTab>('alerts');
   // Domain comes from the route: `/` is always all-domains; `/noc` and `/soc` lock to their domain.

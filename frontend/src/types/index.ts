@@ -10,6 +10,7 @@ export * from './sla';
 export * from './operational';
 export * from './compliance';
 export * from './response';
+export * from './playbook';
 export * from './search';
 export * from './topology';
 export * from './suppression';

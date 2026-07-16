@@ -28,6 +28,7 @@ import {
   Terminal,
   TrendingUp,
   User,
+  Workflow,
 } from 'lucide-react';
 import { useAuth } from '@/lib/auth-context';
 import { useTenantSelection } from '@/lib/tenant-context';
@@ -35,6 +36,7 @@ import { apiFetch } from '@/lib/api-client';
 import { API_BASE_URL } from '@/lib/env';
 import { RunbookApprovalsPanel } from '@/components/settings/runbook-approvals-panel';
 import { ResponseActionsPanel } from '@/components/settings/response-actions-panel';
+import { PlaybooksPanel } from '@/components/settings/playbooks-panel';
 import { AccessControlPanel } from '@/components/settings/access-control-panel';
 import { OperationalKpisPanel } from '@/components/settings/operational-kpis-panel';
 import { CompliancePanel } from '@/components/settings/compliance-panel';
@@ -645,6 +647,18 @@ export function LegacyCockpitPanels({ cockpitTab, onSearchTermChange, onNavigate
                 >
                   <Ban className="w-3.5 h-3.5 text-rose-400" />
                   <span>Fila de Contenção</span>
+                </button>
+                <button
+                  onClick={() => {
+                    setSelectedIntegrationTool('playbooks');
+                    setValidationResult(null);
+                  }}
+                  className={`w-full px-3 py-2 rounded-lg text-left text-xs font-bold transition-all flex items-center gap-2 ${
+                    selectedIntegrationTool === 'playbooks' ? 'bg-white/5 text-white border-l-2 border-cyan-400' : 'text-slate-400 hover:bg-white/[0.02] hover:text-slate-200'
+                  }`}
+                >
+                  <Workflow className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>Playbooks SOAR</span>
                 </button>
                 <button
                   onClick={() => {
@@ -1658,6 +1672,8 @@ export function LegacyCockpitPanels({ cockpitTab, onSearchTermChange, onNavigate
                   <RunbookApprovalsPanel />
                 ) : selectedIntegrationTool === 'response_actions' ? (
                   <ResponseActionsPanel />
+                ) : selectedIntegrationTool === 'playbooks' ? (
+                  <PlaybooksPanel isTenantAdmin={['admin', 'tenant_admin'].includes(user?.role || '')} />
                 ) : selectedIntegrationTool === 'network_discovery' ? (
                   <NetworkDiscoveryPanel tenantId={selectedTenant?.id} />
                 ) : selectedIntegrationTool === 'assets' ? (
