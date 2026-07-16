@@ -100,6 +100,15 @@ export const INTEGRATIONS_REGISTRY: IntegrationRegistryEntry[] = [
     vaultFields: [{ key: 'email_recipient', label: 'E-mail(s) do destinatário', inputType: 'text' }],
     accentColorClass: 'border-slate-400/20 text-slate-300',
   },
+
+  // --- Outbound streaming: OCSF findings to a security data lake / SIEM (Backlog B3). Every new
+  // finding is POSTed to this sink in real time (all severities), enriched with observables,
+  // affected asset and cross-tenant corroboration.
+  {
+    id: 'ocsf', name: 'OCSF Data Lake / SIEM', shortDescription: 'Streaming de findings OCSF (class_uid 2004) em tempo real para um data lake ou SIEM.', method: 'webhook',
+    vaultFields: [{ key: 'ocsf_sink_url', label: 'URL do sink OCSF (HTTPS)', inputType: 'text' }],
+    accentColorClass: 'border-lime-500/20 text-lime-400',
+  },
 ];
 
 export function getIntegrationById(id: string): IntegrationRegistryEntry | undefined {

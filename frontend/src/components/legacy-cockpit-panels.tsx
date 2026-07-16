@@ -937,6 +937,7 @@ export function LegacyCockpitPanels({ cockpitTab, onSearchTermChange, onNavigate
                           { id: 'slack', name: 'Slack', method: 'Escalonamento (Outbound)', desc: 'Notifica um canal via webhook quando um alerta crítico/fatal dispara.', color: 'border-fuchsia-500/20' },
                           { id: 'teams', name: 'Microsoft Teams', method: 'Escalonamento (Outbound)', desc: 'Notifica um canal via webhook quando um alerta crítico/fatal dispara.', color: 'border-indigo-600/20' },
                           { id: 'email', name: 'E-mail (SMTP)', method: 'Escalonamento (Outbound)', desc: 'Envia um e-mail de alerta crítico/fatal via SMTP da plataforma.', color: 'border-slate-400/20' },
+                          { id: 'ocsf', name: 'OCSF Data Lake / SIEM', method: 'Streaming (Outbound)', desc: 'Envia cada finding em formato OCSF (class_uid 2004) em tempo real para um data lake ou SIEM.', color: 'border-lime-500/20' },
                         ].map(tool => {
                           const statusData = connectorStatuses[tool.id] || { status: 'inactive' };
                           const isPush = tool.method.includes('Push');
@@ -987,6 +988,7 @@ export function LegacyCockpitPanels({ cockpitTab, onSearchTermChange, onNavigate
                                   else if (tool.id === 'slack') setVaultKey('slack_webhook_url');
                                   else if (tool.id === 'teams') setVaultKey('teams_webhook_url');
                                   else if (tool.id === 'email') setVaultKey('email_recipient');
+                                  else if (tool.id === 'ocsf') setVaultKey('ocsf_sink_url');
                                   handleValidateIntegration(tool.id);
                                 }}
                                 className="w-full py-2 bg-white/5 hover:bg-cyan-500/15 hover:text-cyan-400 text-slate-300 font-extrabold uppercase tracking-widest text-[9px] rounded-lg transition-all border border-white/5 hover:border-cyan-500/30 cursor-pointer text-center"
@@ -998,7 +1000,7 @@ export function LegacyCockpitPanels({ cockpitTab, onSearchTermChange, onNavigate
                         })}
                       </div>
                     </div>
-                ) : ['uptimekuma', 'zabbix', 'prometheus', 'wazuh', 'grafana', 'sentinel', 'loki', 'slack', 'teams', 'email'].includes(selectedIntegrationTool) ? (
+                ) : ['uptimekuma', 'zabbix', 'prometheus', 'wazuh', 'grafana', 'sentinel', 'loki', 'slack', 'teams', 'email', 'ocsf'].includes(selectedIntegrationTool) ? (
                     // Detail panel for a conector
                     <div className="flex flex-col gap-4">
                       {/* Back button */}
@@ -1028,11 +1030,14 @@ export function LegacyCockpitPanels({ cockpitTab, onSearchTermChange, onNavigate
                             {selectedIntegrationTool === 'slack' && 'Configuração Slack'}
                             {selectedIntegrationTool === 'teams' && 'Configuração Microsoft Teams'}
                             {selectedIntegrationTool === 'email' && 'Configuração E-mail (SMTP)'}
+                            {selectedIntegrationTool === 'ocsf' && 'Configuração OCSF Data Lake / SIEM'}
                           </h4>
                           <p className="text-[10px] text-slate-500 uppercase tracking-widest font-bold">
                             {['uptimekuma', 'zabbix', 'prometheus', 'wazuh', 'grafana'].includes(selectedIntegrationTool)
                               ? 'Método: Webhook (Push / Envio de Alertas)'
-                              : ['slack', 'teams', 'email'].includes(selectedIntegrationTool)
+                              : selectedIntegrationTool === 'ocsf'
+                                ? 'Método: Streaming (Outbound / Envio de Findings OCSF)'
+                                : ['slack', 'teams', 'email'].includes(selectedIntegrationTool)
                                 ? 'Método: Escalonamento (Outbound / Somente Envio)'
                                 : 'Método: API Polling (Pull / Busca Ativa de Chaves)'}
                           </p>
@@ -1172,7 +1177,7 @@ export function LegacyCockpitPanels({ cockpitTab, onSearchTermChange, onNavigate
                             )}
                           </div>
                         </div>
-                      ) : ['sentinel', 'loki', 'ssh', 'slack', 'teams', 'email'].includes(selectedIntegrationTool) ? (
+                      ) : ['sentinel', 'loki', 'ssh', 'slack', 'teams', 'email', 'ocsf'].includes(selectedIntegrationTool) ? (
                         // Secure Vault Pull Connectors Form
                         <form onSubmit={handleSaveVaultSecret} className="flex flex-col gap-4">
                           <div className="flex flex-col gap-3 p-4 rounded-xl bg-cyan-950/10 border border-cyan-500/20 text-xs text-slate-300 leading-relaxed font-sans mb-2">
@@ -1221,18 +1226,21 @@ export function LegacyCockpitPanels({ cockpitTab, onSearchTermChange, onNavigate
                                 {selectedIntegrationTool === 'email' && (
                                   <option value="email_recipient">E-mail(s) do Destinatário</option>
                                 )}
+                                {selectedIntegrationTool === 'ocsf' && (
+                                  <option value="ocsf_sink_url">URL do sink OCSF (HTTPS)</option>
+                                )}
                               </select>
                             </div>
 
                             <div className="flex flex-col gap-2">
                               <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">
-                                {selectedIntegrationTool === 'email' ? 'Valor (não confidencial)' : 'Valor da Credencial (Secret Value)'}
+                                {['email', 'ocsf'].includes(selectedIntegrationTool) ? 'Valor (não confidencial)' : 'Valor da Credencial (Secret Value)'}
                               </label>
                               <input
-                                type={selectedIntegrationTool === 'email' ? 'text' : 'password'}
+                                type={['email', 'ocsf'].includes(selectedIntegrationTool) ? 'text' : 'password'}
                                 required
                                 value={vaultValue}
-                                placeholder={selectedIntegrationTool === 'email' ? 'destinatario@empresa.com' : 'Digite ou cole o valor confidencial aqui...'}
+                                placeholder={selectedIntegrationTool === 'email' ? 'destinatario@empresa.com' : selectedIntegrationTool === 'ocsf' ? 'https://datalake.exemplo.com/ocsf/ingest' : 'Digite ou cole o valor confidencial aqui...'}
                                 onChange={(e) => setVaultValue(e.target.value)}
                                 className="bg-surface border border-white/5 rounded-lg p-2.5 text-xs text-slate-200 focus:outline-none focus:border-cyan-500/50 placeholder:text-slate-600"
                               />
@@ -1322,6 +1330,17 @@ export function LegacyCockpitPanels({ cockpitTab, onSearchTermChange, onNavigate
                                   <span>1. Informe o(s) e-mail(s) que devem receber os alertas deste cliente.</span>
                                   <span>2. Não é necessário configurar credenciais SMTP aqui — elas são globais da plataforma.</span>
                                   <span>3. Se o SMTP da plataforma não estiver configurado, o envio é apenas registrado em log (sem erro).</span>
+                                </div>
+                              </div>
+                            )}
+
+                            {selectedIntegrationTool === 'ocsf' && (
+                              <div className="flex flex-col gap-2">
+                                <p>Faz <b>streaming em tempo real</b> de cada alerta como um finding <b>OCSF</b> (Open Cybersecurity Schema Framework, <code>class_uid 2004</code>) para o seu data lake de segurança, SIEM ou XDR:</p>
+                                <div className="flex flex-col gap-1.5 pl-3 border-l-2 border-lime-500/50">
+                                  <span>1. Informe a URL HTTPS do endpoint de ingestão OCSF do seu data lake/SIEM.</span>
+                                  <span>2. Todo alerta novo (de qualquer severidade) é enviado como um POST JSON, enriquecido com observables (IOCs), o ativo afetado do CMDB e corroboração cross-tenant de threat-intel.</span>
+                                  <span>3. Diferente do export sob demanda (<code>GET /api/v1/alerts/ocsf</code>), este é um fluxo contínuo — o finding chega no destino no instante em que o alerta é criado.</span>
                                 </div>
                               </div>
                             )}

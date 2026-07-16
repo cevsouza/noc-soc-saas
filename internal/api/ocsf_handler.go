@@ -10,6 +10,7 @@ import (
 	"noc-api/internal/model"
 	"noc-api/internal/ocsf"
 	"noc-api/internal/repository"
+	"noc-api/internal/threatintel"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -41,9 +42,18 @@ func HandleGetAlertsOCSF(pgPool *pgxpool.Pool, alertRepo repository.AlertReposit
 			return
 		}
 
+		// Enrich each exported finding with OCSF observables extracted from the alert's own payload
+		// (available without extra queries), so the pull export mirrors the enriched streaming path
+		// (Backlog B3). Device/fleet enrichment is left to the streaming path — it needs per-alert
+		// CMDB/aggregate lookups that would make a bulk export N+1.
 		findings := make([]ocsf.DetectionFinding, 0, len(alerts))
 		for _, a := range alerts {
-			findings = append(findings, ocsf.FromAlert(a))
+			host, _ := a.AIAnalysis["host"].(string)
+			var observables []ocsf.Observable
+			for _, ind := range threatintel.ExtractIndicators(host, a.Payload) {
+				observables = append(observables, ocsf.ObservableFromIndicator(ind.Type, ind.Value))
+			}
+			findings = append(findings, ocsf.FromAlertEnriched(a, ocsf.Enrichment{Observables: observables}))
 		}
 
 		w.Header().Set("Content-Type", "application/json")

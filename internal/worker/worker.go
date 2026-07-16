@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
 
@@ -19,6 +21,8 @@ import (
 	"noc-api/internal/loki"
 	"noc-api/internal/model"
 	"noc-api/internal/notifier"
+	"noc-api/internal/ocsf"
+	"noc-api/internal/ocsfsink"
 	"noc-api/internal/queue"
 	"noc-api/internal/repository"
 	"noc-api/internal/threatintel"
@@ -54,6 +58,7 @@ type WorkerPool struct {
 	slackNotifier     *notifier.SlackNotifier
 	teamsNotifier     *notifier.TeamsNotifier
 	emailNotifier     *notifier.EmailNotifier
+	ocsfEmitter       *ocsfsink.Emitter
 }
 
 func NewWorkerPool(pgPool *pgxpool.Pool, redisClient *redis.Client, numWorkers int) *WorkerPool {
@@ -71,6 +76,7 @@ func NewWorkerPool(pgPool *pgxpool.Pool, redisClient *redis.Client, numWorkers i
 		slackNotifier:     notifier.NewSlackNotifier(),
 		teamsNotifier:     notifier.NewTeamsNotifier(),
 		emailNotifier:     notifier.NewEmailNotifier(),
+		ocsfEmitter:       ocsfsink.NewEmitter(),
 	}
 }
 
@@ -430,7 +436,115 @@ func (wp *WorkerPool) createNewAlert(ctx context.Context, tx pgx.Tx, event model
 		wp.triggerEscalations(ctx, newAlert)
 	}
 
+	// Stream this finding to the tenant's OCSF sink (data lake / SIEM), enriched with observables,
+	// the affected CMDB asset and cross-tenant corroboration (Backlog B3). Best-effort in its own
+	// goroutine — a slow/failing sink must never block alert processing. Only new alerts stream
+	// (a duplicate hit re-uses the existing alert and doesn't re-emit). System-generated alerts
+	// (watchdog) stream too — a data lake wants "source is down" findings.
+	go wp.emitOCSF(newAlert.ID, newAlert.TenantID, event, newAlert)
+
 	return nil
+}
+
+// emitOCSF builds an enriched OCSF Detection Finding for a freshly-created alert and POSTs it to the
+// tenant's configured OCSF sink URL. Gated on an active "ocsf" tenant_integration + an ocsf_sink_url
+// vault secret. Enrichment (all best-effort): IOCs from the event become OCSF observables, the
+// alerting host resolves to a CMDB asset (device object + business criticality), and the threat-intel
+// aggregate supplies cross-tenant corroboration. Never fatal — every failure only logs.
+func (wp *WorkerPool) emitOCSF(alertID, tenantID uuid.UUID, event model.UnifiedIncident, alert *model.Alert) {
+	ctx := context.Background()
+	tenantCtx := db.WithTenantID(ctx, tenantID)
+
+	// Is OCSF streaming enabled for this tenant?
+	var active bool
+	if err := wp.pgPool.QueryRow(tenantCtx,
+		`SELECT EXISTS(SELECT 1 FROM tenant_integrations WHERE tenant_id = $1 AND type = $2 AND status = 'active')`,
+		tenantID, ocsfsink.IntegrationType).Scan(&active); err != nil || !active {
+		return
+	}
+
+	// Resolve + decrypt the sink URL from the vault.
+	masterKey, err := security.GetMasterKey()
+	if err != nil {
+		log.Printf("[OCSF] master key unavailable for tenant %s: %v", tenantID, err)
+		return
+	}
+	var sinkURL string
+	var device *ocsf.Device
+	var criticality string
+	err = db.ExecuteInTenantTx(tenantCtx, wp.pgPool, func(tx pgx.Tx) error {
+		sec, e := wp.vaultRepo.GetSecretByKey(tenantCtx, tx, ocsfsink.VaultKey)
+		if e != nil {
+			return e
+		}
+		dec, e := security.DecryptForTenant(sec.EncryptedValue, sec.Nonce, masterKey, tenantID)
+		if e != nil {
+			return e
+		}
+		sinkURL = string(dec)
+		// CMDB device enrichment (best-effort within the same tenant tx).
+		device, criticality = lookupOCSFDevice(tenantCtx, tx, tenantID, event.Host)
+		return nil
+	})
+	if err != nil || sinkURL == "" {
+		log.Printf("[OCSF] missing/undecryptable %s for tenant %s: %v", ocsfsink.VaultKey, tenantID, err)
+		return
+	}
+
+	// Observables from extracted IOCs (public IPs/domains/hashes).
+	var observables []ocsf.Observable
+	for _, ind := range threatintel.ExtractIndicators(event.Host, event.RawPayload) {
+		observables = append(observables, ocsf.ObservableFromIndicator(ind.Type, ind.Value))
+	}
+
+	// Cross-tenant corroboration (best-effort; reads the shared aggregate only).
+	fleet := 0
+	if indicators := threatintel.ExtractIndicators(event.Host, event.RawPayload); len(indicators) > 0 {
+		if others, e := threatintel.OtherTenantSightings(ctx, wp.pgPool, threatintel.TenantHash(tenantID), indicators); e == nil {
+			fleet = others
+		}
+	}
+
+	finding := ocsf.FromAlertEnriched(alert, ocsf.Enrichment{
+		Observables:      observables,
+		Device:           device,
+		AssetCriticality: criticality,
+		FleetSightings:   fleet,
+	})
+
+	if e := wp.ocsfEmitter.Emit(ctx, sinkURL, finding); e != nil {
+		log.Printf("[OCSF] emit failed for alert %s (tenant %s): %v", alertID, tenantID, e)
+		return
+	}
+	log.Printf("[OCSF] finding streamed for alert %s (tenant %s)", alertID, tenantID)
+}
+
+// lookupOCSFDevice resolves the alerting host to a managed CMDB asset, returning an OCSF device object
+// and the asset's business criticality. Returns (nil, "") when the host is empty or unmanaged. Must
+// run inside the tenant RLS tx; a query error degrades to (nil, "") rather than failing the emit.
+func lookupOCSFDevice(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID, host string) (*ocsf.Device, string) {
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return nil, ""
+	}
+	var name, assetType, criticality string
+	err := tx.QueryRow(ctx, `
+		SELECT COALESCE(name, ''), COALESCE(asset_type, ''), COALESCE(business_criticality, '')
+		FROM assets
+		WHERE tenant_id = $1
+		  AND (LOWER(identifier) = LOWER($2)
+		       OR EXISTS (SELECT 1 FROM unnest(aliases) a WHERE LOWER(a) = LOWER($2)))
+		LIMIT 1
+	`, tenantID, host).Scan(&name, &assetType, &criticality)
+	if err != nil {
+		return nil, ""
+	}
+	riskID, riskLabel := ocsf.RiskLevelForCriticality(criticality)
+	dev := &ocsf.Device{Hostname: host, Name: name, Type: assetType, RiskLevel: riskLabel, RiskLevelID: riskID}
+	if net.ParseIP(host) != nil {
+		dev.IP = host
+	}
+	return dev, criticality
 }
 
 func (wp *WorkerPool) publishToPubSub(ctx context.Context, tenantID uuid.UUID, alert *model.Alert) {
