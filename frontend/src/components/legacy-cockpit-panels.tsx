@@ -140,9 +140,11 @@ export function LegacyCockpitPanels({ cockpitTab, onSearchTermChange, onNavigate
   const [reportMode, setReportMode] = useState<'executive' | 'technical'>('executive');
 
   const fetchIntegrations = async () => {
-    if (!token) return;
+    if (!token || !selectedTenant?.id) return;
     try {
-      const response = await apiFetch('/api/v1/integrations');
+      // Scope to the tenant selected in the header (Visual Domain), not the JWT home tenant — a
+      // platform admin viewing another client must see/manage THAT client's integrations.
+      const response = await apiFetch(`/api/v1/integrations?tenant_id=${selectedTenant.id}`);
       if (response.ok) {
         setIntegrations(await response.json());
       }
@@ -222,9 +224,15 @@ export function LegacyCockpitPanels({ cockpitTab, onSearchTermChange, onNavigate
   const handleCreateIntegrationSetting = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!token) return;
+    if (!selectedTenant?.id) {
+      setIntegrationStatus({ status: 'error', message: 'Selecione um cliente (Visual Domain) antes de ativar.' });
+      return;
+    }
     setIntegrationStatus({ status: 'saving' });
     try {
-      const response = await apiFetch('/api/v1/integrations', {
+      // Target the selected Visual Domain tenant, not the JWT home tenant (ResolveTenantScope honors
+      // ?tenant_id for platform admins) — otherwise the integration lands on the wrong client.
+      const response = await apiFetch(`/api/v1/integrations?tenant_id=${selectedTenant.id}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: integrationName, type: selectedIntegrationTool, status: 'active' }),
@@ -247,7 +255,7 @@ export function LegacyCockpitPanels({ cockpitTab, onSearchTermChange, onNavigate
     if (!token) return;
     if (!confirm('Deseja desativar esta integração para o tenant atual?')) return;
     try {
-      const response = await apiFetch(`/api/v1/integrations?id=${id}`, { method: 'DELETE' });
+      const response = await apiFetch(`/api/v1/integrations?id=${id}${selectedTenant?.id ? `&tenant_id=${selectedTenant.id}` : ''}`, { method: 'DELETE' });
       if (response.ok) {
         fetchIntegrations();
       } else {
