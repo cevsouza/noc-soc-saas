@@ -200,6 +200,64 @@ func TestZabbixConnector(t *testing.T) {
 	}
 }
 
+// A Zabbix media type left with the stock parameter names (Subject/Message) used to produce a
+// blank, unclassified alert. The connector now recovers the content from those aliases and from
+// the labeled lines Zabbix's default message template emits.
+func TestZabbixConnectorToleratesStockParameterNames(t *testing.T) {
+	conn := connector.MustGet(model.SourceZabbix)
+	stock := `{
+		"Subject": "Problem: CPU muito alta",
+		"Message": "Problem started at 12:16\nHost: web-prod-01\nSeverity: High\nEvent ID: 4242\nOriginal problem",
+		"To": "noc@example.com"
+	}`
+	incidents, err := conn.MapToUnified([]byte(stock), uuid.New())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	inc := incidents[0]
+	if inc.Title != "Problem: CPU muito alta" {
+		t.Errorf("expected title recovered from Subject alias, got %q", inc.Title)
+	}
+	if inc.Host != "web-prod-01" {
+		t.Errorf("expected host recovered from labeled line, got %q", inc.Host)
+	}
+	if inc.Severity != model.SeverityCritical {
+		t.Errorf("expected severity critical from 'Severity: High' line, got %s", inc.Severity)
+	}
+	if inc.ExternalID != "4242" {
+		t.Errorf("expected external_id recovered from 'Event ID' line, got %q", inc.ExternalID)
+	}
+}
+
+// Free-text prose must never be mined for severity: "too high" is not a High-severity signal.
+func TestZabbixConnectorDoesNotGuessSeverityFromProse(t *testing.T) {
+	conn := connector.MustGet(model.SourceZabbix)
+	prose := `{"Message": "CPU load is too high and disk is critical on some host"}`
+	incidents, err := conn.MapToUnified([]byte(prose), uuid.New())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	inc := incidents[0]
+	if inc.Severity != model.SeverityInfo {
+		t.Errorf("expected severity to stay info without an explicit Severity line, got %s", inc.Severity)
+	}
+	if inc.Title == "" {
+		t.Error("expected a title derived from the message body, got empty")
+	}
+}
+
+// A payload with no usable text at all must still yield a readable row, never a blank title.
+func TestZabbixConnectorFallsBackToPlaceholderTitle(t *testing.T) {
+	conn := connector.MustGet(model.SourceZabbix)
+	incidents, err := conn.MapToUnified([]byte(`{"event_value":"1"}`), uuid.New())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if incidents[0].Title == "" {
+		t.Error("expected placeholder title for an empty payload, got empty string")
+	}
+}
+
 func TestMapRawPayloadFallsBackForUnknownIntegration(t *testing.T) {
 	tenantID := uuid.New()
 	incidents, err := connector.MapRawPayload("some_unknown_tool", map[string]interface{}{"foo": "bar"}, tenantID)
